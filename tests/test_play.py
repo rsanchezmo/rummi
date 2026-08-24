@@ -26,13 +26,13 @@ from rummi.render.play import (
     redraw,
     regions_for,
 )
-from rummi.render.pygame_view import PygameView
+from rummi.render.pygame_view import DEFAULT_CAPACITY, PygameView
 from rummi.render.view_model import view
 from rummi.rules.actions import encode_assign, encode_place
 from rummi.rules.config import STANDARD as C
 from rummi.rules.encoding import kind_of
 
-from tests.conftest import state_with
+from tests.conftest import rebalance_pool, state_with
 
 RUN_36 = [kind_of(C, 0, n) for n in (11, 12, 13)]
 
@@ -249,3 +249,39 @@ def test_the_interactive_loop_survives_a_scripted_hand(monkeypatch):
 
     play_module.play(TINY_GROUPS, opponent="greedy", seed=4, opponent_delay_ms=0)
     assert clicks["n"] > 6, "the loop should have consumed the scripted events"
+
+
+def test_every_slot_is_reachable_when_the_table_is_full():
+    """An undrawn slot has no rectangle, so it cannot be clicked. The window's
+    display capacity defaults below max_sets, which would silently make part of a
+    busy table unplayable -- and a real game reaches 22 sets."""
+    cfg = C
+    # Two groups per number from three colours: 11 numbers gives 22 sets, using
+    # both copies of each tile so nothing collides with a dealt rack.
+    rows = [[kind_of(cfg, c, n) for c in (0, 1, 2)] for n in range(1, 12) for _ in (0, 1)]
+    s = state_with(cfg, rack=[cfg.joker_kind], table=rows, melded=True)
+    s.racks[:, 1] = 0
+    rebalance_pool(s)
+
+    snapshot = view(s, 0, legal_actions(s))
+    assert len(snapshot.occupied_slots) == 22 > DEFAULT_CAPACITY, "must exceed the display default"
+
+    columns = max(2, -(-cfg.max_sets // 12))
+    win = PygameView(cfg, headless=True, columns=columns, capacity=cfg.max_sets, reserve_bottom=50)
+    try:
+        visible, hidden = win.visible_slots(snapshot)
+        assert hidden == 0, f"{hidden} slots would be invisible and unclickable"
+
+        regions = regions_for(win, snapshot)
+        reachable = {slot for _, slot, _ in regions.slots}
+        for slot in snapshot.occupied_slots:
+            assert slot.index in reachable, f"slot {slot.index} has no clickable rect"
+    finally:
+        win.close()
+
+    # And the default capacity really would have hidden some, so this matters.
+    small = PygameView(cfg, headless=True, reserve_bottom=50)
+    try:
+        assert small.visible_slots(snapshot)[1] > 0
+    finally:
+        small.close()

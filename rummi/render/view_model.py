@@ -34,6 +34,11 @@ class SlotShape(str, Enum):
 class SlotView:
     index: int
     tiles: tuple[int, ...]
+    """As stored: kinds ascending, jokers last. Positions here are what ``PICK``
+    indexes, so this order must not be rearranged for looks."""
+    shown: tuple[int, ...]
+    """As a person reads it: a joker sits in the gap it fills rather than at the
+    end, so a run displays as ``10 11 * 13`` instead of ``10 11 13 *``."""
     shape: SlotShape
     value: int
     is_new: bool
@@ -91,6 +96,50 @@ class GameView:
         return kind_name(self.cfg, kind)
 
 
+def reading_order(cfg: RummiConfig, tiles: tuple[int, ...], is_run: bool) -> tuple[int, ...]:
+    """Lay a set out the way it reads, putting each joker in the gap it fills.
+
+    Only runs carry positional meaning: a joker in ``R10 R11 R13 *`` stands for
+    the 12, and showing it at the end makes the reader reconstruct that. In a
+    group every tile shares a number, so there is no gap to sit in.
+
+    Uses the same window the value calculation picks, so the layout and the
+    printed score always tell the same story.
+    """
+    if not is_run or not tiles:
+        return tiles
+
+    t = tables(cfg)
+    reals = sorted(int(t.number[k]) for k in tiles if k != cfg.joker_kind)
+    jokers = len(tiles) - len(reals)
+    if not jokers:
+        return tiles
+    if not reals:
+        return tiles
+
+    n = len(tiles)
+    # The best-case start, matching SlotEval.value.
+    start = min(reals[0], cfg.n_numbers - n + 1)
+    by_number = {}
+    for kind in tiles:
+        if kind != cfg.joker_kind:
+            by_number.setdefault(int(t.number[kind]), []).append(kind)
+
+    out: list[int] = []
+    spare = jokers
+    for number in range(start, start + n):
+        if by_number.get(number):
+            out.append(by_number[number].pop())
+        elif spare:
+            out.append(cfg.joker_kind)
+            spare -= 1
+    # Anything unplaced (a window that did not line up) keeps its stored order,
+    # so this can only ever reorder, never drop a tile.
+    if len(out) != n:
+        return tiles
+    return tuple(out)
+
+
 def _meld_progress(state: BatchState, b: int, slot_value: np.ndarray) -> int:
     """Value credited so far towards the acting seat's opening meld.
 
@@ -129,6 +178,7 @@ def view(state: BatchState, env_index: int = 0, mask: np.ndarray | None = None) 
             SlotView(
                 index=i,
                 tiles=tiles,
+                shown=reading_order(cfg, tiles, shape is SlotShape.RUN),
                 shape=shape,
                 value=int(ev.value[0, i]),
                 is_new=bool(state.slot_new[b, i]),

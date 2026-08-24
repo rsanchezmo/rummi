@@ -264,7 +264,18 @@ def play(
     rival = build(opponent, cfg)
     rival.reset(1)
 
-    window = PygameView(cfg, headless=False, reserve_bottom=BUTTON_H + 16, caption=f"rummi -- you vs {opponent}")
+    # Every slot must be on screen: an undrawn slot gets no rectangle, so it
+    # would be unclickable, and a real table reaches 22 sets. Columns are chosen
+    # to keep the window a sane shape once all of them have to fit.
+    columns = max(2, -(-cfg.max_sets // 12))
+    window = PygameView(
+        cfg,
+        headless=False,
+        reserve_bottom=BUTTON_H + 16,
+        columns=columns,
+        capacity=cfg.max_sets,
+        caption=f"rummi -- you vs {opponent}",
+    )
     selection = Selection()
     clock = pygame.time.Clock()
 

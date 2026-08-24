@@ -109,7 +109,7 @@ def frame(view: GameView, palette: Palette | None = None, width: int = 78) -> st
     if not occupied:
         lines.append(p.dim("   (empty)"))
     for slot in occupied:
-        body = _tiles(view, slot.tiles, p).ljust(
+        body = _tiles(view, slot.shown, p).ljust(
             TILE_WIDTH * min(cfg.max_set_len, 7) + (0 if not p.color else 0)
         )
         tag = _SHAPE_TAG[slot.shape]

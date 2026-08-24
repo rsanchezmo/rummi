@@ -238,3 +238,33 @@ def test_a_table_larger_than_the_window_reports_the_overflow():
         assert hidden == 3, "6 sets plus a landing slot into a capacity of 4"
     finally:
         win.close()
+
+
+@pytest.mark.parametrize(
+    "numbers,expected",
+    [
+        ((10, 11, 13), ["R10", "R11", "*", "R13"]),   # joker fills the gap
+        ((10, 11, 12), ["R10", "R11", "R12", "*"]),   # nothing missing: it extends
+        ((11, 12, 13), ["*", "R11", "R12", "R13"]),   # no 14 exists, so it is the 10
+    ],
+)
+def test_a_joker_is_shown_where_it_belongs(numbers, expected):
+    """`R10 R11 R13 *` is a legal run with the joker standing for 12, but the
+    joker sorts last in storage, so unmodified it reads as if the run skipped a
+    number."""
+    kinds = [kind_of(C, 0, n) for n in numbers] + [C.joker_kind]
+    s = state_with(C, rack=[kind_of(C, 0, 5)], table=[kinds], melded=True)
+    slot = view(s, 0).slots[0]
+    assert slot.shape is SlotShape.RUN
+    assert [view(s, 0).label(k) for k in slot.shown] == expected
+    assert sorted(slot.shown) == sorted(slot.tiles), "reordering must not add or drop a tile"
+
+
+def test_storage_order_is_left_alone_for_pick():
+    """PICK indexes the stored order, so it must stay as the engine wrote it --
+    reordering it for looks would lift the wrong tile."""
+    kinds = [kind_of(C, 0, n) for n in (10, 11, 13)] + [C.joker_kind]
+    s = state_with(C, rack=[kind_of(C, 0, 5)], table=[kinds], melded=True)
+    slot = view(s, 0).slots[0]
+    assert list(slot.tiles) == sorted(kinds)
+    assert slot.shown != slot.tiles, "this case should differ, or the test proves nothing"

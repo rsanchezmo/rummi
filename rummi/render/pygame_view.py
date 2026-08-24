@@ -193,7 +193,9 @@ class PygameView:
 
         self._text(f"{slot.index}", (rect.x + 4, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
         variant = Variant.NEW if slot.is_new else Variant.NORMAL
-        for i, kind in enumerate(slot.tiles):
+        # `shown`, not `tiles`: a joker is drawn in the gap it fills. PICK still
+        # indexes the stored order, which is why the two are kept separate.
+        for i, kind in enumerate(slot.shown):
             s.blit(a.surface, (rect.x + LABEL_W + i * a.tile_w, rect.y + 2), a.rect(kind, variant))
 
         tag = SHAPE_TAG[slot.shape]
@@ -268,7 +270,7 @@ class PygameView:
             slot = visible[i] if i < len(visible) else None
             touched = slot is not None and slot.index == view.touched_slot
             key = hash(
-                (slot.index, slot.tiles, slot.shape, slot.is_new, touched,
+                (slot.index, slot.shown, slot.shape, slot.is_new, touched,
                  slot.index in self.highlight_slots) if slot else None
             )
             if self._row_hashes.get(i) == key:
