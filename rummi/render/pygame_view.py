@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from rummi.rules.config import RummiConfig
 from rummi.render.atlas import (
     BACKGROUND,
+    DROP_EDGE,
     INVALID_EDGE,
     NEW_EDGE,
     TOUCH_EDGE,
@@ -76,8 +77,13 @@ class Layout:
 
 
 def layout_for(
-    cfg: RummiConfig, atlas: Atlas, columns: int = 2, capacity: int | None = None
+    cfg: RummiConfig,
+    atlas: Atlas,
+    columns: int = 2,
+    capacity: int | None = None,
+    reserve_bottom: int = 0,
 ) -> Layout:
+    """``reserve_bottom`` leaves room below the log for interactive controls."""
     capacity = min(cfg.max_sets, capacity or DEFAULT_CAPACITY)
     rows = -(-capacity // columns)
     slot_w = LABEL_W + cfg.max_set_len * atlas.tile_w + TAG_W
@@ -94,7 +100,7 @@ def layout_for(
         slot_w=slot_w,
         slot_h=slot_h,
         width=PAD + columns * (slot_w + PAD),
-        height=log_top + LOG_H + PAD,
+        height=log_top + LOG_H + PAD + reserve_bottom,
         table_top=table_top,
         workbench_top=workbench_top,
         rack_top=rack_top,
@@ -112,12 +118,15 @@ class PygameView:
     tile_h: int = 36
     columns: int = 2
     capacity: int | None = None
+    reserve_bottom: int = 0
     caption: str = "rummi"
     _atlas: Atlas | None = field(default=None, init=False)
     _layout: Layout | None = field(default=None, init=False)
     _surface: object = field(default=None, init=False)
     _font: object = field(default=None, init=False)
     _small: object = field(default=None, init=False)
+    highlight_slots: frozenset = field(default_factory=frozenset, init=False)
+    """Slots the interactive player may currently drop on. Empty when not playing."""
     _row_hashes: dict[int, int] = field(default_factory=dict, init=False)
     _strip_hashes: dict[str, int] = field(default_factory=dict, init=False)
 
@@ -128,7 +137,9 @@ class PygameView:
 
         pygame.init()
         self._atlas = build(self.cfg, self.tile_w, self.tile_h)
-        self._layout = layout_for(self.cfg, self._atlas, self.columns, self.capacity)
+        self._layout = layout_for(
+            self.cfg, self._atlas, self.columns, self.capacity, self.reserve_bottom
+        )
         size = (self._layout.width, self._layout.height)
         if self.headless:
             self._surface = pygame.Surface(size)
@@ -150,7 +161,7 @@ class PygameView:
         font = self._small if small else self._font
         self._surface.blit(font.render(text, True, color), pos)
 
-    def _draw_row(self, slot, rect, touched: bool = False) -> None:
+    def _draw_row(self, slot, rect, touched: bool = False) -> None:  # noqa: C901
         """Draw one table slot, or clear the row when there is nothing to show."""
         import pygame
 
@@ -158,8 +169,13 @@ class PygameView:
         s.fill(BACKGROUND, rect)
         if slot is None or slot.shape is SlotShape.EMPTY:
             if slot is not None:
-                # The one empty slot on offer, drawn as a landing zone.
-                pygame.draw.rect(s, PANEL, rect, width=1, border_radius=4)
+                # The one empty slot on offer, drawn as a landing zone. It gets the
+                # drop highlight too -- it is where a *new* set starts, so leaving
+                # it unlit would hide the most common move.
+                lit = slot.index in self.highlight_slots
+                pygame.draw.rect(
+                    s, DROP_EDGE if lit else PANEL, rect, width=3 if lit else 1, border_radius=4
+                )
                 self._text(f"{slot.index}", (rect.x + 4, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
             return
 
@@ -170,6 +186,8 @@ class PygameView:
             pygame.draw.rect(s, INVALID_EDGE, rect, width=2, border_radius=4)
         elif touched:
             pygame.draw.rect(s, TOUCH_EDGE, rect, width=2, border_radius=4)
+        elif slot.index in self.highlight_slots:
+            pygame.draw.rect(s, DROP_EDGE, rect, width=3, border_radius=4)
         elif slot.is_new:
             pygame.draw.rect(s, NEW_EDGE, rect, width=2, border_radius=4)
 
@@ -200,7 +218,7 @@ class PygameView:
         if note:
             self._text(note, (rect.right - 46, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
 
-    def _visible(self, view: GameView) -> tuple[list, int]:
+    def visible_slots(self, view: GameView) -> tuple[list, int]:
         """Occupied slots plus the one empty slot ASSIGN can target, and how many
         did not fit. Overflow is returned rather than dropped so the caller can
         say so: a silently truncated table would read as a complete one."""
@@ -218,7 +236,7 @@ class PygameView:
         lay = self._layout
         dirty: list = []
 
-        visible, hidden = self._visible(view)
+        visible, hidden = self.visible_slots(view)
         head = (
             f"turn {view.turn}   seat {view.current_player}/{view.cfg.n_players}   "
             f"pool {view.pool_size}   micro {view.micro}/{view.micro_budget}   "
@@ -250,7 +268,8 @@ class PygameView:
             slot = visible[i] if i < len(visible) else None
             touched = slot is not None and slot.index == view.touched_slot
             key = hash(
-                (slot.index, slot.tiles, slot.shape, slot.is_new, touched) if slot else None
+                (slot.index, slot.tiles, slot.shape, slot.is_new, touched,
+                 slot.index in self.highlight_slots) if slot else None
             )
             if self._row_hashes.get(i) == key:
                 continue

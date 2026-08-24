@@ -9,6 +9,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # SDL needs a driver even to build the sprite atlas offscreen.
+  SDL_VIDEODRIVER: dummy
+
 jobs:
   test:
     name: py${{ matrix.python }}
@@ -23,15 +27,15 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      # A venv rather than --system: the runner's system Python is externally
+      # managed (PEP 668), and this is also what actually applies the matrix --
+      # uv fetches the interpreter if the runner lacks it.
+      - run: uv venv --python ${{ matrix.python }}
       - name: Install
-        # torch and jax are the two other implementations of the rules, so
-        # conformance is only actually checked when both are present.
-        run: uv pip install --system -e '.[dev,env,render,solver,torch,jax]'
-      - name: Test
-        # SDL needs a driver even to build the sprite atlas offscreen.
-        env:
-          SDL_VIDEODRIVER: dummy
-        run: pytest -q
+        # torch and jax are the other two implementations of the rules, so
+        # conformance is only really checked when both are present.
+        run: uv pip install -e '.[dev,env,render,solver,torch,jax]'
+      - run: uv run pytest -q
 
   fuzz:
     name: invariants
@@ -41,13 +45,14 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv pip install --system -e '.[dev,env,solver]'
+      - run: uv venv --python 3.12
+      - run: uv pip install -e '.[dev,env,solver]'
       - name: Fuzz the engine
         # Greedy, not random: random play never assembles a legal opening meld,
         # so it would leave END_TURN, melding and win detection unexercised.
         run: |
-          python -m rummi.bench.fuzz --config standard --policy greedy --games 200
-          python -m rummi.bench.fuzz --config tiny_groups --policy greedy --games 200
+          uv run python -m rummi.bench.fuzz --config standard --policy greedy --games 200
+          uv run python -m rummi.bench.fuzz --config tiny_groups --policy greedy --games 200
 
   baselines:
     name: baseline scores
@@ -57,8 +62,9 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - run: uv pip install --system -e '.[dev,env,solver]'
+      - run: uv venv --python 3.12
+      - run: uv pip install -e '.[dev,env,solver]'
       - name: Check the ordering still holds
         # A rules or agent change that silently reorders the baselines is the
         # kind of regression no unit test would catch.
-        run: python -m rummi.evaluate.run --agent rearrange --suites tiny --json
+        run: uv run python -m rummi.evaluate.run --agent rearrange --suites tiny --json

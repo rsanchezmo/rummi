@@ -233,7 +233,7 @@ def test_a_table_larger_than_the_window_reports_the_overflow():
     s = state_with(C, rack=[kind_of(C, 0, 5)], table=rows, melded=True)
     win = PygameView(C, headless=True, capacity=4)
     try:
-        visible, hidden = win._visible(view(s, 0))
+        visible, hidden = win.visible_slots(view(s, 0))
         assert len(visible) == 4
         assert hidden == 3, "6 sets plus a landing slot into a capacity of 4"
     finally:
