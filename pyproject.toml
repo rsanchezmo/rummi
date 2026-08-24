@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rummi"
 version = "0.1.0"
-description = "Batch-native Rummikub simulator for RL"
+description = "Batch-native Rummikub environment for reinforcement learning, with built-in opponents"
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
 

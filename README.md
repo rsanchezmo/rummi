@@ -1,17 +1,36 @@
 # rummi
 
-A Rummikub simulator built as a **benchmark**: bring an agent, get a comparable
-score. Three independent implementations of the same rules (NumPy, torch, JAX)
-verified against each other bit for bit, and an OR-Tools CP-SAT agent that plays
-each turn optimally — so there is a real ceiling to aim at, not just a
-leaderboard of guesses.
+A Rummikub **environment** for reinforcement learning, with opponents to play
+against. Batch-native from the ground up, wrapped as a Gymnasium vector env, and
+implemented three times over — NumPy, torch and JAX — each verified against the
+others bit for bit.
+
+The bundled agents are the point as much as the env is. You get a floor
+(`greedy`) and a genuine ceiling (`optimal`, an OR-Tools CP-SAT solver that plays
+each turn perfectly), so a new agent has something real to measure itself
+against on day one.
 
 ```bash
 pip install -e '.[dev,env,render,solver]'
-python -m rummi.benchmark.run --agent greedy          # score the baselines
-python -m rummi.render.record --play --render-mode ansi   # watch a game
-python -m rummi.bench.bench_backends --compile        # compare backends
+
+python -m rummi.render.record --play --render-mode ansi    # watch a game
+python -m rummi.benchmark.run --agent greedy               # score against the agents
+python -m rummi.bench.bench_backends --compile             # compare backends
 ```
+
+```python
+from rummi.envs.rummi_vec_env import RummiVectorEnv
+
+env = RummiVectorEnv(num_envs=256, seed=0)          # Gymnasium VectorEnv
+obs, info = env.reset()
+obs, rewards, terminated, truncated, info = env.step(actions)
+# info["action_mask"] is (num_envs, 2400) and never all-zero
+# info["current_player"] says whose view obs is — one policy plays every seat
+```
+
+One `step` is one primitive table operation, so a player's turn spans several
+steps. Observations are always the acting seat's view, which is what lets a
+single shared policy play self-play without learning two conventions.
 
 ## Why Rummikub
 
@@ -24,10 +43,11 @@ by integer programming. The interesting move — steal a tile out of a run to
 complete a group, after extending the run so it survives losing it — is invisible
 to anything that does not search.
 
-## Scores to beat
+## The opponents
 
-`standard-greedy` suite, 120 mirrored games. Higher win rate is better; `score`
-is official Rummikub scoring from the agent's side.
+Three strengths, all playable out of the box and all usable as opponents in your
+own training loop. Scored here on the `standard-greedy` suite over 120 mirrored
+games; `score` is official Rummikub scoring from the agent's side.
 
 | agent | win rate | score | turns | rack left | stalemates |
 |---|---:|---:|---:|---:|---:|
@@ -46,9 +66,10 @@ is why it scores exactly even.
 The gap between greedy and optimal is precisely the value of *rearranging the
 table*, because greedy never does it.
 
-## Entering an agent
+## Writing an agent
 
-An agent sees an observation and a legal-action mask, and nothing else. That is
+Agents plug into the same interface the bundled ones use. An agent sees an
+observation and a legal-action mask, and nothing else. That is
 the integrity property the whole benchmark rests on: the observation exposes only
 what a player is entitled to know — your rack, the table, and `unseen` (the pool
 and your opponents' racks combined, indistinguishable from one another). Every
@@ -83,16 +104,21 @@ that bookkeeping for free. Proposing a masked-out action **disqualifies** the ru
 rather than costing reward: the mask exactly describes what the rules permit, so
 an illegal action is a bug, not a strategy.
 
-## The protocol
+## Scoring yourself
 
-Frozen and versioned (`PROTOCOL_VERSION`), because a benchmark whose definition
-drifts produces numbers nobody can compare.
+`rummi.benchmark` plays your agent against the bundled ones under a frozen,
+versioned protocol (`PROTOCOL_VERSION`), so a number you quote today still means
+the same thing later.
 
 | suite | config | opponent | deals |
 |---|---|---|---|
 | `tiny` | 3 colours × 4 numbers | `greedy` | 100 |
 | `standard-greedy` | full 106-tile game | `greedy` | 200 |
 | `standard-optimal` | full 106-tile game | `optimal` | 100 |
+
+`standard-optimal` runs CP-SAT once per turn per env, so it takes roughly a
+minute per hundred games — fine for a score, too slow to iterate against. Use
+`tiny` while developing.
 
 Every deal is played **twice, with the seats swapped**. That cancels both the
 first-player advantage and the luck of the deal, so an agent mirrored against
@@ -140,7 +166,7 @@ so they are swappable by name.
 | JAX CPU (`lax.scan`) | 203k | 3.2x |
 
 Standard config, `B=16384`, cheapest possible action choice so the figure is the
-simulator. Two caveats worth more than the top row: the 8.5x is a **GPU** result
+environment rather than a policy. Two caveats worth more than the top row: the 8.5x is a **GPU** result
 (torch on Metal; JAX has no production Metal backend, so it cannot be compared on
 equal hardware here), and both frameworks land at 3–4x on CPU — two independent
 implementations agreeing is good evidence that 3–4x is the real headroom over
@@ -159,7 +185,7 @@ rummi/
   backends/     torch and jax implementations + the uniform adapter
   solver/       brute-force oracles, candidate sets, CP-SAT, plan translator
   agents/       the Agent protocol and the reference agents
-  benchmark/    the frozen protocol and its runner
+  benchmark/    scoring an agent against the bundled ones
   envs/         Gymnasium VectorEnv and the observation encoder
   render/       live terminal view, pygame window, record/replay
   bench/        throughput benchmarks and the invariant fuzzer
@@ -172,7 +198,7 @@ rummi/
   "could I add this tile?" predicate.
 - **10.5M fuzz steps, zero invariant violations.** Tile conservation, mask
   soundness, exact turn reversion, and termination, on every step.
-- **Random play cannot test this game.** In 10M steps it assembled a legal
+- **Random play cannot test this environment.** In 10M steps it assembled a legal
   opening meld four times. Any test suite here needs greedy or better to reach
   melding, winning, or `END_TURN` at all — which is why the fuzzer takes a
   `--policy` flag.
