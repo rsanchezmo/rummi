@@ -164,7 +164,22 @@ empty and `consecutive_draws >= P` ends the game on lowest rack value. Reaching
 `SCORE_NORMALIZED` divides by `rack_size * max(n_numbers, joker_penalty)`.
 Truncation pays nothing — it is an artificial cutoff, not a result.
 
-## 8. Port notes
+## 8. Conformance status
+
+| backend | state | figure |
+|---|---|---|
+| NumPy (`rummi/core/`) | reference | ~66k env-steps/s, saturates at B≈256 |
+| torch CPU (`rummi/backends/torch_backend/`) | conformant | ~65k, parity |
+| torch CPU + `compile` | conformant | ~250k, **3.8x** |
+| torch MPS | conformant | ~239k, **3.6x** |
+| torch MPS + `compile` | conformant | ~565k, **8.6x** |
+| JAX | not written | — |
+
+Standard config, `A=2400`, best of repeated runs, action choice held to the
+cheapest possible so the figure is the simulator. Reproduce with
+`python -m rummi.bench.bench_backends --compile --no-validate`.
+
+## 9. Port notes
 
 - The NumPy reference mutates buffers to avoid per-step allocation. Arithmetic is
   index-and-mask only, so the JAX port is the same expressions written
@@ -173,6 +188,24 @@ Truncation pays nothing — it is an artificial cutoff, not a result.
   and `jnp.sort` substitute directly. No popcount is required anywhere.
 - `counts_of` uses an offset-`bincount` scatter; use `scatter_add` / `bincount`
   equivalents rather than a Python loop over the batch.
+- Effects should be applied as masked whole-batch updates, not by selecting the
+  envs that chose each family. NumPy uses `flatnonzero` selection, which is
+  faster there; on an accelerator that read is a host synchronisation every step.
+  The torch port applies all six families to the whole batch under `where`, which
+  is what makes it shape-static and `compile`-able.
+- Because of that, slots are re-sorted every step rather than only where they
+  changed (sorting is idempotent), and canonical slot order is recomputed every
+  step and selected for with `where`.
+- Canonical slot order needs a lexicographic sort of `S` rows by `L` columns.
+  Packing base-`(K+1)` digits into 63-bit words reduces that from `L` stable
+  sorts to two for the standard config. `torch.sort` needs
+  `sort(dim=-1, stable=True)` -- `stable` is keyword-only.
+- Deck shuffling must use NumPy's `SeedSequence`/`Generator` even in a torch
+  backend: the permutation is part of the contract, and a torch RNG would produce
+  different decks and fail conformance.
+- Passing the mask to `step` enables action validation, which reads a bool off
+  the device once per step. Measured cost is small (8.3x -> 8.6x with it off), so
+  leave it on unless profiling says otherwise.
 - `max_sets` is the dominant throughput knob — it drives `A` and the `(B, S, K)`
   ASSIGN predicate. Measured: `S=16` → 133k, `S=24` → 91k, `S=35` → 63k
   env-steps/s in NumPy. The default is the provable bound `n_tiles // min_set`;

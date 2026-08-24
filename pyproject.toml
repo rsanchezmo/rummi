@@ -23,4 +23,10 @@ include = ["rummi*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    # torch.compile traces through torch.jit internals, which emit their own
+    # deprecation warnings. Scoped to that message so the strict policy still
+    # applies to everything we actually control.
+    "ignore:.*torch\\.jit\\.script_method.*:DeprecationWarning",
+]
