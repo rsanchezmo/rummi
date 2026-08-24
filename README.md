@@ -32,6 +32,14 @@ One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
 single shared policy play self-play without learning two conventions.
 
+![The same game state rendered in the terminal and in a pygame window](docs/render.png)
+
+Both panels above are the *same step*, rendered from a single `GameView` — the
+terminal view and the window are two renderers over one shared view model, not
+two things that happen to agree. Mid-turn here: a set has been taken apart, three
+tiles sit in the workbench, and slot 0 is flagged in both views because a
+two-tile set is not legal yet, so `END_TURN` stays masked.
+
 ## Why Rummikub
 
 Because unrestricted rearrangement makes it genuinely hard. A turn is not "play a
@@ -229,3 +237,9 @@ python -m rummi.render.record --replay game.jsonl --pause
 Recordings store the config, the seed and the action sequence — nothing else. The
 simulator holds no RNG in its step function, so replaying those actions
 reconstructs every intermediate state exactly.
+
+The image at the top of this page is generated, not pasted:
+
+```bash
+python tools/make_screenshot.py --out docs/render.png
+```
