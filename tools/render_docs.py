@@ -102,6 +102,31 @@ def render_terminal(text: str, size: int = 15, pad: int = 14):
     return surface
 
 
+TERMINAL_CAPTION = "render_mode='ansi'  -- live in the terminal"
+WINDOW_CAPTION = "render_mode='human'  -- pygame window"
+
+
+def panelize(surface, caption: str | None = None, pad: int = 18, label_size: int = 17):
+    """Wrap one panel with its own background, optionally captioned.
+
+    The README labels the two animations in its table header, so the GIFs are
+    generated without captions -- burning the same words into the image would
+    only cost pixels.
+    """
+    pygame.font.init()
+    lh = 0
+    font = None
+    if caption:
+        font = _monospace(label_size)
+        lh = font.get_linesize() + 10
+    page = pygame.Surface((surface.get_width() + pad * 2, surface.get_height() + pad * 2 + lh))
+    page.fill(PAGE_BG)
+    if caption:
+        page.blit(font.render(caption, True, LABEL), (pad, pad))
+    page.blit(surface, (pad, pad + lh))
+    return page
+
+
 def compose(left, right, gap: int = 26, pad: int = 26, label_size: int = 17):
     pygame.font.init()
     font = _monospace(label_size)
@@ -115,8 +140,8 @@ def compose(left, right, gap: int = 26, pad: int = 26, label_size: int = 17):
     # Top-anchored, not centred: across an animation the table grows, and
     # centring would slide both panels up and down every frame.
     for surf, x, caption in (
-        (left, pad, "render_mode='ansi'  -- live in the terminal"),
-        (right, pad + left.get_width() + gap, "render_mode='human'  -- pygame window"),
+        (left, pad, TERMINAL_CAPTION),
+        (right, pad + left.get_width() + gap, WINDOW_CAPTION),
     ):
         page.blit(font.render(caption, True, LABEL), (x, pad))
         page.blit(surf, (x, pad + lh))
@@ -240,7 +265,10 @@ def panel(window, snapshot: GameView, font_size: int):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--format", choices=["png", "gif"], default="gif")
-    p.add_argument("--out", type=Path, default=Path("docs/render.gif"))
+    p.add_argument(
+        "--out", type=Path, default=Path("docs/render"),
+        help="gif: stem, written as <stem>-terminal.gif and <stem>-window.gif; png: full path",
+    )
     p.add_argument("--seed", type=int, default=17)
     p.add_argument("--policy", default="optimal", help="who plays; optimal ends by winning")
     p.add_argument("--turns", type=int, default=150, help="png: which turn to capture")
@@ -252,9 +280,14 @@ def main() -> None:
     p.add_argument("--capacity", type=int, default=24)
     p.add_argument("--tile", type=int, nargs=2, default=(26, 36))
     p.add_argument("--font", type=int, default=15)
-    p.add_argument("--scale", type=float, default=0.62)
-    p.add_argument("--ms", type=int, default=340, help="gif: milliseconds per frame")
-    p.add_argument("--hold", type=int, default=1600, help="gif: hold on first and last")
+    # Full resolution by default. Downscaling is available for trimming file
+    # size, but it costs legibility unevenly: terminal text survives it, while a
+    # tile's numeral blurs into its cream face and is then flattened by GIF
+    # quantisation -- hence a separate knob per panel.
+    p.add_argument("--scale", type=float, default=1.0, help="terminal panel")
+    p.add_argument("--window-scale", type=float, default=1.0, help="pygame panel")
+    p.add_argument("--ms", type=int, default=680, help="gif: milliseconds per frame")
+    p.add_argument("--hold", type=int, default=2600, help="gif: hold on first and last")
     args = p.parse_args()
 
     pygame.init()
@@ -268,12 +301,24 @@ def main() -> None:
         pygame.image.save(page, str(args.out))
         print(f"wrote {args.out}  {page.get_size()}")
     else:
-        pages = []
+        # Both animations are built from one pass over the game, so frame N of
+        # each is the same turn. Identical frame counts and durations are what
+        # keep two separately-looping GIFs from drifting apart in a browser.
+        terminal_pages, window_pages = [], []
         for snapshot in game_frames(STANDARD, args.seed, args.policy, args.max_turns):
-            pages.append(panel(window, snapshot, args.font))
-        write_gif(pages, args.out, args.scale, args.ms, args.hold)
-        size = args.out.stat().st_size / 1e6
-        print(f"wrote {args.out}  {len(pages)} frames  {pages[0].get_size()}  {size:.1f} MB")
+            terminal_pages.append(
+                panelize(render_terminal(frame(snapshot, Palette(True)), size=args.font))
+            )
+            window.draw(snapshot)
+            window_pages.append(panelize(window._surface.copy()))
+
+        for pages, suffix, scale in (
+            (terminal_pages, "terminal", args.scale),
+            (window_pages, "window", args.window_scale),
+        ):
+            out = args.out.with_name(f"{args.out.name}-{suffix}.gif")
+            write_gif(pages, out, scale, args.ms, args.hold)
+            print(f"wrote {out}  {len(pages)} frames  {out.stat().st_size / 1e6:.1f} MB")
     window.close()
 
 

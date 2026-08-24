@@ -32,13 +32,16 @@ One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
 single shared policy play self-play without learning two conventions.
 
-![A full game rendered simultaneously in the terminal and in a pygame window](docs/render.gif)
+| `render_mode="ansi"` | `render_mode="human"` |
+|:--:|:--:|
+| ![A full game in the terminal view](docs/render-terminal.gif) | ![The same game in the pygame window](docs/render-window.gif) |
 
-One game, both renderers, in step. Every frame is a *committed turn* — the same
-thing `render_on="turn"` gives you live — and both panels come from a single
-`GameView`, so the turn counter, the flagged slots and the action log necessarily
-agree. Watch the table fill from three sets to twenty-two, and the winner's rack
-drain to nothing.
+The same game, frame for frame. Both are built from one pass over one `GameView`
+sequence, so frame *N* of each is the same turn — the turn counter, the flagged
+slots and the action log agree because they are the same data, not because two
+renderers happen to concur. Every frame is a *committed turn*, which is what
+`render_on="turn"` gives you live. Watch the table fill from three sets to
+twenty-two and the winner's rack drain to nothing.
 
 ## Why Rummikub
 
@@ -261,10 +264,10 @@ Use `num_envs=1`: Gymnasium tiles one frame per sub-env, and only
 `render_env_index` is ever drawn — rendering all N games to show N copies of the
 same thing would cost N times as much.
 
-The animation at the top of this page is generated, not pasted, and regenerating
-it is byte-identical:
+The animations at the top of this page are generated, not pasted, and
+regenerating them is byte-identical:
 
 ```bash
-python tools/render_docs.py --format gif --out docs/render.gif
-python tools/render_docs.py --format png --out docs/render.png   # a single frame
+python tools/render_docs.py --format gif --out docs/render     # both animations
+python tools/render_docs.py --format png --out still.png       # one frame, side by side
 ```
