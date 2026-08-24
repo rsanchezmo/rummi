@@ -1,8 +1,9 @@
-"""Conformance of the JAX backend against the NumPy reference.
+"""JAX-specific checks.
 
-Same ladder as the torch backend: the validity kernel on exhaustively enumerated
-slots, then the mask step for step, then the state digest after replaying the
-golden trajectories. The digest is the contract.
+Cross-backend conformance -- golden digests, masks, rewards -- lives in
+``test_backends.py``. What stays here is what only applies to JAX: exhaustive
+comparison of the validity kernel, host-side action validation (which cannot live
+inside the traced step), and that the step actually lowers and compiles.
 """
 
 import json
@@ -66,75 +67,6 @@ def test_assign_predicate_agrees_exhaustively(cfg: RummiConfig):
     want = np_sets.assign_open(cfg, np_sets.slot_stats(cfg, slots))
     got = j_kernel.assign_open(cfg, j_kernel.slot_stats(cfg, jnp.asarray(slots)))
     np.testing.assert_array_equal(np.asarray(got), want)
-
-
-@pytest.mark.parametrize("name", sorted(CONFIGS))
-def test_dealing_agrees(name: str):
-    cfg = CONFIGS[name]
-    ref = np_reset(cfg, 4, seed=101)
-    got = j_sim.reset(cfg, 4, seed=101)
-    np.testing.assert_array_equal(np.asarray(got.deck_order), ref.deck_order)
-    np.testing.assert_array_equal(np.asarray(got.racks), ref.racks)
-    assert j_sim.digest(got) == ref.digest()
-
-
-@pytest.mark.parametrize("name", sorted(CONFIGS))
-def test_golden_trajectory_is_reproduced(name: str):
-    payload = json.loads((GOLDEN / f"{name}.json").read_text())
-    cfg = CONFIGS[name]
-    state = j_sim.reset(cfg, payload["batch_size"], seed=payload["seed"])
-    seen = [j_sim.digest(state)]
-    resets = {r[0]: r[1] for r in payload["resets"]}
-
-    for i, actions in enumerate(payload["actions"]):
-        state, _ = j_sim.step(cfg, state, jnp.asarray(actions))
-        if (i + 1) % payload["digest_every"] == 0:
-            seen.append(j_sim.digest(state))
-        if i in resets:
-            envs = resets[i]
-            state = j_sim.reset_envs(
-                cfg, state, jnp.asarray(envs),
-                j_sim.derived_deck_orders(cfg, payload["reset_seed"], i, envs),
-            )
-    seen.append(j_sim.digest(state))
-
-    first_bad = next((i for i, (a, b) in enumerate(zip(seen, payload["digests"])) if a != b), None)
-    assert first_bad is None, f"{name}: diverged at digest {first_bad}"
-
-
-@pytest.mark.parametrize("name", sorted(CONFIGS))
-def test_masks_and_rewards_agree_step_for_step(name: str):
-    """A digest match could hide a mask that differs on actions never taken, and
-    rewards are outside the digest entirely, so compare both explicitly."""
-    cfg = CONFIGS[name]
-    payload = json.loads((GOLDEN / f"{name}.json").read_text())
-    ref = np_reset(cfg, payload["batch_size"], seed=payload["seed"])
-    got = j_sim.reset(cfg, payload["batch_size"], seed=payload["seed"])
-    resets = {r[0]: r[1] for r in payload["resets"]}
-
-    for i, actions in enumerate(payload["actions"][:120]):
-        ref_mask = np_masks.legal_actions(ref)
-        got_mask = j_sim.legal_actions(cfg, got)
-        np.testing.assert_array_equal(
-            np.asarray(got_mask), ref_mask, err_msg=f"{name}: masks differ at step {i}"
-        )
-        ref_out = np_step(ref, np.asarray(actions), ref_mask)
-        got, got_out = j_sim.step(cfg, got, jnp.asarray(actions))
-        np.testing.assert_allclose(
-            np.asarray(got_out.rewards), ref_out.rewards, atol=1e-6,
-            err_msg=f"{name}: rewards differ at step {i}",
-        )
-        np.testing.assert_array_equal(np.asarray(got_out.terminated), ref_out.terminated)
-        np.testing.assert_array_equal(np.asarray(got_out.truncated), ref_out.truncated)
-        j_sim.check_invariants(cfg, got)
-        if i in resets:
-            envs = resets[i]
-            np_reset_envs(ref, np.asarray(envs), derived_seeds(payload["reset_seed"], i, envs))
-            got = j_sim.reset_envs(
-                cfg, got, jnp.asarray(envs),
-                j_sim.derived_deck_orders(cfg, payload["reset_seed"], i, envs),
-            )
-        assert j_sim.digest(got) == ref.digest(), f"{name}: state diverged at step {i}"
 
 
 def test_illegal_actions_are_caught_host_side():

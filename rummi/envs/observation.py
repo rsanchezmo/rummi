@@ -25,6 +25,25 @@ from rummi.core.state import BatchState
 SLOT_FEATURES = 10
 """[len, run_valid, group_valid, extendable, colour, lo, hi, n_jokers, value, is_new]"""
 
+# Index into obs["scalars"]. Named so an agent never has to count positions.
+POOL_SIZE = 0
+MELD_PROGRESS = 1
+MELD_REMAINING = 2
+MICRO_COUNT = 3
+N_SCALARS = 4
+
+# Index into obs["slot_features"].
+F_LEN = 0
+F_RUN_VALID = 1
+F_GROUP_VALID = 2
+F_EXTENDABLE = 3
+F_COLOR = 4
+F_LO = 5
+F_HI = 6
+F_JOKERS = 7
+F_VALUE = 8
+F_IS_NEW = 9
+
 
 def observation_space(cfg: RummiConfig):
     from gymnasium import spaces
@@ -46,7 +65,7 @@ def observation_space(cfg: RummiConfig):
             # Per-element bounds: these four quantities have genuinely different
             # ranges, and a single shared bound is overflowed by micro_count.
             "scalars": spaces.Box(
-                low=np.zeros(4, dtype=np.int32),
+                low=np.zeros(N_SCALARS, dtype=np.int32),
                 high=np.array(
                     [cfg.n_tiles, _max_meld_value(cfg), cfg.initial_meld, cfg.max_micro_per_turn],
                     dtype=np.int32,
