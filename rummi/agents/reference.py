@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from rummi.agents.base import Agent, Observation, PlanningAgent, has_melded, table
-from rummi.core.config import RummiConfig
+from rummi.rules.config import RummiConfig
 
 
 class RandomAgent:

@@ -15,17 +15,17 @@ import pytest
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from rummi.core import masks as np_masks
-from rummi.core import sets as np_sets
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.deal import derived_seeds
-from rummi.core.deal import reset as np_reset
-from rummi.core.deal import reset_envs as np_reset_envs
-from rummi.core.engine import step as np_step
-from rummi.core.sets import pad_slot
+from rummi.env.numpy import masks as np_masks
+from rummi.env.numpy import sets as np_sets
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import derived_seeds
+from rummi.env.numpy.deal import reset as np_reset
+from rummi.env.numpy.deal import reset_envs as np_reset_envs
+from rummi.env.numpy.engine import step as np_step
+from rummi.env.numpy.sets import pad_slot
 
-from rummi.backends.jax_backend import kernel as j_kernel
-from rummi.backends.jax_backend import sim as j_sim
+from rummi.env.jax import kernel as j_kernel
+from rummi.env.jax import sim as j_sim
 
 CONFIGS = {"tiny": TINY, "tiny_groups": TINY_GROUPS, "standard": STANDARD}
 GOLDEN = Path(__file__).parent / "golden"

@@ -2,7 +2,7 @@
 simulator's arithmetic.
 
 These are deliberately slow and obvious: they exist so the vectorised kernels in
-``rummi.core`` and the fast solvers in ``rummi.solver`` can be checked against a
+``rummi.env.numpy`` and the fast solvers in ``rummi.solver`` can be checked against a
 definition nobody has optimised. Only tractable on the reduced configs.
 """
 
@@ -12,8 +12,8 @@ from collections import Counter
 from functools import lru_cache
 from itertools import combinations
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import kind_of
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import kind_of
 
 Content = tuple[int, ...]
 """A slot's tiles as a sorted tuple of kind ids."""

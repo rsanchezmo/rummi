@@ -15,10 +15,10 @@ from pathlib import Path
 
 import numpy as np
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RewardMode, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RewardMode, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
 from rummi.render.driver import RenderMode, Renderer
 
 CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}

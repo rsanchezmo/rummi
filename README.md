@@ -14,12 +14,12 @@ against on day one.
 pip install -e '.[dev,env,render,solver]'
 
 python -m rummi.render.record --play --render-mode ansi    # watch a game
-python -m rummi.benchmark.run --agent greedy               # score against the agents
+python -m rummi.evaluate.run --agent greedy               # score against the agents
 python -m rummi.bench.bench_backends --compile             # compare backends
 ```
 
 ```python
-from rummi.envs.rummi_vec_env import RummiVectorEnv
+from rummi.env.vector_env import RummiVectorEnv
 
 env = RummiVectorEnv(num_envs=256, seed=0)          # Gymnasium VectorEnv
 obs, info = env.reset()
@@ -78,7 +78,7 @@ observation is sufficient to play optimally.
 
 ```python
 import numpy as np
-from rummi.benchmark.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 
 class MyAgent:
     name = "mine"
@@ -106,7 +106,7 @@ an illegal action is a bug, not a strategy.
 
 ## Scoring yourself
 
-`rummi.benchmark` plays your agent against the bundled ones under a frozen,
+`rummi.evaluate` plays your agent against the bundled ones under a frozen,
 versioned protocol (`PROTOCOL_VERSION`), so a number you quote today still means
 the same thing later.
 
@@ -153,7 +153,7 @@ Full rules-to-arrays contract: [`SPEC.md`](SPEC.md).
 
 Three implementations, written independently against `SPEC.md` rather than
 against a shared abstraction, so a comparison measures implementations and not
-the cost of a common layer. `rummi.backends.api` reconciles them at the boundary,
+the cost of a common layer. `rummi.env.api` reconciles them at the boundary,
 so they are swappable by name.
 
 | backend | env-steps/s | vs NumPy |
@@ -181,12 +181,17 @@ the reference step for step.
 
 ```
 rummi/
-  core/         the reference implementation: encoding, set kernel, masks, engine
-  backends/     torch and jax implementations + the uniform adapter
+  rules/        backend-free: the rules as data (config, tile encoding, actions)
+  env/
+    numpy/      the reference implementation: set kernel, masks, engine, dealing
+    torch/      independent torch implementation
+    jax/        independent JAX implementation
+    api.py      uniform adapter, so backends are swappable by name
+    vector_env.py     Gymnasium VectorEnv
+    observation.py    the observation an agent is allowed to see
+  agents/       the Agent protocol and the bundled opponents
+  evaluate/     scoring an agent against those opponents
   solver/       brute-force oracles, candidate sets, CP-SAT, plan translator
-  agents/       the Agent protocol and the reference agents
-  benchmark/    scoring an agent against the bundled ones
-  envs/         Gymnasium VectorEnv and the observation encoder
   render/       live terminal view, pygame window, record/replay
   bench/        throughput benchmarks and the invariant fuzzer
 ```

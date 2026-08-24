@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
+from rummi.rules.config import RummiConfig
 
 FAMILY_WEIGHTS = {
     "place": 1.0,

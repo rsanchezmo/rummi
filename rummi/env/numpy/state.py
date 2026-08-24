@@ -18,8 +18,8 @@ from dataclasses import dataclass, fields
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import EMPTY, tables
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import EMPTY, tables
 
 NO_WINNER = -1
 HISTORY_LEN = 8
@@ -176,7 +176,7 @@ def counts_of(cfg: RummiConfig, kinds: np.ndarray) -> np.ndarray:
 
 
 def allocate(cfg: RummiConfig, batch_size: int) -> BatchState:
-    """Allocate a zeroed state; :func:`rummi.core.deal.reset` fills it in."""
+    """Allocate a zeroed state; :func:`rummi.env.numpy.deal.reset` fills it in."""
     b, p, k = batch_size, cfg.n_players, cfg.n_kinds
     s, ell = cfg.max_sets, cfg.max_set_len
     return BatchState(

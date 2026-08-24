@@ -4,10 +4,10 @@ import numpy as np
 import pytest
 
 from rummi.bench.fuzz import fuzz, make_policy
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
 
 CONFIGS = [(TINY, "tiny"), (TINY_GROUPS, "tiny_groups"), (STANDARD, "standard")]
 

@@ -12,8 +12,8 @@ from enum import Enum
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.state import BatchState
+from rummi.rules.config import RummiConfig
+from rummi.env.numpy.state import BatchState
 from rummi.render.view_model import GameView, view
 
 

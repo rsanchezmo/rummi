@@ -12,12 +12,12 @@ import pytest
 
 pytest.importorskip("ortools")
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.encoding import EMPTY, kind_of
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
-from rummi.core.sets import evaluate_slots
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import EMPTY, kind_of
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.sets import evaluate_slots
 from rummi.policies.optimal_policy import OptimalPolicy
 from rummi.solver.ilp import solve_turn
 from rummi.solver.to_actions import plan, slot_contents

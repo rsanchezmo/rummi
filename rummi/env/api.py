@@ -25,7 +25,7 @@ from typing import Any, Protocol
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
+from rummi.rules.config import RummiConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,24 +63,24 @@ class NumpyBackend:
     supports_inline_validation = True
 
     def reset(self, cfg, batch_size, seed=0):
-        from rummi.core.deal import reset
+        from rummi.env.numpy.deal import reset
 
         return reset(cfg, batch_size, seed=seed)
 
     def reset_envs(self, cfg, state, envs, base_seed, step_index):
-        from rummi.core.deal import derived_seeds, reset_envs
+        from rummi.env.numpy.deal import derived_seeds, reset_envs
 
         envs = np.asarray(envs)
         reset_envs(state, envs, derived_seeds(base_seed, step_index, envs))
         return state
 
     def legal_actions(self, cfg, state):
-        from rummi.core.masks import legal_actions
+        from rummi.env.numpy.masks import legal_actions
 
         return legal_actions(state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
-        from rummi.core.engine import step
+        from rummi.env.numpy.engine import step
 
         out = step(state, np.asarray(actions), mask, active)
         return state, StepOut(out.rewards, out.terminated, out.truncated)
@@ -106,14 +106,14 @@ class TorchBackend:
         return torch.device(self.device)
 
     def reset(self, cfg, batch_size, seed=0):
-        from rummi.backends.torch_backend import sim
+        from rummi.env.torch import sim
 
         return sim.reset(cfg, batch_size, seed=seed, device=self._dev())
 
     def reset_envs(self, cfg, state, envs, base_seed, step_index):
         import torch
 
-        from rummi.backends.torch_backend import sim
+        from rummi.env.torch import sim
 
         envs = list(np.asarray(envs).tolist())
         sim.reset_envs(
@@ -124,14 +124,14 @@ class TorchBackend:
         return state
 
     def legal_actions(self, cfg, state):
-        from rummi.backends.torch_backend import sim
+        from rummi.env.torch import sim
 
         return sim.legal_actions(state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import torch
 
-        from rummi.backends.torch_backend import sim
+        from rummi.env.torch import sim
 
         out = sim.step(state, torch.as_tensor(np.asarray(actions), device=self._dev()), mask, active)
         return state, StepOut(
@@ -155,14 +155,14 @@ class JaxBackend:
     """JAX validates host-side instead; see :meth:`check_actions`."""
 
     def reset(self, cfg, batch_size, seed=0):
-        from rummi.backends.jax_backend import sim
+        from rummi.env.jax import sim
 
         return sim.reset(cfg, batch_size, seed=seed)
 
     def reset_envs(self, cfg, state, envs, base_seed, step_index):
         import jax.numpy as jnp
 
-        from rummi.backends.jax_backend import sim
+        from rummi.env.jax import sim
 
         envs = list(np.asarray(envs).tolist())
         return sim.reset_envs(
@@ -171,14 +171,14 @@ class JaxBackend:
         )
 
     def legal_actions(self, cfg, state):
-        from rummi.backends.jax_backend import sim
+        from rummi.env.jax import sim
 
         return sim.legal_actions(cfg, state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import jax.numpy as jnp
 
-        from rummi.backends.jax_backend import sim
+        from rummi.env.jax import sim
 
         if mask is not None:
             live = ~np.asarray(state.done) if active is None else np.asarray(active)
@@ -189,7 +189,7 @@ class JaxBackend:
         )
 
     def digest(self, state):
-        from rummi.backends.jax_backend import sim
+        from rummi.env.jax import sim
 
         return sim.digest(state)
 

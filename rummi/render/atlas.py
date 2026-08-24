@@ -13,8 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import tables
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import tables
 from rummi.render.text import COLOR_RGB, JOKER_RGB
 
 TILE_FACE = (238, 232, 216)

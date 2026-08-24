@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.encoding import (
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.encoding import (
     EMPTY,
     kind_name,
     kind_of,

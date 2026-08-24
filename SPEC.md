@@ -1,6 +1,6 @@
 # Rummi simulator — normative spec
 
-The contract a backend must satisfy. The NumPy code in `rummi/core/` is the
+The contract a backend must satisfy. The NumPy code in `rummi/env/numpy/` is the
 reference implementation; the torch and JAX ports are written independently
 against *this document* rather than against a shared abstraction layer, so the
 benchmark compares implementations rather than one implementation's plumbing.
@@ -168,7 +168,7 @@ Truncation pays nothing — it is an artificial cutoff, not a result.
 
 | backend | state | env-steps/s | vs NumPy |
 |---|---|---:|---:|
-| NumPy (`rummi/core/`) | reference | 64k | 1.0x |
+| NumPy (`rummi/env/numpy/`) | reference | 64k | 1.0x |
 | torch CPU | conformant | 65k | 1.0x |
 | torch CPU + `compile` | conformant | 257k | 4.0x |
 | torch MPS | conformant | 223k | 3.5x |

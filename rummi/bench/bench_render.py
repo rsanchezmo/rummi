@@ -10,10 +10,10 @@ import time
 import numpy as np
 
 from rummi.bench.bench_step import CONFIGS, sample_legal
-from rummi.core.config import RummiConfig
-from rummi.core.deal import reset
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
+from rummi.rules.config import RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
 from rummi.render.driver import RenderMode, Renderer
 
 

@@ -18,8 +18,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import tables
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import tables
 
 NO_COLOR = -2
 NO_NUMBER = -2

@@ -7,6 +7,9 @@ name = "rummi"
 version = "0.1.0"
 description = "Batch-native Rummikub environment for reinforcement learning, with built-in opponents"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+readme = "README.md"
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]

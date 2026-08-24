@@ -1,4 +1,4 @@
-"""Run the benchmark. ``python -m rummi.benchmark.run --agent greedy``"""
+"""Run the benchmark. ``python -m rummi.evaluate.run --agent greedy``"""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import time
 
 from rummi.agents.reference import REGISTRY
-from rummi.benchmark.protocol import (
+from rummi.evaluate.protocol import (
     PROTOCOL_VERSION,
     SUITE_BY_NAME,
     SUITES,

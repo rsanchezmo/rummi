@@ -20,8 +20,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import EMPTY, tables
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import EMPTY, tables
 
 _NO_COLOR = np.int16(-2)
 """Sentinel that compares unequal to every real colour, so a mixed-colour slot

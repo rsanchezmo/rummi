@@ -12,13 +12,13 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rummi.backends.api import available, get_backend
-from rummi.core import masks as np_masks
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS
-from rummi.core.deal import derived_seeds
-from rummi.core.deal import reset as np_reset
-from rummi.core.deal import reset_envs as np_reset_envs
-from rummi.core.engine import step as np_step
+from rummi.env.api import available, get_backend
+from rummi.env.numpy import masks as np_masks
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS
+from rummi.env.numpy.deal import derived_seeds
+from rummi.env.numpy.deal import reset as np_reset
+from rummi.env.numpy.deal import reset_envs as np_reset_envs
+from rummi.env.numpy.engine import step as np_step
 
 CONFIGS = {"tiny": TINY, "tiny_groups": TINY_GROUPS, "standard": STANDARD}
 GOLDEN = Path(__file__).parent / "golden"

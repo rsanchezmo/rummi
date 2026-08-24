@@ -5,13 +5,13 @@ import pytest
 
 pytest.importorskip("ortools")
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.encoding import EMPTY, kind_of, tables
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
-from rummi.core.sets import evaluate_slots
-from rummi.core.state import counts_of
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import EMPTY, kind_of, tables
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.sets import evaluate_slots
+from rummi.env.numpy.state import counts_of
 from rummi.policies.greedy_policy import plan_turn as greedy_plan
 from rummi.solver import brute_force
 from rummi.solver.ilp import Objective, solve_turn

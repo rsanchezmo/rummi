@@ -10,19 +10,19 @@ import pytest
 
 from rummi.agents.base import Agent, PlanningAgent, has_melded, table, turn_starting
 from rummi.agents.reference import REGISTRY, GreedyAgent, build
-from rummi.benchmark import protocol
-from rummi.benchmark.protocol import (
+from rummi.evaluate import protocol
+from rummi.evaluate.protocol import (
     PROTOCOL_VERSION,
     SUITES,
     SUITE_BY_NAME,
     Suite,
     evaluate,
 )
-from rummi.core.config import TINY_GROUPS
-from rummi.core.deal import reset
-from rummi.core.masks import legal_actions
-from rummi.core.engine import step
-from rummi.envs.observation import encode
+from rummi.rules.config import TINY_GROUPS
+from rummi.env.numpy.deal import reset
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.engine import step
+from rummi.env.observation import encode
 
 TINY = SUITE_BY_NAME["tiny"]
 

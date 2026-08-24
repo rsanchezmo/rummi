@@ -16,10 +16,10 @@ import numpy as np
 import pytest
 
 from rummi.bench.fuzz import make_policy
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS
-from rummi.core.deal import derived_seeds, reset, reset_envs
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS
+from rummi.env.numpy.deal import derived_seeds, reset, reset_envs
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
 
 CONFIGS = {"tiny": TINY, "tiny_groups": TINY_GROUPS, "standard": STANDARD}
 GOLDEN = Path(__file__).parent / "golden"

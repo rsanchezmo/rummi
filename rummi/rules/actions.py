@@ -2,7 +2,7 @@
 
 One ``step`` applies one primitive table operation, so a player's whole turn is a
 *sequence* of actions terminated by ``END_TURN`` or ``DRAW``. Action ids are laid
-out as six contiguous blocks (see :class:`~rummi.core.config.RummiConfig`)::
+out as six contiguous blocks (see :class:`~rummi.rules.config.RummiConfig`)::
 
     PLACE(kind)          rack      -> workbench
     PICK(slot, pos)      one tile of a set -> workbench
@@ -22,8 +22,8 @@ from enum import IntEnum
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import kind_name
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import kind_name
 
 
 class ActionKind(IntEnum):

@@ -5,9 +5,9 @@ import pytest
 
 gym = pytest.importorskip("gymnasium")
 
-from rummi.core.config import STANDARD, TINY_GROUPS, RummiConfig
-from rummi.core.encoding import tables
-from rummi.envs.rummi_vec_env import RummiVectorEnv
+from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
+from rummi.rules.encoding import tables
+from rummi.env.vector_env import RummiVectorEnv
 from rummi.render.driver import RenderMode
 
 C = TINY_GROUPS

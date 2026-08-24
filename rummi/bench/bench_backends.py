@@ -2,7 +2,7 @@
 
 Both backends are driven identically and by the cheapest possible action choice
 (the first legal action), so the number measured is the simulator and not a
-policy. Conformance is verified separately in ``tests/test_torch_backend.py`` --
+policy. Conformance is verified separately in ``tests/test_backends.py`` --
 these figures only mean something because the two implementations are known to
 agree.
 
@@ -17,15 +17,15 @@ import time
 
 import numpy as np
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
 
 CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def bench_numpy(cfg: RummiConfig, batch_size: int, iters: int, warmup: int = 20) -> float:
-    from rummi.core.deal import reset
-    from rummi.core.engine import step
-    from rummi.core.masks import legal_actions
+    from rummi.env.numpy.deal import reset
+    from rummi.env.numpy.engine import step
+    from rummi.env.numpy.masks import legal_actions
 
     state = reset(cfg, batch_size, seed=0)
     for _ in range(warmup):
@@ -45,7 +45,7 @@ def bench_torch(
 ) -> float:
     import torch
 
-    from rummi.backends.torch_backend import sim
+    from rummi.env.torch import sim
 
     dev = torch.device(device)
     state = sim.reset(cfg, batch_size, seed=0, device=dev)
@@ -92,7 +92,7 @@ def bench_jax(
     import jax
     import jax.numpy as jnp
 
-    from rummi.backends.jax_backend import sim
+    from rummi.env.jax import sim
 
     state = sim.reset(cfg, batch_size, seed=0)
 

@@ -1,6 +1,6 @@
 """Independent torch implementation of the simulator, written against SPEC.md."""
 
-from rummi.backends.torch_backend.sim import (
+from rummi.env.torch.sim import (
     TorchState,
     allocate,
     counts_of,

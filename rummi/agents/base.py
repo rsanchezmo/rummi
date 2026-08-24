@@ -18,11 +18,11 @@ from typing import Protocol, runtime_checkable
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.envs.observation import MICRO_COUNT
+from rummi.rules.config import RummiConfig
+from rummi.env.observation import MICRO_COUNT
 
 Observation = dict[str, np.ndarray]
-"""Batched observation as produced by :func:`rummi.envs.observation.encode`.
+"""Batched observation as produced by :func:`rummi.env.observation.encode`.
 Every entry has a leading env dimension. Per-seat fields are rotated so index 0
 is always the acting seat, which is what lets one agent play every seat."""
 

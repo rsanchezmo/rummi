@@ -16,9 +16,9 @@ from collections import deque
 
 import numpy as np
 
-from rummi.core.actions import action_name
-from rummi.core.config import RummiConfig
-from rummi.core.state import BatchState
+from rummi.rules.actions import action_name
+from rummi.rules.config import RummiConfig
+from rummi.env.numpy.state import BatchState
 from rummi.solver.ilp import DEFAULT_TIME_LIMIT, Objective, solve_turn
 from rummi.solver.to_actions import plan
 

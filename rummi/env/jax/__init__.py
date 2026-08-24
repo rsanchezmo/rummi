@@ -1,6 +1,6 @@
 """Independent JAX implementation of the simulator, written against SPEC.md."""
 
-from rummi.backends.jax_backend.sim import (
+from rummi.env.jax.sim import (
     JaxState,
     check_actions,
     counts_of,

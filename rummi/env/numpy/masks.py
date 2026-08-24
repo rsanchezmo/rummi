@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import tables
-from rummi.core.sets import assign_open, evaluate, slot_stats
-from rummi.core.state import BatchState
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import tables
+from rummi.env.numpy.sets import assign_open, evaluate, slot_stats
+from rummi.env.numpy.state import BatchState
 
 
 def current_rack(state: BatchState) -> np.ndarray:

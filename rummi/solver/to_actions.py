@@ -17,9 +17,9 @@ from collections import Counter
 
 import numpy as np
 
-from rummi.core.actions import encode_assign, encode_dissolve, encode_place
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import counts_to_kinds
+from rummi.rules.actions import encode_assign, encode_dissolve, encode_place
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import counts_to_kinds
 
 Content = tuple[int, ...]
 

@@ -19,11 +19,11 @@ from collections import deque
 
 import numpy as np
 
-from rummi.core.actions import encode_assign, encode_place
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import tables
-from rummi.core.sets import evaluate_slots
-from rummi.core.state import BatchState
+from rummi.rules.actions import encode_assign, encode_place
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import tables
+from rummi.env.numpy.sets import evaluate_slots
+from rummi.env.numpy.state import BatchState
 from rummi.solver.candidates import candidates
 
 
@@ -174,7 +174,7 @@ class GreedyPolicy:
             action = plan.popleft()
             if not mask[env, action]:
                 if self.strict:
-                    from rummi.core.actions import action_name
+                    from rummi.rules.actions import action_name
 
                     raise AssertionError(
                         f"greedy planned an illegal {action_name(cfg, action)} in env {env}"

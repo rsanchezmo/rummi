@@ -24,9 +24,9 @@ from dataclasses import dataclass, fields
 import numpy as np
 import torch
 
-from rummi.core.config import RewardMode, RummiConfig
-from rummi.core.encoding import EMPTY, tables
-from rummi.backends.torch_backend.kernel import (
+from rummi.rules.config import RewardMode, RummiConfig
+from rummi.rules.encoding import EMPTY, tables
+from rummi.env.torch.kernel import (
     assign_open,
     evaluate,
     lookup,
@@ -85,7 +85,7 @@ class TorchState:
         return self.racks @ lookup(self.cfg, self.device).offload
 
     def digest(self) -> str:
-        """Must match ``rummi.core.state.BatchState.digest`` bit for bit."""
+        """Must match ``rummi.env.numpy.state.BatchState.digest`` bit for bit."""
         import hashlib
 
         h = hashlib.sha256()

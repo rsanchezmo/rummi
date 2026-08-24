@@ -5,9 +5,9 @@ from itertools import combinations_with_replacement
 import numpy as np
 import pytest
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.encoding import EMPTY, kind_name, kind_of
-from rummi.core.sets import assign_open, evaluate_slots, pad_slot, slot_stats
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.encoding import EMPTY, kind_name, kind_of
+from rummi.env.numpy.sets import assign_open, evaluate_slots, pad_slot, slot_stats
 from rummi.solver import brute_force
 
 ORACLE_CONFIGS = [TINY, TINY_GROUPS]

@@ -17,7 +17,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
+from rummi.rules.config import RummiConfig
 
 EMPTY = -1
 """Sentinel stored in ``table_sets`` for an unoccupied position."""

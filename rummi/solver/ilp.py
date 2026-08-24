@@ -19,9 +19,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import EMPTY, tables
-from rummi.core.sets import evaluate_slots
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import EMPTY, tables
+from rummi.env.numpy.sets import evaluate_slots
 from rummi.solver.candidates import candidates
 
 DEFAULT_TIME_LIMIT = 2.0

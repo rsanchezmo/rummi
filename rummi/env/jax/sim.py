@@ -25,9 +25,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rummi.backends.jax_backend.kernel import assign_open, evaluate, lookup, slot_stats
-from rummi.core.config import RewardMode, RummiConfig
-from rummi.core.encoding import EMPTY, tables
+from rummi.env.jax.kernel import assign_open, evaluate, lookup, slot_stats
+from rummi.rules.config import RewardMode, RummiConfig
+from rummi.rules.encoding import EMPTY, tables
 
 NO_WINNER = -1
 HISTORY_LEN = 8
@@ -72,7 +72,7 @@ class StepResult(NamedTuple):
 
 
 def digest(state: JaxState) -> str:
-    """Must match ``rummi.core.state.BatchState.digest`` bit for bit."""
+    """Must match ``rummi.env.numpy.state.BatchState.digest`` bit for bit."""
     h = hashlib.sha256()
     for name in DIGEST_FIELDS:
         arr = np.asarray(getattr(state, name))

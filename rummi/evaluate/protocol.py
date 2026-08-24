@@ -26,12 +26,12 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from rummi.agents.base import Agent
-from rummi.core.config import STANDARD, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset as deal_reset
-from rummi.core.deal import reset_envs
-from rummi.core.engine import step as engine_step
-from rummi.core.masks import legal_actions
-from rummi.envs.observation import encode
+from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset as deal_reset
+from rummi.env.numpy.deal import reset_envs
+from rummi.env.numpy.engine import step as engine_step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.observation import encode
 
 PROTOCOL_VERSION = "1.0"
 

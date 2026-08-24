@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from rummi.core.config import RummiConfig
+from rummi.rules.config import RummiConfig
 from rummi.render.atlas import (
     BACKGROUND,
     INVALID_EDGE,

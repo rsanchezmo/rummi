@@ -38,13 +38,13 @@ except ModuleNotFoundError as exc:  # pragma: no cover
         "the Gymnasium env needs the optional extra: pip install 'rummi[env]'"
     ) from exc
 
-from rummi.core.config import STANDARD, RummiConfig
-from rummi.core.deal import reset as deal_reset
-from rummi.core.deal import reset_envs
-from rummi.core.engine import step as engine_step
-from rummi.core.masks import legal_actions
-from rummi.core.state import allocate
-from rummi.envs.observation import encode, observation_space
+from rummi.rules.config import STANDARD, RummiConfig
+from rummi.env.numpy.deal import reset as deal_reset
+from rummi.env.numpy.deal import reset_envs
+from rummi.env.numpy.engine import step as engine_step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.state import allocate
+from rummi.env.observation import encode, observation_space
 from rummi.render.driver import RenderMode, Renderer
 
 

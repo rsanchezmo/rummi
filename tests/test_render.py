@@ -7,11 +7,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from rummi.core.actions import encode_assign, encode_place
-from rummi.core.config import STANDARD, TINY_GROUPS
-from rummi.core.deal import reset
-from rummi.core.encoding import kind_of
-from rummi.core.masks import legal_actions
+from rummi.rules.actions import encode_assign, encode_place
+from rummi.rules.config import STANDARD, TINY_GROUPS
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import kind_of
+from rummi.env.numpy.masks import legal_actions
 from rummi.render.driver import RenderMode, Renderer
 from rummi.render.text import Palette, TerminalView, frame
 from rummi.render.view_model import SlotShape, view
@@ -188,7 +188,7 @@ def test_recording_replays_to_an_identical_state(tmp_path: Path):
 
     live = reset(cfg, 1, seed=5)
     from rummi.bench.fuzz import make_policy
-    from rummi.core.engine import step
+    from rummi.env.numpy.engine import step
 
     policy = make_policy(cfg, "greedy", 5)
     while not live.done.all():
@@ -205,7 +205,7 @@ def test_recording_replays_to_an_identical_state(tmp_path: Path):
 def test_action_history_survives_render_throttling():
     """The log lives in the state, so it is complete regardless of how often the
     renderer is allowed to draw."""
-    from rummi.core.state import HISTORY_LEN
+    from rummi.env.numpy.state import HISTORY_LEN
 
     s = state_with(C, rack=RUN_36)
     actions = [encode_place(C, k) for k in RUN_36] + [encode_assign(C, k, 0) for k in RUN_36]

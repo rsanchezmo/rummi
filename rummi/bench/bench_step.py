@@ -13,12 +13,12 @@ import time
 
 import numpy as np
 
-from rummi.core.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
-from rummi.core.sets import evaluate_slots, slot_stats
-from rummi.core.state import BatchState
+from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.sets import evaluate_slots, slot_stats
+from rummi.env.numpy.state import BatchState
 
 CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import EMPTY, tables
-from rummi.core.state import NO_WINNER, BatchState, allocate
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import EMPTY, tables
+from rummi.env.numpy.state import NO_WINNER, BatchState, allocate
 
 
 def deck(cfg: RummiConfig) -> np.ndarray:

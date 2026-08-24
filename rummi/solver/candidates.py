@@ -15,8 +15,8 @@ from itertools import combinations
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import EMPTY, kind_of
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import EMPTY, kind_of
 
 
 @dataclass(frozen=True, slots=True)

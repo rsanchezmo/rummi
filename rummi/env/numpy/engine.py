@@ -1,6 +1,6 @@
 """The step function: apply one primitive action per env.
 
-Legality is decided entirely in :mod:`rummi.core.masks`; this module only applies
+Legality is decided entirely in :mod:`rummi.env.numpy.masks`; this module only applies
 effects, so every branch here assumes its precondition already holds. Effects are
 applied family by family over the envs that chose that family, which keeps each
 update a single vectorised scatter with no duplicate indices.
@@ -12,10 +12,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rummi.core.actions import decode_batch
-from rummi.core.config import RewardMode, RummiConfig
-from rummi.core.encoding import EMPTY
-from rummi.core.state import NO_WINNER, BatchState, counts_of
+from rummi.rules.actions import decode_batch
+from rummi.rules.config import RewardMode, RummiConfig
+from rummi.rules.encoding import EMPTY
+from rummi.env.numpy.state import NO_WINNER, BatchState, counts_of
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +53,7 @@ def step(
 ) -> StepResult:
     """Apply one action per env, mutating ``state`` in place.
 
-    ``mask`` is the output of :func:`rummi.core.masks.legal_actions` for this
+    ``mask`` is the output of :func:`rummi.env.numpy.masks.legal_actions` for this
     state. Passing it is free for the caller -- the env computes it anyway -- and
     turns an illegal action into a loud failure rather than a corrupt state.
 
@@ -209,7 +209,7 @@ def _begin_turn(state: BatchState, sel: np.ndarray) -> None:
 
 
 def _face_values(cfg: RummiConfig) -> np.ndarray:
-    from rummi.core.encoding import tables
+    from rummi.rules.encoding import tables
 
     return tables(cfg).value.astype(np.int32)
 

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 
-from rummi.core.config import RummiConfig
-from rummi.core.deal import reset
-from rummi.core.encoding import tables
-from rummi.core.masks import legal_actions
-from rummi.core.engine import step
-from rummi.core.state import BatchState
+from rummi.rules.config import RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import tables
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.state import BatchState
 
 
 def rebalance_pool(state: BatchState) -> None:

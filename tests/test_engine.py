@@ -3,13 +3,13 @@
 import numpy as np
 import pytest
 
-from rummi.core.actions import encode_assign, encode_dissolve, encode_place
-from rummi.core.config import STANDARD, RewardMode, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.encoding import EMPTY, kind_of
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions
-from rummi.core.state import NO_WINNER
+from rummi.rules.actions import encode_assign, encode_dissolve, encode_place
+from rummi.rules.config import STANDARD, RewardMode, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import EMPTY, kind_of
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.state import NO_WINNER
 
 from tests.conftest import drain_pool, play, rebalance_pool, state_with
 
@@ -53,7 +53,7 @@ def test_dissolve_returns_a_whole_set_to_the_workbench():
 
 
 def test_pick_takes_one_tile_and_recanonicalises():
-    from rummi.core.actions import encode_pick
+    from rummi.rules.actions import encode_pick
 
     s = state_with(C, table=[GROUP_4], rack=[kind_of(C, 0, 7)], melded=True)
     taken = int(s.table_sets[0, 0, 0])

@@ -12,12 +12,12 @@ from enum import Enum
 
 import numpy as np
 
-from rummi.core.actions import ActionKind, action_name, decode
-from rummi.core.config import RummiConfig
-from rummi.core.encoding import counts_to_kinds, kind_name
-from rummi.core.encoding import tables
-from rummi.core.sets import evaluate_slots
-from rummi.core.state import BatchState
+from rummi.rules.actions import ActionKind, action_name, decode
+from rummi.rules.config import RummiConfig
+from rummi.rules.encoding import counts_to_kinds, kind_name
+from rummi.rules.encoding import tables
+from rummi.env.numpy.sets import evaluate_slots
+from rummi.env.numpy.state import BatchState
 
 
 class SlotShape(str, Enum):
@@ -94,7 +94,7 @@ class GameView:
 def _meld_progress(state: BatchState, b: int, slot_value: np.ndarray) -> int:
     """Value credited so far towards the acting seat's opening meld.
 
-    Mirrors :func:`rummi.core.masks.meld_value` for a single env: under the
+    Mirrors :func:`rummi.env.numpy.masks.meld_value` for a single env: under the
     official rule the sets created this turn *are* the tiles played, so the joker
     is resolved by its set; when that restriction is relaxed only face value can
     be credited.

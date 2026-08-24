@@ -3,13 +3,13 @@
 import numpy as np
 import pytest
 
-from rummi.core.actions import encode_assign, encode_dissolve, encode_pick, encode_place
-from rummi.core.config import STANDARD, TINY_GROUPS, RummiConfig
-from rummi.core.deal import reset
-from rummi.core.encoding import kind_of, tables
-from rummi.core.engine import step
-from rummi.core.masks import legal_actions, meld_value
-from rummi.core.sets import evaluate_slots
+from rummi.rules.actions import encode_assign, encode_dissolve, encode_pick, encode_place
+from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
+from rummi.env.numpy.deal import reset
+from rummi.rules.encoding import kind_of, tables
+from rummi.env.numpy.engine import step
+from rummi.env.numpy.masks import legal_actions, meld_value
+from rummi.env.numpy.sets import evaluate_slots
 
 from tests.conftest import rebalance_pool, state_with
 
