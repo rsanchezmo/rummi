@@ -232,13 +232,13 @@ rummi/
   agents/       the Agent protocol and the bundled opponents
   evaluate/     scoring an agent against those opponents
   solver/       brute-force oracles, candidate sets, CP-SAT, plan translator
-  render/       live terminal view, pygame window, record/replay
+  render/       shared board layout, terminal view, pygame window, play UI, record/replay
   bench/        throughput benchmarks and the invariant fuzzer
 ```
 
 ## What is verified
 
-- **183 tests.** The set-validity kernel is checked *exhaustively* against a
+- **224 tests.** The set-validity kernel is checked *exhaustively* against a
   brute-force oracle on the reduced configs, including the closed-form
   "could I add this tile?" predicate.
 - **10.5M fuzz steps, zero invariant violations.** Tile conservation, mask
@@ -300,3 +300,32 @@ regenerating them is byte-identical:
 python tools/render_docs.py --format gif --out docs/render     # both animations
 python tools/render_docs.py --format png --out still.png       # one frame, side by side
 ```
+
+## Playing a hand yourself
+
+```bash
+python -m rummi.render.play --opponent optimal
+```
+
+Drag a tile off your rack onto the table, or off one set onto another to
+rearrange. A press picks the tile up and a release puts it down, so clicking
+works too: click to take, click again where it should go. `UNDO` walks back a
+mis-drag, `END TURN` commits.
+
+The window says things rather than printing them: a pill per seat showing whose
+turn it is and how many tiles are left, a bar for how close your opening meld is,
+a score under each set, a red ring on any set that is not legal yet, and a blue
+one on every set the tile in your hand could go to.
+
+The reason this is worth more than the fun of it: **the same `action_mask` an
+agent consumes drives the interface.** It decides which tiles can be lifted and
+which sets light up as you drag, so an illegal move is not rejected — it is
+inexpressible, and a test fires random clicks across a whole game asserting that
+no gesture can produce an action the mask forbids. Every drag emits the same
+micro-actions an agent has to emit, which makes the window a way to read the
+action space rather than a separate way of playing.
+
+Undo is worth a note too. The MDP has no "unplace" — a tile leaves the workbench
+by being assigned or by `DRAW` abandoning the turn — so rather than add an action
+to fix a human's mis-click, `UNDO` rewinds to the turn's opening state and replays
+it one action short. The engine every agent sees is untouched.

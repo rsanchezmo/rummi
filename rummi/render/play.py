@@ -1,18 +1,19 @@
 """Play a hand yourself, against any bundled agent.
 
 The point of this module, beyond being fun, is that **the mask drives the UI**.
-The same ``action_mask`` an RL agent consumes decides which tiles are clickable
-and which slots light up, so an illegal move is not rejected -- it is
-inexpressible. If you can click it, it is legal.
+The same ``action_mask`` an RL agent consumes decides which tiles can be picked up
+and which sets light up, so an illegal move is not rejected -- it is
+inexpressible. If you can drop it there, it is legal.
 
-Interaction is two clicks: a rack tile goes to the workbench and stays selected,
-then a slot takes it. Table tiles can be picked up the same way, which is how you
-rearrange. Everything is a real micro-action, so playing a turn here produces
-exactly the action sequence an agent would have to emit.
+Tiles are dragged: press a tile to take it, release it on a set to play it.
+A press takes and a release drops, which makes clicking work for free -- press and
+release in the same place and the tile stays in hand until you click where it
+should go. Either way the gesture is spelled out in real micro-actions, so playing
+a turn here emits exactly the sequence an agent would have to emit.
 
-The hit-testing is deliberately pure -- :func:`hit` and :func:`action_for` take
-rectangles and a click position and return an action id -- so the whole thing can
-be tested headless without an event loop or a display.
+Nothing here decides where anything is on screen; :mod:`rummi.render.board` does,
+and it does it without touching a display, which is what lets a whole hand be
+played headlessly in the tests.
 
     python -m rummi.render.play --opponent optimal
 """
@@ -21,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
-from enum import Enum
 
 import numpy as np
 
@@ -30,120 +30,40 @@ from rummi.agents.base import act_on_state
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.render.pygame_view import LOG_H, PAD, STRIP_H, STRIP_LABEL_W, PygameView
+from rummi.env.numpy.state import BatchState
+from rummi.render.board import Hit, Zone, hit
+from rummi.render.pygame_view import Overlay, PygameView
 from rummi.render.view_model import GameView, view
-from rummi.rules.actions import encode_assign, encode_pick, encode_place
+from rummi.rules.actions import decode, encode_assign, encode_pick, encode_place
 from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
 
 CONFIGS = {"standard": STANDARD, "tiny_groups": TINY_GROUPS}
-BUTTON_W, BUTTON_H, BUTTON_GAP = 130, 34, 10
+DRAG_SLOP = 6
+"""How far the pointer must travel before a press counts as a drag. Below it the
+gesture is a click, and a click that took a tile must not also put it back."""
 
 
-class Zone(str, Enum):
-    RACK = "rack"
-    WORKBENCH = "workbench"
-    SLOT = "slot"
-    END_TURN = "end_turn"
-    UNDO = "undo"
-    DRAW = "draw"
+# --- what a click means ------------------------------------------------------
+def _row(mask: np.ndarray) -> np.ndarray:
+    """The single env's mask row the UI reasons about.
+
+    ``step`` wants the batched ``(1, A)`` mask and everything here wants ``(A,)``.
+    Caught here rather than left to fail deep inside drawing, with an IndexError
+    that names neither shape.
+    """
+    if mask.ndim != 1:
+        raise ValueError(f"expected a single env's mask, got shape {mask.shape}")
+    return mask
 
 
-@dataclass(frozen=True, slots=True)
-class Hit:
-    zone: Zone
-    index: int = -1
-    """Slot id, for :data:`Zone.SLOT`."""
-    kind: int = -1
-    """Tile kind, for the rack and workbench strips."""
-    tiles: tuple[int, ...] = ()
-    """Contents of the clicked slot, so a pick can choose a position."""
-
-
-@dataclass(slots=True)
-class Selection:
-    """What the player has picked up, if anything."""
-
-    kind: int = -1
-
-    @property
-    def active(self) -> bool:
-        return self.kind >= 0
-
-    def clear(self) -> None:
-        self.kind = -1
-
-
-@dataclass(slots=True)
-class Regions:
-    """Clickable rectangles for one rendered frame."""
-
-    rack: list[tuple[object, int]] = field(default_factory=list)
-    workbench: list[tuple[object, int]] = field(default_factory=list)
-    slots: list[tuple[object, int, tuple[int, ...]]] = field(default_factory=list)
-    end_turn: object = None
-    undo: object = None
-    draw: object = None
-
-
-def regions_for(window: PygameView, snapshot: GameView) -> Regions:
-    """Where everything is on screen, derived from the same layout that drew it."""
-    import pygame
-
-    lay = window._layout
-    atlas = window._atlas
-    out = Regions()
-
-    visible, _ = window.visible_slots(snapshot)
-    for display_index, slot in enumerate(visible):
-        rect = lay.row_rect(display_index)
-        out.slots.append((rect, slot.index, slot.tiles))
-
-    for name, kinds, top in (
-        ("workbench", snapshot.workbench, lay.workbench_top),
-        ("rack", snapshot.rack, lay.rack_top),
-    ):
-        target = out.workbench if name == "workbench" else out.rack
-        for i, kind in enumerate(kinds):
-            x = PAD + STRIP_LABEL_W + i * atlas.tile_w
-            target.append((pygame.Rect(x, top + 2, atlas.tile_w, atlas.tile_h), kind))
-
-    bar_y = lay.log_top + LOG_H + 4
-    stride = BUTTON_W + BUTTON_GAP
-    out.end_turn = pygame.Rect(PAD, bar_y, BUTTON_W, BUTTON_H)
-    out.undo = pygame.Rect(PAD + stride, bar_y, BUTTON_W, BUTTON_H)
-    out.draw = pygame.Rect(PAD + 2 * stride, bar_y, BUTTON_W, BUTTON_H)
-    return out
-
-
-def hit(regions: Regions, pos: tuple[int, int]) -> Hit | None:
-    """Which region a click landed in. Pure: no pygame state, no display."""
-    if regions.end_turn is not None and regions.end_turn.collidepoint(pos):
-        return Hit(Zone.END_TURN)
-    if regions.undo is not None and regions.undo.collidepoint(pos):
-        return Hit(Zone.UNDO)
-    if regions.draw is not None and regions.draw.collidepoint(pos):
-        return Hit(Zone.DRAW)
-    for rect, kind in regions.rack:
-        if rect.collidepoint(pos):
-            return Hit(Zone.RACK, kind=kind)
-    for rect, kind in regions.workbench:
-        if rect.collidepoint(pos):
-            return Hit(Zone.WORKBENCH, kind=kind)
-    for rect, slot, tiles in regions.slots:
-        if rect.collidepoint(pos):
-            return Hit(Zone.SLOT, index=slot, tiles=tiles)
-    return None
-
-
-def action_for(
-    cfg: RummiConfig, spot: Hit, selection: Selection, mask: np.ndarray, snapshot: GameView
-) -> int | None:
+def action_for(cfg: RummiConfig, spot: Hit, held: int, mask: np.ndarray) -> int | None:
     """The action a click means, or ``None`` if it is not a legal move.
 
     Every branch checks the mask, so this cannot produce an illegal action --
     which is what lets the UI simply ignore an unproductive click instead of
     having to explain it.
     """
+    mask = _row(mask)
     if spot.zone is Zone.END_TURN:
         return cfg.end_turn_action if mask[cfg.end_turn_action] else None
     if spot.zone is Zone.DRAW:
@@ -152,102 +72,49 @@ def action_for(
         # Not an action: the MDP has no "unplace", so undo is done by the caller
         # rewinding the turn and replaying it one action short.
         return None
-
     if spot.zone is Zone.RACK:
         action = encode_place(cfg, spot.kind)
         return action if mask[action] else None
-
     if spot.zone is Zone.WORKBENCH:
-        return None  # selection only; handled by the caller
-
+        return None  # taking a tile back in hand is not a move
     if spot.zone is Zone.SLOT:
-        if selection.active:
-            action = encode_assign(cfg, selection.kind, spot.index)
+        if held >= 0:
+            action = encode_assign(cfg, held, spot.slot)
             return action if mask[action] else None
-        # Nothing in hand: clicking a set lifts a tile off it, which is how a
-        # rearrangement starts. Take from the end, where a run gives up a tile
-        # without breaking.
-        return pick_from_slot(cfg, spot.index, spot.tiles, mask)
+        return pick_action(cfg, spot, mask)
     return None
 
 
-def pick_from_slot(
-    cfg: RummiConfig, slot: int, tiles: tuple[int, ...], mask: np.ndarray
-) -> int | None:
-    """Lift the rightmost liftable tile out of a set."""
-    for pos in reversed(range(len(tiles))):
-        action = encode_pick(cfg, slot, pos)
+def pick_action(cfg: RummiConfig, spot: Hit, mask: np.ndarray) -> int | None:
+    """Lift the tile that was pointed at.
+
+    ``spot.pos`` is a position in the set's *stored* order even though the click
+    landed on the tile as displayed -- the board translates, because a joker is
+    drawn in the gap it fills while ``PICK`` indexes storage. A click that landed
+    on the card but not on a tile has no position, and falls back to the rightmost
+    liftable tile, where a run gives one up without breaking.
+    """
+    mask = _row(mask)
+    if spot.pos >= 0:
+        action = encode_pick(cfg, spot.slot, spot.pos)
+        if mask[action]:
+            return action
+    for pos in reversed(range(len(spot.tiles))):
+        action = encode_pick(cfg, spot.slot, pos)
         if mask[action]:
             return action
     return None
 
 
 def legal_slots(cfg: RummiConfig, kind: int, mask: np.ndarray) -> frozenset[int]:
-    """Slots that would accept the held tile. This is what the UI highlights."""
+    """Slots that would accept the held tile. This is what the UI lights up."""
+    mask = _row(mask)
     if kind < 0:
         return frozenset()
-    return frozenset(
-        slot for slot in range(cfg.max_sets) if mask[encode_assign(cfg, kind, slot)]
-    )
+    return frozenset(slot for slot in range(cfg.max_sets) if mask[encode_assign(cfg, kind, slot)])
 
 
-# --- drawing the interactive chrome ------------------------------------------
-def draw_controls(
-    window: PygameView,
-    regions: Regions,
-    snapshot: GameView,
-    mask: np.ndarray,
-    selection: Selection,
-    can_undo: bool = False,
-) -> None:
-    """Buttons and the hint line, drawn over the board."""
-    import pygame
-
-    from rummi.render.atlas import BACKGROUND, DISABLED, DROP_EDGE, PANEL, TEXT, TEXT_DIM
-
-    surface, cfg = window._surface, window.cfg
-
-    # Ring the tile in hand. Without it the hint line is the only clue about what
-    # you picked up, which is unreadable once the workbench holds several tiles.
-    if selection.active:
-        for rect, kind in regions.workbench:
-            if kind == selection.kind:
-                pygame.draw.rect(surface, DROP_EDGE, rect.inflate(4, 4), width=3, border_radius=5)
-                break
-
-    bar = pygame.Rect(0, regions.end_turn.y - 4, window.size[0], BUTTON_H + 12)
-    surface.fill(BACKGROUND, bar)
-
-    for rect, label, enabled in (
-        (regions.end_turn, "END TURN", bool(mask[cfg.end_turn_action])),
-        (regions.undo, "UNDO", can_undo),
-        (regions.draw, "DRAW", True),
-    ):
-        pygame.draw.rect(surface, PANEL if enabled else BACKGROUND, rect, border_radius=6)
-        pygame.draw.rect(
-            surface, DROP_EDGE if enabled else DISABLED, rect, width=2, border_radius=6
-        )
-        glyph = window._font.render(label, True, TEXT if enabled else DISABLED)
-        surface.blit(glyph, glyph.get_rect(center=rect.center))
-
-    if snapshot.done:
-        hint = "game over -- close the window"
-    elif selection.active:
-        hint = f"holding {snapshot.label(selection.kind)} -- click a highlighted set, or an empty slot"
-    elif snapshot.workbench:
-        # There is no action that puts a workbench tile back, so say what does.
-        hint = "click a workbench tile to hold it, then a set -- or UNDO to take it back"
-    elif snapshot.needs_meld:
-        hint = f"click rack tiles to build sets worth {cfg.initial_meld}+ to open"
-    else:
-        hint = "click a rack tile to play it, or a set to lift a tile out of it"
-    surface.blit(
-        window._small.render(hint, True, TEXT_DIM),
-        (PAD + 3 * (BUTTON_W + BUTTON_GAP) + 6, regions.end_turn.y + 10),
-    )
-
-
-def rewind(cfg: RummiConfig, turn_start, actions: list[int]):
+def rewind(cfg: RummiConfig, turn_start: BatchState, actions: list[int]) -> BatchState:
     """Replay a turn from its opening state, one action short.
 
     The action space has no "unplace": a tile leaves the workbench by being
@@ -262,27 +129,169 @@ def rewind(cfg: RummiConfig, turn_start, actions: list[int]):
     return state
 
 
-def redraw(
-    window: PygameView,
-    snapshot: GameView,
-    mask: np.ndarray,
-    selection: Selection,
-    can_undo: bool = False,
-) -> Regions:
-    """``mask`` is one env's row, ``(n_actions,)``, not the batched ``(1, A)``."""
-    import pygame
+# --- the game, and what undo needs to know about it --------------------------
+@dataclass(slots=True)
+class Session:
+    """One game, plus the turn's opening state and the actions taken since.
 
-    if mask.ndim != 1:
-        raise ValueError(f"expected a single env's mask, got shape {mask.shape}")
-    window.highlight_slots = legal_slots(window.cfg, selection.kind, mask)
-    window.draw(snapshot)
-    regions = regions_for(window, snapshot)
-    draw_controls(window, regions, snapshot, mask, selection, can_undo)
-    if not window.headless:
-        # A headless view draws to a plain Surface with no display mode set, so
-        # flipping would fail. Useful for screenshots and for testing this path.
-        pygame.display.flip()
-    return regions
+    Those two are all UNDO needs, and keeping them here rather than in the event
+    loop is what lets a scripted hand exercise the same code path a player does.
+    """
+
+    cfg: RummiConfig
+    state: BatchState
+    seat: int = 0
+    """Which seat the player holds. Everything the window shows of a rack is this
+    seat's, whoever is acting."""
+    taken: list[int] = field(default_factory=list, init=False)
+    mask: np.ndarray = field(init=False)
+    _start: BatchState = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._start = self.state.clone()
+        self.mask = legal_actions(self.state)
+
+    @property
+    def row(self) -> np.ndarray:
+        return self.mask[0]
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self.taken)
+
+    @property
+    def done(self) -> bool:
+        return bool(self.state.done[0])
+
+    def snapshot(self) -> GameView:
+        return view(self.state, 0, self.mask, seat=self.seat)
+
+    def apply(self, action: int) -> None:
+        step(self.state, np.array([action]), self.mask)
+        self.taken.append(int(action))
+        if action in (self.cfg.end_turn_action, self.cfg.draw_action):
+            self._open_turn()
+        self.mask = legal_actions(self.state)
+
+    def rival_moves(self, actions: np.ndarray) -> None:
+        """Step the opponent. The baseline resets afterwards, so UNDO can never
+        rewind into someone else's turn."""
+        step(self.state, actions, self.mask)
+        self._open_turn()
+        self.mask = legal_actions(self.state)
+
+    def undo(self) -> None:
+        if not self.taken:
+            return
+        self.taken.pop()
+        self.state = rewind(self.cfg, self._start, self.taken)
+        self.mask = legal_actions(self.state)
+
+    def _open_turn(self) -> None:
+        self._start, self.taken = self.state.clone(), []
+
+
+# --- the gesture -------------------------------------------------------------
+@dataclass(slots=True)
+class Grip:
+    """What the player is holding, and the gesture in progress."""
+
+    held: int = -1
+    """Tile kind in hand -- really in the workbench -- or ``-1``."""
+    press: tuple[int, int] | None = None
+    """Where the button went down; ``None`` while it is up."""
+    took: bool = False
+    """Whether that press picked the tile up. A release near such a press is a
+    click that takes, and must not immediately put the tile back."""
+    at: tuple[int, int] | None = None
+    """Cursor position once the press has travelled far enough to be a drag."""
+
+    def let_go(self) -> None:
+        self.press, self.at, self.took = None, None, False
+
+
+def _far(a: tuple[int, int], b: tuple[int, int] | None) -> bool:
+    return b is None or abs(a[0] - b[0]) + abs(a[1] - b[1]) > DRAG_SLOP
+
+
+def take(session: Session, spot: Hit, held: int) -> tuple[int, bool]:
+    """Apply a press. Returns the tile now in hand and whether the press took it.
+
+    A press only ever *takes*: off the rack, out of a set, or back out of the
+    workbench. Dropping is left to the release, which is what makes a drag and a
+    pair of clicks end in the same place.
+    """
+    if spot.zone is Zone.UNDO:
+        session.undo()
+        return -1, False
+    if spot.zone is Zone.WORKBENCH:
+        return spot.kind, True
+    if spot.zone in (Zone.END_TURN, Zone.DRAW):
+        action = action_for(session.cfg, spot, held, session.row)
+        if action is None:
+            return held, False
+        session.apply(action)
+        return -1, False
+    if spot.zone is Zone.RACK:
+        action = action_for(session.cfg, spot, held, session.row)
+        if action is None:
+            return held, False
+        session.apply(action)
+        return spot.kind, True
+    if spot.zone is Zone.SLOT and held < 0:
+        action = pick_action(session.cfg, spot, session.row)
+        if action is None:
+            return held, False
+        _, _, pos = decode(session.cfg, action)
+        session.apply(action)
+        return spot.tiles[pos], True
+    return held, False
+
+
+def drop(session: Session, spot: Hit | None, held: int) -> int:
+    """Apply a release. Returns the tile still in hand, if any."""
+    if held < 0 or spot is None or spot.zone is not Zone.SLOT:
+        return held
+    action = action_for(session.cfg, spot, held, session.row)
+    if action is None:
+        return held
+    session.apply(action)
+    # Keep hold of whatever is still loose: a three-tile meld is then three drags
+    # rather than three pick-ups and three drops.
+    loose = session.state.workbench[0]
+    return int(np.argmax(loose > 0)) if loose.sum() else -1
+
+
+def hint_for(snapshot: GameView, held: int) -> str:
+    """One line, and only where the board cannot say it itself."""
+    if snapshot.done:
+        return "close the window to finish"
+    if held >= 0:
+        return f"drop {snapshot.label(held)} on a lit set, or on the empty slot"
+    if snapshot.workbench:
+        # There is no action that puts a workbench tile back, so say what does.
+        return "drag the tile in the workbench onto a set -- or UNDO to take it back"
+    if not snapshot.table_whole:
+        # The red rings say which sets; this says why the turn will not commit.
+        return "a set in red is not legal yet -- fix it before ending the turn"
+    if snapshot.needs_meld:
+        return f"build sets worth {snapshot.cfg.initial_meld} to open"
+    return "drag a tile from your rack, or off a set to move it"
+
+
+def overlay_for(
+    session: Session, grip: Grip, snapshot: GameView, seat: int = 0, rival: str = ""
+) -> Overlay:
+    return Overlay(
+        held=grip.held,
+        drop_slots=legal_slots(session.cfg, grip.held, session.row),
+        drag_pos=grip.at,
+        you=seat,
+        rival=rival,
+        can_end_turn=bool(session.row[session.cfg.end_turn_action]),
+        can_undo=session.can_undo,
+        hint=hint_for(snapshot, grip.held),
+    )
 
 
 # --- the loop ----------------------------------------------------------------
@@ -296,45 +305,26 @@ def play(
     """Open a window and play a game. Blocks until the game ends or you close it."""
     import pygame
 
-    state = reset(cfg, 1, seed=seed)
+    session = Session(cfg, reset(cfg, 1, seed=seed), seat=seat)
     rival = build(opponent, cfg)
     rival.reset(1)
-
-    # Every slot must be on screen: an undrawn slot gets no rectangle, so it
-    # would be unclickable, and a real table reaches 22 sets. Columns are chosen
-    # to keep the window a sane shape once all of them have to fit.
-    columns = max(2, -(-cfg.max_sets // 12))
     window = PygameView(
-        cfg,
-        headless=False,
-        reserve_bottom=BUTTON_H + 16,
-        columns=columns,
-        capacity=cfg.max_sets,
-        caption=f"rummi -- you vs {opponent}",
+        cfg, headless=False, interactive=True, caption=f"rummi -- you vs {opponent}"
     )
-    selection = Selection()
+    grip = Grip()
     clock = pygame.time.Clock()
-
-    # The turn's opening state and the actions taken since, which together are
-    # what UNDO replays.
-    turn_start = state.clone()
-    taken: list[int] = []
-
-    mask = legal_actions(state)
-    regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
 
     running = True
     while running:
-        human_turn = int(state.current[0]) == seat and not bool(state.done[0])
+        snapshot = session.snapshot()
+        regions = window.draw(snapshot, overlay_for(session, grip, snapshot, seat, opponent))
+        window.flip()
 
-        if not human_turn and not bool(state.done[0]):
-            # Let the opponent play one micro-action at a time so its turn is
-            # legible rather than an instant jump.
-            mask = legal_actions(state)
-            step(state, act_on_state(rival, state, mask), mask)
-            mask = legal_actions(state)
-            turn_start, taken = state.clone(), []
-            regions = redraw(window, view(state, 0, mask), mask[0], selection, False)
+        if not session.done and int(session.state.current[0]) != seat:
+            # One micro-action at a time, so the opponent's turn is legible rather
+            # than an instant jump from one board to another.
+            grip = Grip()
+            session.rival_moves(act_on_state(rival, session.state, session.mask))
             pygame.time.wait(opponent_delay_ms)
             continue
 
@@ -342,44 +332,22 @@ def play(
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                selection.clear()
-                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_BACKSPACE and taken:
-                taken.pop()
-                state = rewind(cfg, turn_start, taken)
-                selection.clear()
-                mask = legal_actions(state)
-                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not state.done[0]:
+                grip.held = -1  # let go; the tile stays where it is
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_BACKSPACE:
+                session.undo()
+                grip = Grip()
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not session.done:
+                grip.press, grip.at = event.pos, None
                 spot = hit(regions, event.pos)
-                if spot is None:
-                    continue
-                if spot.zone is Zone.WORKBENCH:
-                    selection.kind = spot.kind
-                elif spot.zone is Zone.UNDO:
-                    if not taken:
-                        continue
-                    taken.pop()
-                    state = rewind(cfg, turn_start, taken)
-                    selection.clear()
-                else:
-                    action = action_for(cfg, spot, selection, mask[0], view(state, 0, mask))
-                    if action is None:
-                        continue
-                    step(state, np.array([action]), mask)
-                    taken.append(int(action))
-                    if action in (cfg.end_turn_action, cfg.draw_action):
-                        turn_start, taken = state.clone(), []
-                    # Holding the tile you just placed makes "click rack, click
-                    # slot" a two-click move rather than three.
-                    if spot.zone is Zone.RACK:
-                        selection.kind = spot.kind
-                    else:
-                        selection.clear()
-                        if spot.zone is Zone.SLOT and state.workbench[0].sum():
-                            selection.kind = int(np.argmax(state.workbench[0] > 0))
-                mask = legal_actions(state)
-                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
+                if spot is not None:
+                    grip.held, grip.took = take(session, spot, grip.held)
+            elif event.type == pygame.MOUSEMOTION and grip.press is not None:
+                if grip.held >= 0 and _far(event.pos, grip.press):
+                    grip.at = event.pos
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                if not (grip.took and not _far(event.pos, grip.press)):
+                    grip.held = drop(session, hit(regions, event.pos), grip.held)
+                grip.let_go()
         clock.tick(30)
 
     window.close()

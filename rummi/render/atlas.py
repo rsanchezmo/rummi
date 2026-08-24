@@ -25,6 +25,19 @@ DROP_EDGE = (96, 172, 226)
 DISABLED = (70, 76, 86)
 BACKGROUND = (26, 28, 33)
 PANEL = (36, 39, 46)
+FELT = (24, 47, 39)
+FELT_EDGE = (36, 64, 54)
+"""The table surface. Sets are cards floating on it, so the room reserved for the
+worst-case table reads as bare felt rather than as a hole in the layout -- which
+is why it is a colour of its own and not a darker shade of the background."""
+CARD = (44, 48, 57)
+CARD_EDGE = (60, 65, 76)
+TRAY = (32, 35, 42)
+RACK = (54, 45, 38)
+RACK_LEDGE = (72, 60, 50)
+RACK_EDGE = (92, 78, 64)
+"""The player's rack, warm against the felt and the slate chrome so it reads as
+the object in front of you rather than as another panel of the interface."""
 INVALID_EDGE = (222, 92, 92)
 TEXT = (222, 226, 234)
 TEXT_DIM = (138, 146, 160)

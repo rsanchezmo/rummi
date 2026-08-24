@@ -59,7 +59,11 @@ class GameView:
     slots: tuple[SlotView, ...]
     workbench: tuple[int, ...]
     rack: tuple[int, ...]
-    """The acting seat's tiles, sorted."""
+    """The tiles of the seat this view belongs to, sorted."""
+    perspective: int
+    """Whose rack is shown. The acting seat by default, which is what a rollout
+    wants to watch; the play window pins it to the player instead, or the opponent
+    would be dealing their hand face up every time they took a turn."""
     placed_this_turn: tuple[int, ...]
     current_player: int
     rack_sizes: tuple[int, ...]
@@ -90,7 +94,7 @@ class GameView:
 
     @property
     def needs_meld(self) -> bool:
-        return not self.melded[self.current_player]
+        return not self.melded[self.perspective]
 
     def label(self, kind: int) -> str:
         return kind_name(self.cfg, kind)
@@ -154,9 +158,18 @@ def _meld_progress(state: BatchState, b: int, slot_value: np.ndarray) -> int:
     return int(state.placed_rack[b].astype(np.int32) @ tables(cfg).value.astype(np.int32))
 
 
-def view(state: BatchState, env_index: int = 0, mask: np.ndarray | None = None) -> GameView:
+def view(
+    state: BatchState,
+    env_index: int = 0,
+    mask: np.ndarray | None = None,
+    seat: int | None = None,
+) -> GameView:
     """Snapshot one env. Only this env's slice is touched, which is what keeps
-    rendering cheap under the torch/JAX backends."""
+    rendering cheap under the torch/JAX backends.
+
+    ``seat`` pins whose rack is shown; without it the view follows whoever is
+    acting.
+    """
     cfg = state.cfg
     b = env_index
     ev = evaluate_slots(cfg, state.table_sets[b : b + 1])
@@ -186,6 +199,7 @@ def view(state: BatchState, env_index: int = 0, mask: np.ndarray | None = None) 
         )
 
     player = int(state.current[b])
+    perspective = player if seat is None else seat
     last = int(state.last_action[b])
     touched = None
     if last >= 0:
@@ -199,7 +213,8 @@ def view(state: BatchState, env_index: int = 0, mask: np.ndarray | None = None) 
         env_index=b,
         slots=tuple(slots),
         workbench=tuple(int(k) for k in counts_to_kinds(state.workbench[b])),
-        rack=tuple(int(k) for k in counts_to_kinds(state.racks[b, player])),
+        rack=tuple(int(k) for k in counts_to_kinds(state.racks[b, perspective])),
+        perspective=perspective,
         placed_this_turn=tuple(int(k) for k in counts_to_kinds(state.placed_rack[b])),
         current_player=player,
         rack_sizes=tuple(int(x) for x in state.racks[b].sum(-1)),
@@ -214,7 +229,9 @@ def view(state: BatchState, env_index: int = 0, mask: np.ndarray | None = None) 
         ),
         touched_slot=touched,
         n_legal=int(mask[b].sum()) if mask is not None else -1,
-        meld_progress=_meld_progress(state, b, ev.value[0]),
+        # Only ever the acting seat's: it is this turn's placements, and this turn
+        # is not the onlooker's.
+        meld_progress=_meld_progress(state, b, ev.value[0]) if perspective == player else 0,
         done=bool(state.done[b]),
         truncated=bool(state.truncated[b]),
         winner=int(state.winner[b]),

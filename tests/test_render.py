@@ -62,6 +62,22 @@ def test_view_tracks_meld_progress_and_seat():
     assert v.slots[0].is_new
 
 
+def test_a_view_can_be_pinned_to_one_seat():
+    """The play window shows your rack whoever is acting. Following the acting seat
+    instead deals the opponent's hand face up every time they take a turn."""
+    s = state_with(C, rack=RUN_36)
+    play(s, [C.draw_action])  # hand the turn over
+    assert int(s.current[0]) == 1
+
+    theirs, mine = view(s, 0), view(s, 0, seat=0)
+    assert theirs.perspective == 1 and len(theirs.rack) == s.racks[0, 1].sum()
+    assert mine.perspective == 0 and mine.current_player == 1
+    assert set(RUN_36) <= set(mine.rack), "your tiles, not theirs"
+    assert mine.rack != theirs.rack
+    assert mine.needs_meld, "you have not opened; whether they have is their business"
+    assert mine.meld_progress == 0, "their turn's progress is not yours to read"
+
+
 def test_frame_is_plain_text_without_color():
     s = state_with(C, rack=RUN_36, table=[[kind_of(C, 0, n) for n in (1, 2, 3)]], melded=True)
     text = frame(view(s, 0, legal_actions(s)), Palette(False))
@@ -107,19 +123,21 @@ def test_live_terminal_only_rewrites_changed_lines(monkeypatch):
     assert len(unchanged) < first
 
 
-def test_pygame_dirty_set_is_exactly_what_changed():
+def test_the_same_state_draws_the_same_pixels():
+    """Frames are painted whole rather than patched, so a repeat draw has to be
+    identical -- that is what makes the generated figures byte-stable."""
+    import pygame
+
     from rummi.render.pygame_view import PygameView
 
     s = state_with(C, rack=RUN_36)
     win = PygameView(C, headless=True)
     try:
-        assert len(win.draw(view(s, 0))) > 0, "first draw must paint everything"
-        assert win.draw(view(s, 0)) == [], "redrawing the same state must be free"
+        first = win.rgb_array(view(s, 0)).copy()
+        np.testing.assert_array_equal(win.rgb_array(view(s, 0)), first)
 
         play(s, [encode_place(C, RUN_36[0])])
-        dirty = win.draw(view(s, 0))
-        # PLACE changes the status line, the rack and the workbench -- no slots.
-        assert 1 <= len(dirty) <= 4
+        assert not np.array_equal(win.rgb_array(view(s, 0)), first), "PLACE must show"
     finally:
         win.close()
 
@@ -225,17 +243,23 @@ def test_touched_slot_tracks_the_last_action():
     assert view(s, 0).touched_slot == 0
 
 
-def test_a_table_larger_than_the_window_reports_the_overflow():
-    """Truncating silently would make a partial table read as a complete one."""
+def test_every_set_on_the_table_gets_a_card():
+    """A set with no rectangle is a set that cannot be clicked."""
     from rummi.render.pygame_view import PygameView
 
-    rows = [[kind_of(C, 0, n) for n in (1, 2, 3)]] * 6
-    s = state_with(C, rack=[kind_of(C, 0, 5)], table=rows, melded=True)
-    win = PygameView(C, headless=True, capacity=4)
+    rows = [[kind_of(C, c, n) for c in (0, 1, 2)] for n in (1, 2, 3, 4, 5, 6)]
+    s = state_with(C, rack=[kind_of(C, 0, 8)], table=rows, melded=True)
+    win = PygameView(C, headless=True)
     try:
-        visible, hidden = win.visible_slots(view(s, 0))
-        assert len(visible) == 4
-        assert hidden == 3, "6 sets plus a landing slot into a capacity of 4"
+        snapshot = view(s, 0)
+        regions = win.draw(snapshot)
+        assert {card.slot for card in regions.cards if not card.is_landing} == {
+            slot.index for slot in snapshot.occupied_slots
+        }
+        assert sum(card.is_landing for card in regions.cards) == 1, "one place to start a set"
+        for card in regions.cards:
+            assert win.metrics.table.contains(card.rect)
+            assert len(card.spots) == len(card.tiles)
     finally:
         win.close()
 

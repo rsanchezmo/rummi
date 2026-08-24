@@ -90,7 +90,11 @@ def frame(view: GameView, palette: Palette | None = None, width: int = 78) -> st
     """Render one snapshot as a block of text."""
     p = palette or Palette(False)
     cfg = view.cfg
-    rule = p.dim("-" * width)
+    occupied = view.occupied_slots
+    # Sets are printed as wide as the widest one actually on this table, so the
+    # tag column lines up without reserving room for a 13-tile run that is not there.
+    span = max((len(s.shown) for s in occupied), default=0)
+    rule = p.dim("-" * max(width, 8 + TILE_WIDTH * span + 24))
     lines: list[str] = []
 
     status = (
@@ -103,15 +107,14 @@ def frame(view: GameView, palette: Palette | None = None, width: int = 78) -> st
     lines.append(status)
     lines.append(rule)
 
-    occupied = view.occupied_slots
     n_tiles = sum(len(s.tiles) for s in occupied)
     lines.append(p.dim(f" table  {len(occupied)} sets, {n_tiles} tiles"))
     if not occupied:
         lines.append(p.dim("   (empty)"))
+    # Padded by tile count, not string length: ljust on a coloured body would
+    # measure escape bytes, and the tag column would line up only without colour.
     for slot in occupied:
-        body = _tiles(view, slot.shown, p).ljust(
-            TILE_WIDTH * min(cfg.max_set_len, 7) + (0 if not p.color else 0)
-        )
+        body = _tiles(view, slot.shown, p) + " " * (TILE_WIDTH * (span - len(slot.shown)))
         tag = _SHAPE_TAG[slot.shape]
         note = f"{tag:<8}"
         if slot.is_valid:

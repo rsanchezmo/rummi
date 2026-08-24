@@ -11,7 +11,7 @@ rediscover or easy to get wrong — everything else is in `README.md` and
 
 ```bash
 source .venv/bin/activate
-pytest                                                   # 183 tests, ~50s
+pytest                                                   # 224 tests, ~50s
 python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
@@ -114,6 +114,49 @@ exact, the mirroring is broken, not noisy.
 
 Editing a suite invalidates every score published against `PROTOCOL_VERSION`.
 Bump the version if you must change one.
+
+## The render stack
+
+`rummi/render/board.py` owns **all** the geometry, and both pygame paths -- the
+read-only renderer and interactive play -- lay out from it. The rectangle a set is
+drawn in is the rectangle a click resolves against; there is no second layout.
+It touches no surface and no display, which is why a whole hand can be played in
+`tests/test_play.py` with no window.
+
+One flag, `interactive`, separates the two uses. Off, this is what an env renders:
+telemetry line, action log, slot numbers and shape tags — you are reading a rollout.
+On, it is the play window: pills for whose turn and what is left, a bar for the
+opening meld, a score under each set and nothing else, buttons in the margin beside
+the rack. Do not "unify" them; the difference is the point.
+
+Things that look like slack but are not:
+
+- **The table area is sized from the config, not from what games do.** A set with
+  no rectangle cannot be clicked, and that was a real bug. `rows_needed` bounds it
+  by sweeping uniform tables — uniform widths are the worst case for greedy
+  wrapping. Shrinking it to a typical game brings the bug back.
+- **Cards are never narrower than `min_set` tiles**, so a two-tile set mid-
+  rearrangement still has room for its caption.
+- **The rack has two tiers whether or not the hand needs both**, as a real one
+  does, and that is also what keeps a forty-tile hand standing at full width
+  instead of fanned into slivers.
+- **Tray tiles fan (overlap) rather than truncate** when they do not fit, and the
+  workbench widens past its base rect when even that is not enough. Truncating
+  hides tiles, and a hidden tile cannot be picked up.
+
+Frames are painted whole. Dirty-rect tracking used to force a fixed grid of
+rectangles, which is what made a row per set sized for a 13-tile run; the
+throttle in `driver.py` is the cost control that actually matters.
+
+The play UI's invariant is that **the mask decides what is expressible**: a
+gesture either maps to an action `legal_actions` allows or to nothing, and a test
+fires random clicks across a whole game asserting exactly that. A press takes a
+tile and a release drops it, which is what makes clicking work for free -- but a
+release near a press that *took* is a click, not a drop, or picking a tile up
+would put it straight back.
+
+`board.storage_order` translates a click on a displayed tile back to the position
+`PICK` indexes. Do not collapse `SlotView.shown` into `SlotView.tiles` to save it.
 
 ## Figures
 

@@ -273,11 +273,6 @@ def main() -> None:
     p.add_argument("--policy", default="optimal", help="who plays; optimal ends by winning")
     p.add_argument("--turns", type=int, default=150, help="png: which turn to capture")
     p.add_argument("--max-turns", type=int, default=90, help="gif: cap on frames")
-    # The window reserves a fixed grid so dirty-rect tracking has stable rects.
-    # For a figure, size it to the table actually on screen.
-    # Endgame tables reach ~22 sets; anything smaller and the window reports
-    # "(+N not shown)", which is correct behaviour but reads as breakage.
-    p.add_argument("--capacity", type=int, default=24)
     p.add_argument("--tile", type=int, nargs=2, default=(26, 36))
     p.add_argument("--font", type=int, default=15)
     # Full resolution by default. Downscaling is available for trimming file
@@ -292,9 +287,7 @@ def main() -> None:
 
     pygame.init()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    window = PygameView(
-        STANDARD, headless=True, tile_w=args.tile[0], tile_h=args.tile[1], capacity=args.capacity
-    )
+    window = PygameView(STANDARD, headless=True, tile_w=args.tile[0], tile_h=args.tile[1])
 
     if args.format == "png":
         page = panel(window, interesting_state(STANDARD, args.seed, args.turns), args.font)
