@@ -19,7 +19,7 @@ from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RewardMode, RummiCon
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.render.driver import RenderMode, Renderer
+from rummi.render.driver import RenderMode, RenderOn, Renderer
 
 CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
@@ -127,6 +127,10 @@ def main() -> None:
     p.add_argument("--render-mode", choices=[m.value for m in RenderMode], default="ansi")
     p.add_argument("--fps", type=float, default=12.0)
     p.add_argument("--every", type=int, default=1)
+    p.add_argument(
+        "--render-on", choices=[o.value for o in RenderOn], default=RenderOn.TURN.value,
+        help="draw once per committed turn (default) or on every micro-action",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--pause", action="store_true", help="wait for Enter between frames")
     args = p.parse_args()
@@ -134,14 +138,16 @@ def main() -> None:
     if args.replay:
         cfg, _, _ = load(args.replay)
         final = replay(
-            args.replay, Renderer(cfg, args.render_mode, fps=args.fps, every=args.every), args.pause
+            args.replay,
+            Renderer(cfg, args.render_mode, fps=args.fps, every=args.every, on=args.render_on),
+            args.pause,
         )
         outcome = "truncated" if final.truncated[0] else f"seat {int(final.winner[0])} wins"
         print(f"\nreplayed {int(final.turn_count[0])} turns: {outcome}")
         return
 
     cfg = CONFIGS[args.config]
-    renderer = Renderer(cfg, args.render_mode, fps=args.fps, every=args.every)
+    renderer = Renderer(cfg, args.render_mode, fps=args.fps, every=args.every, on=args.render_on)
     recorder = Recorder(args.out, cfg, args.seed) if args.out else None
     try:
         play(cfg, args.policy, args.seed, renderer, recorder=recorder)

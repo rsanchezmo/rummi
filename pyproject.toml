@@ -16,6 +16,8 @@ dependencies = ["numpy>=1.24"]
 env = ["gymnasium>=0.29"]
 render = ["pygame-ce>=2.4"]
 solver = ["ortools>=9.9"]
+docs = ["pillow>=10"]        # regenerating the README animation
+video = ["moviepy>=1.0"]     # gymnasium RecordVideo writes MP4 through moviepy
 torch = ["torch>=2.2"]
 jax = ["jax>=0.4"]
 dev = ["pytest>=8", "pytest-xdist"]

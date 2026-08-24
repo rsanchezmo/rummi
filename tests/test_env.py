@@ -134,9 +134,13 @@ def test_illegal_actions_are_rejected_when_validation_is_on(env):
 
 
 def test_render_modes_produce_what_they_promise():
+    """rgb_array returns a *tuple* of frames, per the Gymnasium vector
+    convention -- a bare array breaks wrappers.vector.RecordVideo."""
     rgb = RummiVectorEnv(num_envs=2, cfg=C, seed=0, render_mode=RenderMode.RGB_ARRAY)
     rgb.reset()
-    frame = rgb.render()
+    frames = rgb.render()
+    assert isinstance(frames, tuple) and len(frames) == 1
+    frame = frames[0]
     assert frame.ndim == 3 and frame.shape[2] == 3 and frame.dtype == np.uint8
     rgb.close()
 
@@ -162,3 +166,30 @@ def test_a_full_random_rollout_stays_inside_the_spaces():
     assert episodes >= 8
     assert env.observation_space.contains(obs)
     env.close()
+
+
+def test_gymnasium_record_video_can_drive_the_env():
+    """Locks in the tuple contract: Gymnasium's vector recorder asserts
+    ``len(frames) == num_envs``, so a bare array here would break it."""
+    pytest.importorskip("moviepy")
+    import tempfile
+
+    from gymnasium.wrappers.vector import RecordVideo
+
+    with tempfile.TemporaryDirectory() as parent:
+        # A folder that does not exist yet: Gymnasium warns when asked to write
+        # into an existing one, and warnings are errors here.
+        folder = __import__("os").path.join(parent, "videos")
+        env = RecordVideo(
+            RummiVectorEnv(num_envs=1, cfg=C, seed=0, render_mode="rgb_array"),
+            video_folder=folder,
+            name_prefix="rummi",
+            video_length=20,
+        )
+        obs, info = env.reset()
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            obs, r, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+        env.close()
+        written = [f for f in __import__("os").listdir(folder) if f.endswith(".mp4")]
+        assert written, "no video was written"

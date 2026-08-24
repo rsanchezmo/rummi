@@ -135,8 +135,18 @@ class RummiVectorEnv(VectorEnv):
         return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
 
     def render(self):
-        """Always draws, ignoring the throttle: an explicit call wants a frame."""
-        return self._renderer.frame(self.state, self._mask)
+        """Always draws, ignoring the throttle: an explicit call wants a frame.
+
+        Returns a *tuple* of frames under ``rgb_array``, which is the Gymnasium
+        vector convention and what ``gymnasium.wrappers.vector.RecordVideo``
+        expects to concatenate. Only ``render_env_index`` is drawn -- rendering
+        all ``num_envs`` games would cost N times as much to show N games of the
+        same thing -- so the tuple holds one frame regardless of batch size.
+        """
+        frame = self._renderer.frame(self.state, self._mask)
+        if self.render_mode == RenderMode.RGB_ARRAY.value and frame is not None:
+            return (frame,)
+        return frame
 
     def close(self, **kwargs) -> None:
         self._renderer.close()

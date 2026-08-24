@@ -32,13 +32,13 @@ One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
 single shared policy play self-play without learning two conventions.
 
-![The same game state rendered in the terminal and in a pygame window](docs/render.png)
+![A full game rendered simultaneously in the terminal and in a pygame window](docs/render.gif)
 
-Both panels above are the *same step*, rendered from a single `GameView` — the
-terminal view and the window are two renderers over one shared view model, not
-two things that happen to agree. Mid-turn here: a set has been taken apart, three
-tiles sit in the workbench, and slot 0 is flagged in both views because a
-two-tile set is not legal yet, so `END_TURN` stays masked.
+One game, both renderers, in step. Every frame is a *committed turn* — the same
+thing `render_on="turn"` gives you live — and both panels come from a single
+`GameView`, so the turn counter, the flagged slots and the action log necessarily
+agree. Watch the table fill from three sets to twenty-two, and the winner's rack
+drain to nothing.
 
 ## Why Rummikub
 
@@ -238,8 +238,33 @@ Recordings store the config, the seed and the action sequence — nothing else. 
 simulator holds no RNG in its step function, so replaying those actions
 reconstructs every intermediate state exactly.
 
-The image at the top of this page is generated, not pasted:
+By default the live views draw once per **committed turn**, since a turn is the
+meaningful unit of play and mid-turn frames are mostly one tile moving. Pass
+`--render-on step` to see every micro-action instead — the workbench filling, the
+table temporarily in pieces — which is what you want when reasoning about the
+action space.
+
+To record with Gymnasium's own tooling instead, `render_mode="rgb_array"` returns
+a tuple of frames per the vector convention, so `RecordVideo` works directly:
+
+```python
+from gymnasium.wrappers.vector import RecordVideo
+from rummi.env.vector_env import RummiVectorEnv
+
+env = RecordVideo(                                  # writes MP4; needs moviepy
+    RummiVectorEnv(num_envs=1, cfg=STANDARD, render_mode="rgb_array"),
+    video_folder="videos", name_prefix="rummi",
+)
+```
+
+Use `num_envs=1`: Gymnasium tiles one frame per sub-env, and only
+`render_env_index` is ever drawn — rendering all N games to show N copies of the
+same thing would cost N times as much.
+
+The animation at the top of this page is generated, not pasted, and regenerating
+it is byte-identical:
 
 ```bash
-python tools/make_screenshot.py --out docs/render.png
+python tools/render_docs.py --format gif --out docs/render.gif
+python tools/render_docs.py --format png --out docs/render.png   # a single frame
 ```

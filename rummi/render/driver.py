@@ -17,6 +17,17 @@ from rummi.env.numpy.state import BatchState
 from rummi.render.view_model import GameView, view
 
 
+class RenderOn(str, Enum):
+    STEP = "step"
+    """Draw on every micro-action. Shows the workbench filling and the table
+    temporarily in pieces -- the states that only exist because a turn spans
+    several steps, and what you want when debugging the action space."""
+    TURN = "turn"
+    """Draw only when a turn commits. A turn is the meaningful unit of play, so
+    this is the better default for watching: every frame is a real board change
+    rather than one tile moving."""
+
+
 class RenderMode(str, Enum):
     NONE = "none"
     ANSI = "ansi"
@@ -36,6 +47,7 @@ class Renderer:
         fps: float | None = None,
         every: int = 1,
         tile_size: tuple[int, int] = (30, 40),
+        on: RenderOn | str = RenderOn.STEP,
     ) -> None:
         self.cfg = cfg
         self.mode = RenderMode(mode)
@@ -43,8 +55,10 @@ class Renderer:
         self.fps = fps
         self.every = max(1, every)
         self.tile_size = tile_size
+        self.on = RenderOn(on)
         self._calls = 0
         self._last_drawn = 0.0
+        self._last_turn = -1
         self._terminal = None
         self._window = None
 
@@ -66,8 +80,18 @@ class Renderer:
             )
         return self._window
 
-    def _due(self) -> bool:
-        """Throttle drawing so a fast rollout does not try to draw every step."""
+    def _due(self, state: BatchState) -> bool:
+        """Throttle drawing so a fast rollout does not try to draw every step.
+
+        ``on`` decides what counts as an opportunity to draw; ``every`` and
+        ``fps`` then throttle those opportunities, so the two compose rather than
+        override each other.
+        """
+        if self.on is RenderOn.TURN:
+            turn = int(state.turn_count[self.env_index])
+            if turn == self._last_turn:
+                return False
+            self._last_turn = turn
         self._calls += 1
         if self._calls % self.every:
             return False
@@ -98,7 +122,7 @@ class Renderer:
     def render(self, state: BatchState, mask: np.ndarray | None = None):
         """Draw if the throttle allows. This is what the step loop calls, so it
         must stay bounded however fast the simulator runs."""
-        if self.mode is RenderMode.NONE or not self._due():
+        if self.mode is RenderMode.NONE or not self._due(state):
             return None
         return self.frame(state, mask)
 
