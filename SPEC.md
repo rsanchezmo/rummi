@@ -166,18 +166,36 @@ Truncation pays nothing — it is an artificial cutoff, not a result.
 
 ## 8. Conformance status
 
-| backend | state | figure |
-|---|---|---|
-| NumPy (`rummi/core/`) | reference | ~66k env-steps/s, saturates at B≈256 |
-| torch CPU (`rummi/backends/torch_backend/`) | conformant | ~65k, parity |
-| torch CPU + `compile` | conformant | ~250k, **3.8x** |
-| torch MPS | conformant | ~239k, **3.6x** |
-| torch MPS + `compile` | conformant | ~565k, **8.6x** |
-| JAX | not written | — |
+| backend | state | env-steps/s | vs NumPy |
+|---|---|---:|---:|
+| NumPy (`rummi/core/`) | reference | 64k | 1.0x |
+| torch CPU | conformant | 65k | 1.0x |
+| torch CPU + `compile` | conformant | 257k | 4.0x |
+| torch MPS | conformant | 223k | 3.5x |
+| torch MPS + `compile` | conformant | **537k** | **8.5x** |
+| JAX CPU (`jit` per call) | conformant | 194k | 3.1x |
+| JAX CPU (fused) | conformant | 197k | 3.1x |
+| JAX CPU (`lax.scan`) | conformant | 203k | 3.2x |
 
-Standard config, `A=2400`, best of repeated runs, action choice held to the
-cheapest possible so the figure is the simulator. Reproduce with
-`python -m rummi.bench.bench_backends --compile --no-validate`.
+Standard config, `A=2400`, `B=16384`, action choice held to the cheapest possible
+so the figure measures the simulator. Reproduce with
+`python -m rummi.bench.bench_backends --compile`.
+
+Read this carefully rather than off the top row:
+
+* **Both accelerated backends land at 3–4x on CPU.** Torch and JAX agree closely
+  once XLA and Inductor are both allowed to fuse, which is a good sign that 3–4x
+  is the real headroom over NumPy for this workload rather than an artefact.
+* **The 8.5x is a GPU result, not a framework result.** It is torch on Metal.
+  JAX has no production Metal backend, so on this machine it cannot be compared
+  on equal hardware; on a CUDA box the JAX figure is the one to re-measure.
+* **Fusion is what matters, not the framework.** Uncompiled torch CPU is exactly
+  at NumPy parity. JAX is ahead of torch at small batches (2.6x vs 1.2x at
+  `B=256`) because XLA fuses without needing a warm Inductor cache.
+* **`lax.scan` buys almost nothing here** (3.2x vs 3.1x fused): the per-step work
+  already dominates, so removing the Python loop is not the bottleneck.
+* NumPy is effectively single-threaded for these ops while torch has 12 threads
+  and XLA uses all cores, so this is a throughput comparison, not a per-core one.
 
 ## 9. Port notes
 
@@ -200,12 +218,19 @@ cheapest possible so the figure is the simulator. Reproduce with
   Packing base-`(K+1)` digits into 63-bit words reduces that from `L` stable
   sorts to two for the standard config. `torch.sort` needs
   `sort(dim=-1, stable=True)` -- `stable` is keyword-only.
-- Deck shuffling must use NumPy's `SeedSequence`/`Generator` even in a torch
-  backend: the permutation is part of the contract, and a torch RNG would produce
+- Deck shuffling must use NumPy's `SeedSequence`/`Generator` in every backend: the permutation is part of the contract, and a torch RNG would produce
   different decks and fail conformance.
 - Passing the mask to `step` enables action validation, which reads a bool off
   the device once per step. Measured cost is small (8.3x -> 8.6x with it off), so
   leave it on unless profiling says otherwise.
+- JAX specifics: `cfg` is a static argument (it is a frozen dataclass, so it
+  hashes), the state is a `NamedTuple` pytree with `cfg` deliberately excluded,
+  and action validation lives outside the jitted step because checking the mask
+  reads a device boolean. Constant lookup tables must be held as **NumPy**
+  arrays: an `lru_cache` first populated inside a trace would cache tracers and
+  leak them into every later call.
+- `jnp.lexsort` exists, so the JAX port expresses canonical slot order directly;
+  the torch port needed the packed-integer-key workaround instead.
 - `max_sets` is the dominant throughput knob — it drives `A` and the `(B, S, K)`
   ASSIGN predicate. Measured: `S=16` → 133k, `S=24` → 91k, `S=35` → 63k
   env-steps/s in NumPy. The default is the provable bound `n_tiles // min_set`;

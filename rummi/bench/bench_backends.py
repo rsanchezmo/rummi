@@ -77,6 +77,70 @@ def bench_torch(
     return batch_size * iters / (time.perf_counter() - t0)
 
 
+def bench_jax(
+    cfg: RummiConfig, batch_size: int, iters: int, mode: str = "fused", warmup: int = 3
+) -> float:
+    """``mode`` selects how much is handed to the compiler.
+
+    ``step`` jits the mask and the transition separately, so the Python loop sits
+    between them. ``fused`` jits mask-choose-step as one function. ``scan`` puts
+    the whole rollout inside ``lax.scan``, which is the idiomatic JAX shape and
+    removes the Python loop entirely.
+    """
+    from functools import partial
+
+    import jax
+    import jax.numpy as jnp
+
+    from rummi.backends.jax_backend import sim
+
+    state = sim.reset(cfg, batch_size, seed=0)
+
+    def pick(mask):
+        return jnp.argmax(mask.astype(jnp.int8), axis=-1)
+
+    @partial(jax.jit, static_argnums=0)
+    def once(cfg_, s):
+        m = sim.legal_actions(cfg_, s)
+        s, _ = sim.step(cfg_, s, pick(m))
+        return s
+
+    @partial(jax.jit, static_argnums=(0, 1))
+    def rollout(cfg_, n, s):
+        def body(carry, _):
+            m = sim.legal_actions(cfg_, carry)
+            nxt, _ = sim.step(cfg_, carry, pick(m))
+            return nxt, None
+
+        out, _ = jax.lax.scan(body, s, None, length=n)
+        return out
+
+    if mode == "scan":
+        state = jax.block_until_ready(rollout(cfg, iters, state))
+        t0 = time.perf_counter()
+        state = jax.block_until_ready(rollout(cfg, iters, state))
+        return batch_size * iters / (time.perf_counter() - t0)
+
+    body = once if mode == "fused" else None
+    for _ in range(warmup):
+        if body is None:
+            m = sim.legal_actions(cfg, state)
+            state, _ = sim.step(cfg, state, pick(m))
+        else:
+            state = body(cfg, state)
+    jax.block_until_ready(state)
+
+    t0 = time.perf_counter()
+    for _ in range(iters):
+        if body is None:
+            m = sim.legal_actions(cfg, state)
+            state, _ = sim.step(cfg, state, pick(m))
+        else:
+            state = body(cfg, state)
+    jax.block_until_ready(state)
+    return batch_size * iters / (time.perf_counter() - t0)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
@@ -102,6 +166,14 @@ def main() -> None:
         backends.append(("torch-cpu+compile", lambda b, n: bench_torch(cfg, b, n, "cpu", True)))
         if torch.backends.mps.is_available():
             backends.append(("torch-mps+compile", lambda b, n: bench_torch(cfg, b, n, "mps", True)))
+    try:
+        import jax  # noqa: F401
+
+        backends.append(("jax-step", lambda b, n: bench_jax(cfg, b, n, "step")))
+        backends.append(("jax-fused", lambda b, n: bench_jax(cfg, b, n, "fused")))
+        backends.append(("jax-scan", lambda b, n: bench_jax(cfg, b, n, "scan")))
+    except ModuleNotFoundError:
+        pass
     if args.no_validate:
         backends.append(
             ("torch-cpu+comp-noval", lambda b, n: bench_torch(cfg, b, n, "cpu", True, validate=False))
