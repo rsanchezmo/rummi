@@ -194,7 +194,7 @@ def evaluate(
     the reference registry. Passing your own is how you enter the benchmark
     without adding code to this package.
     """
-    from rummi.agents.reference import build
+    from rummi.agents import build
 
     cfg = suite.cfg
     if cfg.n_players != 2:

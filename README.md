@@ -1,5 +1,7 @@
 # rummi
 
+[![ci](https://github.com/rsanchezmo/rummi/actions/workflows/ci.yml/badge.svg)](https://github.com/rsanchezmo/rummi/actions/workflows/ci.yml)
+
 A Rummikub **environment** for reinforcement learning, with opponents to play
 against. Batch-native from the ground up, wrapped as a Gymnasium vector env, and
 implemented three times over — NumPy, torch and JAX — each verified against the
@@ -65,6 +67,7 @@ games; `score` is official Rummikub scoring from the agent's side.
 | `random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
 | `weighted-random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
 | `greedy` | 50.0% | +0.0 | 124.7 | 47.5 | 98.3% |
+| `rearrange` | 85.0% | +31.9 | 129.3 | 24.6 | 80.0% |
 | `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0% |
 
 **Read the random row as a warning, not a floor.** On the standard config random
@@ -74,12 +77,18 @@ its choices have no effect on the game whatsoever. Beating random says nothing.
 **Greedy at 50% is the real floor**; it is also the suite's own opponent, which
 is why it scores exactly even.
 
-The gap between greedy and optimal is precisely the value of *rearranging the
-table*, because greedy never does it.
+The ladder is one idea: **how much of the table are you willing to take apart?**
+`greedy` never rearranges, so once it can neither append to a set nor lay one
+from its rack it just draws — which is why it stalls out in 98% of games.
+`rearrange` steals exactly **one** tile from a set that stays legal without it,
+and that alone is worth 35 points of win rate. `optimal` repartitions the whole
+table at once. The distance between those last two is the value of rearranging
+more than one tile at a time.
 
 ## Writing an agent
 
-Agents plug into the same interface the bundled ones use. An agent sees an
+Agents plug into the same interface the bundled ones use — there is one way to
+write an agent, and the bundled ones are not special. An agent sees an
 observation and a legal-action mask, and nothing else. That is
 the integrity property the whole benchmark rests on: the observation exposes only
 what a player is entitled to know — your rack, the table, and `unseen` (the pool
@@ -111,7 +120,7 @@ print(evaluate("mine", SUITE_BY_NAME["tiny"], build_agent=MyAgent).report())
 
 A turn spans several `act` calls, so an agent that plans a whole turn should
 cache its plan and consume it; subclass `rummi.agents.base.PlanningAgent` to get
-that bookkeeping for free. Proposing a masked-out action **disqualifies** the run
+that bookkeeping for free. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest. Proposing a masked-out action **disqualifies** the run
 rather than costing reward: the mask exactly describes what the rules permit, so
 an illegal action is a bug, not a strategy.
 

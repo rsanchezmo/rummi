@@ -6,7 +6,7 @@ import argparse
 import json
 import time
 
-from rummi.agents.reference import REGISTRY
+from rummi.agents import REGISTRY
 from rummi.evaluate.protocol import (
     PROTOCOL_VERSION,
     SUITE_BY_NAME,

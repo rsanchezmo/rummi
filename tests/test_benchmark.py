@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from rummi.agents.base import Agent, PlanningAgent, has_melded, table, turn_starting
-from rummi.agents.reference import REGISTRY, GreedyAgent, build
+from rummi.agents import REGISTRY, GreedyAgent, build
 from rummi.evaluate import protocol
 from rummi.evaluate.protocol import (
     PROTOCOL_VERSION,
@@ -47,12 +47,48 @@ def test_an_agent_against_itself_scores_exactly_even(name: str):
 
 
 def test_baselines_rank_in_the_expected_order():
+    """The ladder is the benchmark's whole value proposition: a submission needs
+    rungs to place itself between."""
     scores = {
         name: evaluate(name, TINY, games=40).win_rate
-        for name in ("random", "greedy", "optimal")
+        for name in ("random", "greedy", "rearrange", "optimal")
     }
-    assert scores["random"] < scores["greedy"] <= scores["optimal"], scores
+    assert scores["random"] < scores["greedy"], scores
+    assert scores["greedy"] <= scores["rearrange"] <= scores["optimal"], scores
     assert scores["greedy"] == pytest.approx(0.5), "greedy is the suite's own opponent"
+
+
+def test_rearrange_never_plays_worse_than_greedy():
+    """It falls back to greedy's plan whenever greedy has one, so it cannot be
+    worse -- and when greedy is stuck it steals a tile instead of drawing."""
+    from rummi.agents.greedy_agent import plan_turn
+    from rummi.agents.rearrange_agent import RearrangeAgent
+
+    cfg = TINY_GROUPS
+    state = reset(cfg, 6, seed=29)
+    agent = RearrangeAgent(cfg)
+    agent.reset(6)
+    stole = 0
+
+    for _ in range(400):
+        mask = legal_actions(state)
+        obs = encode(state)
+        actions = agent.act(obs, mask)
+        for env in range(state.batch_size):
+            if state.done[env] or state.micro_count[env] != 0:
+                continue
+            seat = int(state.current[env])
+            greedy = plan_turn(
+                cfg, state.racks[env, seat], state.table_sets[env], bool(state.melded[env, seat])
+            )
+            if greedy:
+                assert int(actions[env]) == greedy[0], "should defer to greedy when it has a play"
+            elif int(actions[env]) != cfg.draw_action:
+                stole += 1
+        step(state, actions, mask)
+        if state.done.all():
+            break
+    assert stole > 0, "never found a steal, so the agent adds nothing over greedy"
 
 
 def test_results_are_reproducible():
@@ -134,7 +170,7 @@ def test_the_observation_is_sufficient_to_play():
     nothing a legal player needs is missing from the observation -- and no agent
     is handicapped by being denied the state.
     """
-    from rummi.policies.greedy_policy import plan_turn
+    from rummi.agents.greedy_agent import plan_turn
 
     cfg = TINY_GROUPS
     state = reset(cfg, 6, seed=17)

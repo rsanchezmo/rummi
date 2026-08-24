@@ -235,13 +235,13 @@ def interesting_state(cfg, seed: int, turns: int) -> GameView:
     just-touched slot, and a table that is temporarily illegal -- the states that
     only exist because a turn spans several steps.
     """
-    from rummi.policies.greedy_policy import GreedyPolicy
+    from rummi.bench.fuzz import make_policy
 
-    policy = GreedyPolicy(cfg)
+    policy = make_policy(cfg, "greedy", 0)
     state = reset(cfg, 1, seed=seed)
     for _ in range(turns):
         mask = legal_actions(state)
-        step(state, policy.act(state, mask), mask)
+        step(state, policy(state, mask), mask)
 
     mask = legal_actions(state)
     dissolve = next(a for a in range(cfg.dissolve_offset, cfg.assign_offset) if mask[0, a])

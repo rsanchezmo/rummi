@@ -23,21 +23,14 @@ CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def build(cfg: RummiConfig, name: str, seed: int = 0):
-    """Return ``act(state, mask) -> actions`` for a named baseline."""
-    if name == "random":
-        from rummi.policies.random_policy import RandomPolicy
+    """Return ``act(state, mask, envs) -> actions`` for a named agent."""
+    from rummi.agents import build as build_agent
+    from rummi.agents.base import act_on_state
 
-        p = RandomPolicy(cfg, seed=seed)
-        return lambda state, mask, envs=None: p.act(mask)
-    if name == "greedy":
-        from rummi.policies.greedy_policy import GreedyPolicy
-
-        return GreedyPolicy(cfg).act
-    if name == "optimal":
-        from rummi.policies.optimal_policy import OptimalPolicy
-
-        return OptimalPolicy(cfg).act
-    raise ValueError(f"unknown policy {name!r}")
+    kwargs = {"seed": seed} if name.endswith("random") else {}
+    agent = build_agent(name, cfg, **kwargs)
+    agent.reset(0)
+    return lambda state, mask, envs=None: act_on_state(agent, state, mask, envs)
 
 
 class SeatPolicies:

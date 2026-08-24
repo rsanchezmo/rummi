@@ -1,29 +1,26 @@
 """Greedy one-turn-lookahead baseline.
 
 Plans a whole turn when the turn starts, then emits the micro-actions that
-realise it. Planning per turn rather than per step keeps the Python cost off the
-per-step path, and pre-resolving slots is exact: nobody else touches the table
-while one player is mid-turn, so the policy can predict which empty slot each new
-set will land in.
+realise it. Pre-resolving slots is exact: nobody else touches the table while one
+player is mid-turn, so the plan can predict which empty slot each new set lands
+in.
 
 Deliberately does *not* rearrange the table -- it only appends to existing sets
-and lays new ones from its own rack. Rearrangement is what the CP-SAT optimal
-policy is for, so keeping greedy simple leaves a real gap between the two.
-
-Reads only what the acting player may see: their own rack and the table.
+and lays new ones from its own rack. That limit is the point: the gap to
+:class:`~rummi.agents.optimal_agent.OptimalAgent` is the value of rearrangement,
+and :class:`~rummi.agents.rearrange_agent.RearrangeAgent` sits between them by
+allowing exactly one stolen tile.
 """
 
 from __future__ import annotations
 
-from collections import deque
-
 import numpy as np
 
+from rummi.agents.base import Observation, PlanningAgent, has_melded, table
 from rummi.rules.actions import encode_assign, encode_place
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import tables
 from rummi.env.numpy.sets import evaluate_slots
-from rummi.env.numpy.state import BatchState
 from rummi.solver.candidates import candidates
 
 
@@ -137,49 +134,10 @@ def plan_turn(
     return out
 
 
-class GreedyPolicy:
-    def __init__(self, cfg: RummiConfig, strict: bool = True) -> None:
-        self.cfg = cfg
-        self.strict = strict
-        self._plans: dict[int, deque[int]] = {}
+class GreedyAgent(PlanningAgent):
+    name = "greedy"
 
-    def act(
-        self, state: BatchState, mask: np.ndarray, envs: np.ndarray | None = None
-    ) -> np.ndarray:
-        """``envs`` restricts which envs this policy owns.
-
-        It must be honoured rather than ignored: plans are cached per env and
-        consumed one action at a time, so touching an env another policy controls
-        would desynchronise that env's plan.
-        """
-        cfg = self.cfg
-        out = np.full(state.batch_size, cfg.draw_action, dtype=np.int64)
-
-        for env in range(state.batch_size):
-            if state.done[env] or (envs is not None and not envs[env]):
-                continue
-            if state.micro_count[env] == 0:
-                player = int(state.current[env])
-                self._plans[env] = deque(
-                    plan_turn(
-                        cfg,
-                        state.racks[env, player],
-                        state.table_sets[env],
-                        bool(state.melded[env, player]),
-                    )
-                )
-            plan = self._plans.get(env)
-            if not plan:
-                continue
-            action = plan.popleft()
-            if not mask[env, action]:
-                if self.strict:
-                    from rummi.rules.actions import action_name
-
-                    raise AssertionError(
-                        f"greedy planned an illegal {action_name(cfg, action)} in env {env}"
-                    )
-                plan.clear()
-                continue
-            out[env] = action
-        return out
+    def plan(self, obs: Observation, env: int) -> list[int]:
+        return plan_turn(
+            self.cfg, obs["rack"][env], table(obs)[env], bool(has_melded(obs)[env])
+        )

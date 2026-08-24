@@ -71,15 +71,23 @@ better. This has already caused one false "the engine is broken" diagnosis.
   space exists to keep that out of `step`; CP-SAT solves it once per turn in
   `rummi/solver/`, never per step.
 
-## Agents see the observation, never the state
+## One way to write an agent
 
-`rummi/agents/base.py` is the contract: an agent gets the observation and the
-mask. The observation merges the pool and opponents' racks into one `unseen`
+`rummi/agents/` is it — there is no parallel "policies" concept any more, and the
+bundled agents are not privileged. `rummi/agents/base.py` holds the contract: an
+agent gets the observation and the mask. The observation merges the pool and opponents' racks into one `unseen`
 vector precisely so an agent cannot read an opponent's hand.
 
-The reference agents obey this too — including the CP-SAT one, which is what
-makes "the observation is sufficient to play optimally" a tested claim rather
-than a hope. Don't shortcut a new agent by handing it `BatchState`.
+The bundled agents obey this too — including the CP-SAT one, which is what makes
+"the observation is sufficient to play optimally" a tested claim rather than a
+hope. Don't shortcut a new agent by handing it `BatchState`; if you hold a state
+and need an action, go through `agents.base.act_on_state`, which is the single
+bridge and encodes the observation for you.
+
+The strength ladder is deliberate: `greedy` never rearranges, `rearrange` steals
+exactly one tile, `optimal` repartitions the table. It exists so a submission has
+rungs to place itself between — `optimal` beating `greedy` 100-0 told newcomers
+nothing.
 
 ## Backend traps already paid for
 

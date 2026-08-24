@@ -123,7 +123,7 @@ def main() -> None:
     p.add_argument("--replay", type=Path, help="path to a recorded .jsonl game")
     p.add_argument("--out", type=Path, help="record the played game to this path")
     p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
-    p.add_argument("--policy", choices=["random", "greedy", "optimal"], default="greedy")
+    p.add_argument("--policy", default="greedy", help="any agent name from rummi.agents")
     p.add_argument("--render-mode", choices=[m.value for m in RenderMode], default="ansi")
     p.add_argument("--fps", type=float, default=12.0)
     p.add_argument("--every", type=int, default=1)

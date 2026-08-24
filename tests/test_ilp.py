@@ -12,7 +12,7 @@ from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots
 from rummi.env.numpy.state import counts_of
-from rummi.policies.greedy_policy import plan_turn as greedy_plan
+from rummi.agents.greedy_agent import plan_turn as greedy_plan
 from rummi.solver import brute_force
 from rummi.solver.ilp import Objective, solve_turn
 
@@ -122,9 +122,11 @@ def test_matches_brute_force_optimum_on_reduced_configs(cfg: RummiConfig):
 
 
 def test_never_does_worse_than_greedy_over_real_play():
-    from rummi.policies.greedy_policy import GreedyPolicy
+    from rummi.agents import GreedyAgent
+    from rummi.agents.base import act_on_state
 
-    pol = GreedyPolicy(C)
+    pol = GreedyAgent(C)
+    pol.reset(2)
     s = reset(C, 2, seed=23)
     better = tied = 0
     for _ in range(120):
@@ -143,7 +145,7 @@ def test_never_does_worse_than_greedy_over_real_play():
             better += optimal_tiles > greedy_tiles
             tied += optimal_tiles == greedy_tiles
         m = legal_actions(s)
-        step(s, pol.act(s, m), m)
+        step(s, act_on_state(pol, s, m), m)
         if s.done.all():
             break
     assert better > 0, "the comparison found no case where rearrangement helps"

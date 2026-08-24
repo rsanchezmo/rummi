@@ -62,6 +62,18 @@ class Agent(Protocol):
         """
 
 
+def act_on_state(agent: "Agent", state, mask: np.ndarray, active=None) -> np.ndarray:
+    """Drive an agent from a raw ``BatchState`` by encoding the observation.
+
+    The single bridge between the simulator and the agent interface. Anything
+    that holds a state and wants an action goes through here, so agents never
+    receive the state itself and cannot accidentally read an opponent's rack.
+    """
+    from rummi.env.observation import encode
+
+    return agent.act(encode(state), mask, active)
+
+
 def turn_starting(obs: Observation) -> np.ndarray:
     """``(n_envs,)`` true where a fresh turn is about to begin."""
     return obs["scalars"][:, MICRO_COUNT] == 0

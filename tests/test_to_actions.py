@@ -18,7 +18,8 @@ from rummi.rules.encoding import EMPTY, kind_of
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots
-from rummi.policies.optimal_policy import OptimalPolicy
+from rummi.agents import OptimalAgent
+from rummi.agents.base import act_on_state
 from rummi.solver.ilp import solve_turn
 from rummi.solver.to_actions import plan, slot_contents
 
@@ -106,7 +107,8 @@ def test_every_solver_target_is_reachable(cfg: RummiConfig):
     # Reduced configs finish in a handful of turns, so gather plans across several
     # games rather than leaning on one long one.
     for seed in range(6):
-        policy = OptimalPolicy(cfg)
+        policy = OptimalAgent(cfg)
+        policy.reset(2)
         state = reset(cfg, 2, seed=13 + seed)
         for _ in range(250):
             for env in np.flatnonzero(state.micro_count == 0):
@@ -144,7 +146,7 @@ def test_every_solver_target_is_reachable(cfg: RummiConfig):
                 )
 
             mask = legal_actions(state)
-            step(state, policy.act(state, mask), mask)
+            step(state, act_on_state(policy, state, mask), mask)
             if state.done.all():
                 break
 
@@ -156,11 +158,12 @@ def test_every_solver_target_is_reachable(cfg: RummiConfig):
 
 
 def test_optimal_policy_plays_whole_games_and_wins_by_emptying_a_rack():
-    policy = OptimalPolicy(C)
+    policy = OptimalAgent(C)
+    policy.reset(2)
     state = reset(C, 2, seed=31)
     for _ in range(4000):
         mask = legal_actions(state)
-        step(state, policy.act(state, mask), mask)
+        step(state, act_on_state(policy, state, mask), mask)
         state.check_invariants()
         if state.done.all():
             break
