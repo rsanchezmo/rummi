@@ -28,6 +28,11 @@ include = ["rummi*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Tests share helpers via `from tests.conftest import ...`, which needs the repo
+# root importable. Without this it works under `python -m pytest` (which puts the
+# CWD on sys.path) and fails under a bare `pytest`, so CI broke where local runs
+# did not.
+pythonpath = ["."]
 filterwarnings = [
     "error",
     # torch.compile traces through torch.jit internals, which emit their own

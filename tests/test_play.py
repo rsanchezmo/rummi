@@ -23,6 +23,7 @@ from rummi.render.play import (
     hit,
     legal_slots,
     pick_from_slot,
+    redraw,
     regions_for,
 )
 from rummi.render.pygame_view import PygameView
@@ -197,3 +198,54 @@ def test_a_whole_opening_meld_can_be_played_by_clicking(window):
     step(s, np.array([C.end_turn_action]), mask)
     assert bool(s.melded[0, 0]) and s.racks[0, 0].sum() == 0
     s.check_invariants()
+
+
+def test_redraw_rejects_a_batched_mask():
+    """The bug this guards: play() holds a (1, A) mask for step() and the UI
+    wants one env's row. Passing the batched one used to fail deep inside
+    drawing, with an IndexError that named neither shape."""
+    win = PygameView(C, headless=True, reserve_bottom=50)
+    try:
+        s = state_with(C, rack=RUN_36)
+        mask = legal_actions(s)
+        assert mask.ndim == 2
+        with pytest.raises(ValueError, match="single env's mask"):
+            redraw(win, view(s, 0, mask), mask, Selection())
+        redraw(win, view(s, 0, mask), mask[0], Selection())
+    finally:
+        win.close()
+
+
+def test_the_interactive_loop_survives_a_scripted_hand(monkeypatch):
+    """Drive the real play() loop headlessly with synthetic events.
+
+    The pure hit-testing was well covered while the glue that wires it to the
+    window was not, which is exactly where the shape bug lived. This exercises
+    that glue: the opponent's turns, redraws, clicks, and quitting.
+    """
+    import pygame
+
+    from rummi.render import play as play_module
+
+    pygame.display.quit()
+    pygame.display.init()
+
+    clicks = {"n": 0}
+    real_get = pygame.event.get
+
+    def scripted_events(*args, **kwargs):
+        # Click the first rack tile a few times, then close the window.
+        real_get(*args, **kwargs)
+        clicks["n"] += 1
+        if clicks["n"] > 6:
+            return [pygame.event.Event(pygame.QUIT)]
+        return [pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 1, "pos": (0, 0)})]
+
+    monkeypatch.setattr(pygame.event, "get", scripted_events)
+    monkeypatch.setattr(pygame.time, "wait", lambda ms: None)
+
+    # tiny_groups so the opponent's turns are quick.
+    from rummi.rules.config import TINY_GROUPS
+
+    play_module.play(TINY_GROUPS, opponent="greedy", seed=4, opponent_delay_ms=0)
+    assert clicks["n"] > 6, "the loop should have consumed the scripted events"

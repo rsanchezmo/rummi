@@ -230,14 +230,22 @@ def draw_controls(
     )
 
 
-def redraw(window: PygameView, snapshot: GameView, mask, selection: Selection) -> Regions:
+def redraw(
+    window: PygameView, snapshot: GameView, mask: np.ndarray, selection: Selection
+) -> Regions:
+    """``mask`` is one env's row, ``(n_actions,)``, not the batched ``(1, A)``."""
     import pygame
 
+    if mask.ndim != 1:
+        raise ValueError(f"expected a single env's mask, got shape {mask.shape}")
     window.highlight_slots = legal_slots(window.cfg, selection.kind, mask)
     window.draw(snapshot)
     regions = regions_for(window, snapshot)
     draw_controls(window, regions, snapshot, mask, selection)
-    pygame.display.flip()
+    if not window.headless:
+        # A headless view draws to a plain Surface with no display mode set, so
+        # flipping would fail. Useful for screenshots and for testing this path.
+        pygame.display.flip()
     return regions
 
 
@@ -261,7 +269,7 @@ def play(
     clock = pygame.time.Clock()
 
     mask = legal_actions(state)
-    regions = redraw(window, view(state, 0, mask), mask, selection)
+    regions = redraw(window, view(state, 0, mask), mask[0], selection)
 
     running = True
     while running:
@@ -273,7 +281,7 @@ def play(
             mask = legal_actions(state)
             step(state, act_on_state(rival, state, mask), mask)
             mask = legal_actions(state)
-            regions = redraw(window, view(state, 0, mask), mask, selection)
+            regions = redraw(window, view(state, 0, mask), mask[0], selection)
             pygame.time.wait(opponent_delay_ms)
             continue
 
@@ -282,7 +290,7 @@ def play(
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 selection.clear()
-                regions = redraw(window, view(state, 0, mask), mask, selection)
+                regions = redraw(window, view(state, 0, mask), mask[0], selection)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not state.done[0]:
                 spot = hit(regions, event.pos)
                 if spot is None:
@@ -290,7 +298,7 @@ def play(
                 if spot.zone is Zone.WORKBENCH:
                     selection.kind = spot.kind
                 else:
-                    action = action_for(cfg, spot, selection, mask, view(state, 0, mask))
+                    action = action_for(cfg, spot, selection, mask[0], view(state, 0, mask))
                     if action is None:
                         continue
                     step(state, np.array([action]), mask)
@@ -303,7 +311,7 @@ def play(
                         if spot.zone is Zone.SLOT and state.workbench[0].sum():
                             selection.kind = int(np.argmax(state.workbench[0] > 0))
                 mask = legal_actions(state)
-                regions = redraw(window, view(state, 0, mask), mask, selection)
+                regions = redraw(window, view(state, 0, mask), mask[0], selection)
         clock.tick(30)
 
     window.close()
