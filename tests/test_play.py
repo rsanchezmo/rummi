@@ -285,3 +285,71 @@ def test_every_slot_is_reachable_when_the_table_is_full():
         assert small.visible_slots(snapshot)[1] > 0
     finally:
         small.close()
+
+
+def test_undo_rewinds_one_action_exactly():
+    """The action space has no "unplace", so undo replays the turn one action
+    short. It must land on precisely the state that existed before that action,
+    or the board and the engine quietly disagree."""
+    from rummi.render.play import rewind
+
+    s = state_with(C, rack=RUN_36)
+    turn_start = s.clone()
+    taken = []
+
+    for action in [encode_place(C, k) for k in RUN_36]:
+        before = s.clone()
+        step(s, np.array([action]), legal_actions(s))
+        taken.append(action)
+
+        undone = rewind(C, turn_start, taken[:-1])
+        assert undone.digest() == before.digest(), "undo did not restore the prior state"
+
+    # Undo all the way back to the start of the turn.
+    assert rewind(C, turn_start, []).digest() == turn_start.digest()
+
+
+def test_undo_can_free_a_tile_stuck_in_the_workbench():
+    """The situation that motivated it: a tile placed by mistake cannot be taken
+    back by any action -- only assigned somewhere, or the whole turn abandoned."""
+    from rummi.render.play import rewind
+
+    s = state_with(C, rack=RUN_36)
+    turn_start = s.clone()
+    step(s, np.array([encode_place(C, RUN_36[0])]), legal_actions(s))
+    assert s.workbench[0].sum() == 1
+
+    assert s.racks[0, 0, RUN_36[0]] == 0, "the tile really is off the rack"
+
+    # No legal action puts it back except DRAW, which abandons the whole turn.
+    mask = legal_actions(s)
+    for action in np.flatnonzero(mask[0]):
+        if int(action) == C.draw_action:
+            continue
+        trial = s.clone()
+        step(trial, np.array([int(action)]), legal_actions(trial))
+        assert trial.racks[0, 0, RUN_36[0]] == 0, (
+            f"action {int(action)} returned the tile to the rack, so undo is unnecessary"
+        )
+
+    back = rewind(C, turn_start, [])
+    assert back.workbench[0].sum() == 0
+    assert back.racks[0, 0, RUN_36[0]] == 1, "undo put it back on the rack"
+    back.check_invariants()
+
+
+def test_undo_button_is_present_and_maps_to_its_own_zone():
+    win = PygameView(C, headless=True, reserve_bottom=50)
+    try:
+        s = state_with(C, rack=RUN_36)
+        snapshot = view(s, 0, legal_actions(s))
+        regions = regions_for(win, snapshot)
+        assert regions.undo is not None
+        assert hit(regions, regions.undo.center).zone is Zone.UNDO
+        # UNDO is not an action id -- the caller rewinds instead.
+        assert action_for(C, Hit(Zone.UNDO), Selection(), legal_actions(s)[0], snapshot) is None
+        # The three buttons must not overlap.
+        assert not regions.end_turn.colliderect(regions.undo)
+        assert not regions.undo.colliderect(regions.draw)
+    finally:
+        win.close()

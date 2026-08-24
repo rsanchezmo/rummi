@@ -44,6 +44,7 @@ class Zone(str, Enum):
     WORKBENCH = "workbench"
     SLOT = "slot"
     END_TURN = "end_turn"
+    UNDO = "undo"
     DRAW = "draw"
 
 
@@ -80,6 +81,7 @@ class Regions:
     workbench: list[tuple[object, int]] = field(default_factory=list)
     slots: list[tuple[object, int, tuple[int, ...]]] = field(default_factory=list)
     end_turn: object = None
+    undo: object = None
     draw: object = None
 
 
@@ -106,8 +108,10 @@ def regions_for(window: PygameView, snapshot: GameView) -> Regions:
             target.append((pygame.Rect(x, top + 2, atlas.tile_w, atlas.tile_h), kind))
 
     bar_y = lay.log_top + LOG_H + 4
+    stride = BUTTON_W + BUTTON_GAP
     out.end_turn = pygame.Rect(PAD, bar_y, BUTTON_W, BUTTON_H)
-    out.draw = pygame.Rect(PAD + BUTTON_W + BUTTON_GAP, bar_y, BUTTON_W, BUTTON_H)
+    out.undo = pygame.Rect(PAD + stride, bar_y, BUTTON_W, BUTTON_H)
+    out.draw = pygame.Rect(PAD + 2 * stride, bar_y, BUTTON_W, BUTTON_H)
     return out
 
 
@@ -115,6 +119,8 @@ def hit(regions: Regions, pos: tuple[int, int]) -> Hit | None:
     """Which region a click landed in. Pure: no pygame state, no display."""
     if regions.end_turn is not None and regions.end_turn.collidepoint(pos):
         return Hit(Zone.END_TURN)
+    if regions.undo is not None and regions.undo.collidepoint(pos):
+        return Hit(Zone.UNDO)
     if regions.draw is not None and regions.draw.collidepoint(pos):
         return Hit(Zone.DRAW)
     for rect, kind in regions.rack:
@@ -142,6 +148,10 @@ def action_for(
         return cfg.end_turn_action if mask[cfg.end_turn_action] else None
     if spot.zone is Zone.DRAW:
         return cfg.draw_action
+    if spot.zone is Zone.UNDO:
+        # Not an action: the MDP has no "unplace", so undo is done by the caller
+        # rewinding the turn and replaying it one action short.
+        return None
 
     if spot.zone is Zone.RACK:
         action = encode_place(cfg, spot.kind)
@@ -183,7 +193,12 @@ def legal_slots(cfg: RummiConfig, kind: int, mask: np.ndarray) -> frozenset[int]
 
 # --- drawing the interactive chrome ------------------------------------------
 def draw_controls(
-    window: PygameView, regions: Regions, snapshot: GameView, mask: np.ndarray, selection: Selection
+    window: PygameView,
+    regions: Regions,
+    snapshot: GameView,
+    mask: np.ndarray,
+    selection: Selection,
+    can_undo: bool = False,
 ) -> None:
     """Buttons and the hint line, drawn over the board."""
     import pygame
@@ -205,6 +220,7 @@ def draw_controls(
 
     for rect, label, enabled in (
         (regions.end_turn, "END TURN", bool(mask[cfg.end_turn_action])),
+        (regions.undo, "UNDO", can_undo),
         (regions.draw, "DRAW", True),
     ):
         pygame.draw.rect(surface, PANEL if enabled else BACKGROUND, rect, border_radius=6)
@@ -219,19 +235,39 @@ def draw_controls(
     elif selection.active:
         hint = f"holding {snapshot.label(selection.kind)} -- click a highlighted set, or an empty slot"
     elif snapshot.workbench:
-        hint = "click a tile in the workbench to pick it up again"
+        # There is no action that puts a workbench tile back, so say what does.
+        hint = "click a workbench tile to hold it, then a set -- or UNDO to take it back"
     elif snapshot.needs_meld:
         hint = f"click rack tiles to build sets worth {cfg.initial_meld}+ to open"
     else:
         hint = "click a rack tile to play it, or a set to lift a tile out of it"
     surface.blit(
         window._small.render(hint, True, TEXT_DIM),
-        (PAD + 2 * (BUTTON_W + BUTTON_GAP) + 6, regions.end_turn.y + 10),
+        (PAD + 3 * (BUTTON_W + BUTTON_GAP) + 6, regions.end_turn.y + 10),
     )
 
 
+def rewind(cfg: RummiConfig, turn_start, actions: list[int]):
+    """Replay a turn from its opening state, one action short.
+
+    The action space has no "unplace": a tile leaves the workbench by being
+    assigned, or by DRAW abandoning the whole turn. Rather than add an action --
+    which would change the MDP every agent sees, to fix a human's mis-click --
+    undo is done by rewinding to the turn's opening state and replaying. The
+    engine is untouched and nothing an agent can do changes.
+    """
+    state = turn_start.clone()
+    for action in actions:
+        step(state, np.array([action]), legal_actions(state))
+    return state
+
+
 def redraw(
-    window: PygameView, snapshot: GameView, mask: np.ndarray, selection: Selection
+    window: PygameView,
+    snapshot: GameView,
+    mask: np.ndarray,
+    selection: Selection,
+    can_undo: bool = False,
 ) -> Regions:
     """``mask`` is one env's row, ``(n_actions,)``, not the batched ``(1, A)``."""
     import pygame
@@ -241,7 +277,7 @@ def redraw(
     window.highlight_slots = legal_slots(window.cfg, selection.kind, mask)
     window.draw(snapshot)
     regions = regions_for(window, snapshot)
-    draw_controls(window, regions, snapshot, mask, selection)
+    draw_controls(window, regions, snapshot, mask, selection, can_undo)
     if not window.headless:
         # A headless view draws to a plain Surface with no display mode set, so
         # flipping would fail. Useful for screenshots and for testing this path.
@@ -279,8 +315,13 @@ def play(
     selection = Selection()
     clock = pygame.time.Clock()
 
+    # The turn's opening state and the actions taken since, which together are
+    # what UNDO replays.
+    turn_start = state.clone()
+    taken: list[int] = []
+
     mask = legal_actions(state)
-    regions = redraw(window, view(state, 0, mask), mask[0], selection)
+    regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
 
     running = True
     while running:
@@ -292,7 +333,8 @@ def play(
             mask = legal_actions(state)
             step(state, act_on_state(rival, state, mask), mask)
             mask = legal_actions(state)
-            regions = redraw(window, view(state, 0, mask), mask[0], selection)
+            turn_start, taken = state.clone(), []
+            regions = redraw(window, view(state, 0, mask), mask[0], selection, False)
             pygame.time.wait(opponent_delay_ms)
             continue
 
@@ -301,18 +343,33 @@ def play(
                 running = False
             elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 selection.clear()
-                regions = redraw(window, view(state, 0, mask), mask[0], selection)
+                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
+            elif event.type == pygame.KEYDOWN and event.key == pygame.K_BACKSPACE and taken:
+                taken.pop()
+                state = rewind(cfg, turn_start, taken)
+                selection.clear()
+                mask = legal_actions(state)
+                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not state.done[0]:
                 spot = hit(regions, event.pos)
                 if spot is None:
                     continue
                 if spot.zone is Zone.WORKBENCH:
                     selection.kind = spot.kind
+                elif spot.zone is Zone.UNDO:
+                    if not taken:
+                        continue
+                    taken.pop()
+                    state = rewind(cfg, turn_start, taken)
+                    selection.clear()
                 else:
                     action = action_for(cfg, spot, selection, mask[0], view(state, 0, mask))
                     if action is None:
                         continue
                     step(state, np.array([action]), mask)
+                    taken.append(int(action))
+                    if action in (cfg.end_turn_action, cfg.draw_action):
+                        turn_start, taken = state.clone(), []
                     # Holding the tile you just placed makes "click rack, click
                     # slot" a two-click move rather than three.
                     if spot.zone is Zone.RACK:
@@ -322,7 +379,7 @@ def play(
                         if spot.zone is Zone.SLOT and state.workbench[0].sum():
                             selection.kind = int(np.argmax(state.workbench[0] > 0))
                 mask = legal_actions(state)
-                regions = redraw(window, view(state, 0, mask), mask[0], selection)
+                regions = redraw(window, view(state, 0, mask), mask[0], selection, bool(taken))
         clock.tick(30)
 
     window.close()

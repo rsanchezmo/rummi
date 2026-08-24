@@ -13,6 +13,7 @@ clock is read; without that the loop would measure enqueue time.
 from __future__ import annotations
 
 import argparse
+import pathlib
 import time
 
 import numpy as np
@@ -22,37 +23,47 @@ from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
 CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
-def bench_numpy(cfg: RummiConfig, batch_size: int, iters: int, warmup: int = 20) -> float:
+def _best(samples: list[float]) -> float:
+    """Throughput noise is one-sided -- interference only ever slows a run -- so
+    the maximum of several identical measurements is the honest estimate."""
+    return max(samples)
+
+
+def bench_numpy(
+    cfg: RummiConfig, batch_size: int, iters: int, warmup: int = 20, repeats: int = 3
+) -> float:
     from rummi.env.numpy.deal import reset
     from rummi.env.numpy.engine import step
     from rummi.env.numpy.masks import legal_actions
 
-    state = reset(cfg, batch_size, seed=0)
-    for _ in range(warmup):
-        m = legal_actions(state)
-        step(state, np.argmax(m, axis=-1), m)
+    def advance(state, n):
+        for _ in range(n):
+            m = legal_actions(state)
+            step(state, np.argmax(m, axis=-1), m)
 
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        m = legal_actions(state)
-        step(state, np.argmax(m, axis=-1), m)
-    return batch_size * iters / (time.perf_counter() - t0)
+    samples = []
+    for _ in range(repeats):
+        # A fresh state each repeat, advanced to the same point. The state moves
+        # while it is being timed and the table fills as it goes, so reusing one
+        # across repeats measures a different, later phase of the game each time.
+        state = reset(cfg, batch_size, seed=0)
+        advance(state, warmup)
+        t0 = time.perf_counter()
+        advance(state, iters)
+        samples.append(batch_size * iters / (time.perf_counter() - t0))
+    return _best(samples)
 
 
 def bench_torch(
     cfg: RummiConfig, batch_size: int, iters: int, device: str, compile_it: bool = False,
-    warmup: int = 20, validate: bool = True,
+    warmup: int = 20, validate: bool = True, repeats: int = 3,
 ) -> float:
     import torch
 
     from rummi.env.torch import sim
 
     dev = torch.device(device)
-    state = sim.reset(cfg, batch_size, seed=0, device=dev)
-
-    legal = sim.legal_actions
-    if compile_it:
-        legal = torch.compile(sim.legal_actions, dynamic=False)
+    legal = torch.compile(sim.legal_actions, dynamic=False) if compile_it else sim.legal_actions
 
     def sync():
         if device == "mps":
@@ -60,32 +71,39 @@ def bench_torch(
         elif device == "cuda":
             torch.cuda.synchronize()
 
-    def once():
-        m = legal(state)
-        # Validation reads a boolean off the device, which is a host sync every
-        # step; the env exposes it as a switch for exactly this reason.
-        sim.step(state, m.to(torch.int8).argmax(dim=-1), m if validate else None)
+    def advance(state, n):
+        for _ in range(n):
+            m = legal(state)
+            # Validation reads a boolean off the device, a host sync every step;
+            # the env exposes it as a switch for exactly this reason.
+            sim.step(state, m.to(torch.int8).argmax(dim=-1), m if validate else None)
 
-    for _ in range(warmup):
-        once()
+    # One throwaway pass so compilation is not inside a timed region.
+    advance(sim.reset(cfg, batch_size, seed=0, device=dev), warmup)
     sync()
 
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        once()
-    sync()
-    return batch_size * iters / (time.perf_counter() - t0)
+    samples = []
+    for _ in range(repeats):
+        state = sim.reset(cfg, batch_size, seed=0, device=dev)
+        advance(state, warmup)
+        sync()
+        t0 = time.perf_counter()
+        advance(state, iters)
+        sync()
+        samples.append(batch_size * iters / (time.perf_counter() - t0))
+    return _best(samples)
 
 
 def bench_jax(
-    cfg: RummiConfig, batch_size: int, iters: int, mode: str = "fused", warmup: int = 3
+    cfg: RummiConfig, batch_size: int, iters: int, mode: str = "fused", warmup: int = 20,
+    repeats: int = 3,
 ) -> float:
     """``mode`` selects how much is handed to the compiler.
 
     ``step`` jits the mask and the transition separately, so the Python loop sits
     between them. ``fused`` jits mask-choose-step as one function. ``scan`` puts
-    the whole rollout inside ``lax.scan``, which is the idiomatic JAX shape and
-    removes the Python loop entirely.
+    the whole rollout inside ``lax.scan``, the idiomatic JAX shape, which removes
+    the Python loop entirely.
     """
     from functools import partial
 
@@ -93,8 +111,6 @@ def bench_jax(
     import jax.numpy as jnp
 
     from rummi.env.jax import sim
-
-    state = sim.reset(cfg, batch_size, seed=0)
 
     def pick(mask):
         return jnp.argmax(mask.astype(jnp.int8), axis=-1)
@@ -115,30 +131,22 @@ def bench_jax(
         out, _ = jax.lax.scan(body, s, None, length=n)
         return out
 
-    if mode == "scan":
-        state = jax.block_until_ready(rollout(cfg, iters, state))
+    def advance(state, n):
+        if mode == "scan":
+            return rollout(cfg, n, state)
+        for _ in range(n):
+            state = once(cfg, state)
+        return state
+
+    jax.block_until_ready(advance(sim.reset(cfg, batch_size, seed=0), warmup))
+
+    samples = []
+    for _ in range(repeats):
+        state = jax.block_until_ready(advance(sim.reset(cfg, batch_size, seed=0), warmup))
         t0 = time.perf_counter()
-        state = jax.block_until_ready(rollout(cfg, iters, state))
-        return batch_size * iters / (time.perf_counter() - t0)
-
-    body = once if mode == "fused" else None
-    for _ in range(warmup):
-        if body is None:
-            m = sim.legal_actions(cfg, state)
-            state, _ = sim.step(cfg, state, pick(m))
-        else:
-            state = body(cfg, state)
-    jax.block_until_ready(state)
-
-    t0 = time.perf_counter()
-    for _ in range(iters):
-        if body is None:
-            m = sim.legal_actions(cfg, state)
-            state, _ = sim.step(cfg, state, pick(m))
-        else:
-            state = body(cfg, state)
-    jax.block_until_ready(state)
-    return batch_size * iters / (time.perf_counter() - t0)
+        state = jax.block_until_ready(advance(state, iters))
+        samples.append(batch_size * iters / (time.perf_counter() - t0))
+    return _best(samples)
 
 
 def main() -> None:
@@ -151,38 +159,48 @@ def main() -> None:
         "--no-validate", action="store_true",
         help="also time with action validation off, which removes a per-step host sync",
     )
+    p.add_argument("--json", type=str, default=None, help="also write results here")
+    p.add_argument(
+        "--repeats", type=int, default=3,
+        help="timed runs per cell; the best is reported, since a slow run means "
+             "interference and a fast one cannot be luck",
+    )
     args = p.parse_args()
 
     cfg = CONFIGS[args.config]
     import torch
 
-    backends: list[tuple[str, callable]] = [("numpy", lambda b, n: bench_numpy(cfg, b, n))]
-    backends.append(("torch-cpu", lambda b, n: bench_torch(cfg, b, n, "cpu")))
+    reps = args.repeats
+    backends: list[tuple[str, callable]] = [
+        ("numpy", lambda b, n: bench_numpy(cfg, b, n, repeats=reps))
+    ]
+    backends.append(("torch-cpu", lambda b, n: bench_torch(cfg, b, n, "cpu", repeats=reps)))
     if torch.backends.mps.is_available():
-        backends.append(("torch-mps", lambda b, n: bench_torch(cfg, b, n, "mps")))
+        backends.append(("torch-mps", lambda b, n: bench_torch(cfg, b, n, "mps", repeats=reps)))
     if torch.cuda.is_available():
-        backends.append(("torch-cuda", lambda b, n: bench_torch(cfg, b, n, "cuda")))
+        backends.append(("torch-cuda", lambda b, n: bench_torch(cfg, b, n, "cuda", repeats=reps)))
     if args.compile:
-        backends.append(("torch-cpu+compile", lambda b, n: bench_torch(cfg, b, n, "cpu", True)))
+        backends.append(("torch-cpu+compile", lambda b, n: bench_torch(cfg, b, n, "cpu", True, repeats=reps)))
         if torch.backends.mps.is_available():
-            backends.append(("torch-mps+compile", lambda b, n: bench_torch(cfg, b, n, "mps", True)))
+            backends.append(("torch-mps+compile", lambda b, n: bench_torch(cfg, b, n, "mps", True, repeats=reps)))
     try:
         import jax  # noqa: F401
 
-        backends.append(("jax-step", lambda b, n: bench_jax(cfg, b, n, "step")))
-        backends.append(("jax-fused", lambda b, n: bench_jax(cfg, b, n, "fused")))
-        backends.append(("jax-scan", lambda b, n: bench_jax(cfg, b, n, "scan")))
+        backends.append(("jax-step", lambda b, n: bench_jax(cfg, b, n, "step", repeats=reps)))
+        backends.append(("jax-fused", lambda b, n: bench_jax(cfg, b, n, "fused", repeats=reps)))
+        backends.append(("jax-scan", lambda b, n: bench_jax(cfg, b, n, "scan", repeats=reps)))
     except ModuleNotFoundError:
         pass
     if args.no_validate:
         backends.append(
-            ("torch-cpu+comp-noval", lambda b, n: bench_torch(cfg, b, n, "cpu", True, validate=False))
+            ("torch-cpu+comp-noval", lambda b, n: bench_torch(cfg, b, n, "cpu", True, validate=False, repeats=reps))
         )
         if torch.backends.mps.is_available():
             backends.append(
-                ("torch-mps+comp-noval", lambda b, n: bench_torch(cfg, b, n, "mps", True, validate=False))
+                ("torch-mps+comp-noval", lambda b, n: bench_torch(cfg, b, n, "mps", True, validate=False, repeats=reps))
             )
 
+    rows: list[dict] = []
     print(f"config={args.config}  A={cfg.n_actions}  S={cfg.max_sets}  K={cfg.n_kinds}")
     print(f"{'backend':<20}" + "".join(f"{b:>13}" for b in args.batch_sizes))
     print(f"{'':<20}" + "".join(f"{'env-steps/s':>13}" for _ in args.batch_sizes))
@@ -193,8 +211,33 @@ def main() -> None:
             rate = fn(b, args.iters)
             baseline.setdefault(b, rate)
             speedup = rate / baseline[b]
+            rows.append(
+                {
+                    "backend": name,
+                    "batch_size": b,
+                    "env_steps_per_sec": rate,
+                    "speedup": speedup,
+                }
+            )
             cells.append(f"{rate:>10,.0f}" + (f" {speedup:>.1f}x" if name != "numpy" else "     "))
         print(f"{name:<20}" + "".join(f"{c:>13}" for c in cells))
+
+    if args.json:
+        import json
+        import platform
+
+        payload = {
+            "config": args.config,
+            "n_actions": cfg.n_actions,
+            "iters": args.iters,
+            # Recorded because a throughput number without the machine is a
+            # number nobody can reproduce or argue with.
+            "machine": f"{platform.machine()} / {platform.system()}",
+            "rows": rows,
+        }
+        pathlib.Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        pathlib.Path(args.json).write_text(json.dumps(payload, indent=2))
+        print(f"wrote {args.json}")
 
 
 if __name__ == "__main__":

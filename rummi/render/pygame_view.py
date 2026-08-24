@@ -30,8 +30,16 @@ from rummi.render.atlas import (
 from rummi.render.view_model import GameView, SlotShape
 
 PAD = 8
-LABEL_W = 24
-TAG_W = 74
+LABEL_W = 22
+TAG_W = 62
+GUTTER_W = LABEL_W + TAG_W
+"""Index and shape/value share a left gutter so tiles can flow rightwards.
+
+A row has to reserve width for the longest possible set (13 for a full run),
+but a typical set is four or five tiles. With the tag right-aligned, that
+reserve appeared as a void in the middle of every row; in a gutter the
+metadata forms a scannable column and the slack falls at the edge, where it
+reads as margin."""
 STATUS_H = 44
 LOG_H = 26
 STRIP_H = 46
@@ -86,7 +94,7 @@ def layout_for(
     """``reserve_bottom`` leaves room below the log for interactive controls."""
     capacity = min(cfg.max_sets, capacity or DEFAULT_CAPACITY)
     rows = -(-capacity // columns)
-    slot_w = LABEL_W + cfg.max_set_len * atlas.tile_w + TAG_W
+    slot_w = GUTTER_W + cfg.max_set_len * atlas.tile_w + PAD
     slot_h = atlas.tile_h + 4
     table_top = STATUS_H
     workbench_top = table_top + rows * slot_h + PAD
@@ -176,7 +184,13 @@ class PygameView:
                 pygame.draw.rect(
                     s, DROP_EDGE if lit else PANEL, rect, width=3 if lit else 1, border_radius=4
                 )
-                self._text(f"{slot.index}", (rect.x + 4, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
+                self._text(f"{slot.index}", (rect.x + 5, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
+                self._text(
+                    "new set" if lit else "",
+                    (rect.x + LABEL_W, rect.y + rect.h // 2 - 8),
+                    DROP_EDGE,
+                    True,
+                )
             return
 
         pygame.draw.rect(s, PANEL, rect, border_radius=4)
@@ -191,17 +205,22 @@ class PygameView:
         elif slot.is_new:
             pygame.draw.rect(s, NEW_EDGE, rect, width=2, border_radius=4)
 
-        self._text(f"{slot.index}", (rect.x + 4, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
+        self._text(f"{slot.index}", (rect.x + 5, rect.y + rect.h // 2 - 8), TEXT_DIM, True)
+
+        tag = SHAPE_TAG[slot.shape]
+        note = f"{tag} {slot.value}" if slot.is_valid else tag.upper()
+        self._text(
+            note,
+            (rect.x + LABEL_W, rect.y + rect.h // 2 - 8),
+            TEXT_DIM if slot.is_valid else INVALID_EDGE,
+            True,
+        )
+
         variant = Variant.NEW if slot.is_new else Variant.NORMAL
         # `shown`, not `tiles`: a joker is drawn in the gap it fills. PICK still
         # indexes the stored order, which is why the two are kept separate.
         for i, kind in enumerate(slot.shown):
-            s.blit(a.surface, (rect.x + LABEL_W + i * a.tile_w, rect.y + 2), a.rect(kind, variant))
-
-        tag = SHAPE_TAG[slot.shape]
-        note = f"{tag} {slot.value}" if slot.is_valid else tag.upper()
-        color = TEXT_DIM if slot.is_valid else INVALID_EDGE
-        self._text(note, (rect.right - TAG_W + 6, rect.y + rect.h // 2 - 8), color, True)
+            s.blit(a.surface, (rect.x + GUTTER_W + i * a.tile_w, rect.y + 2), a.rect(kind, variant))
 
     def _draw_strip(self, label: str, kinds, top: int, variant: Variant, note: str = "") -> None:
         import pygame

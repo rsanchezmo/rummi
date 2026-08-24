@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 440" width="900" height="440" role="img" aria-label="Simulator throughput in env-steps per second, by backend and batch size">
+<style>
+  :root {
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --s1: #2a78d6;
+    --s2: #eb6834;
+    --s3: #1baf7a;
+    --s4: #eda100;
+    --s5: #e87ba4;
+    --s6: #008300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19;
+      --ink: #ffffff;
+      --ink2: #c3c2b7;
+      --muted: #898781;
+      --grid: #2c2c2a;
+      --axis: #383835;
+      --s1: #3987e5;
+      --s2: #d95926;
+      --s3: #199e70;
+      --s4: #c98500;
+      --s5: #d55181;
+      --s6: #008300;
+    }
+  }
+</style>
+<rect width="900" height="440" fill="var(--surface)"/>
+<text x="64.0" y="22.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="15" font-weight="600" fill="var(--ink)" text-anchor="start" dominant-baseline="middle">Simulator throughput</text>
+<text x="64.0" y="40.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="400" fill="var(--muted)" text-anchor="start" dominant-baseline="middle">env-steps per second, standard config · higher is better · arm64 / Darwin</text>
+<line x1="64" y1="356.0" x2="759" y2="356.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="356.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">0</text>
+<line x1="64" y1="295.6" x2="759" y2="295.6" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="295.6" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">80k</text>
+<line x1="64" y1="235.2" x2="759" y2="235.2" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="235.2" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">160k</text>
+<line x1="64" y1="174.8" x2="759" y2="174.8" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="174.8" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">240k</text>
+<line x1="64" y1="114.4" x2="759" y2="114.4" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="114.4" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">320k</text>
+<line x1="64" y1="54.0" x2="759" y2="54.0" stroke="var(--grid)" stroke-width="1"/>
+<text x="54.0" y="54.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="end" dominant-baseline="middle">400k</text>
+<line x1="64" y1="356.0" x2="759" y2="356.0" stroke="var(--axis)" stroke-width="1.5"/>
+<text x="64.0" y="372.0" font-family='ui-monospace,SFMono-Regular,Menlo,Consolas,monospace' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">64</text>
+<text x="237.8" y="372.0" font-family='ui-monospace,SFMono-Regular,Menlo,Consolas,monospace' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">256</text>
+<text x="411.5" y="372.0" font-family='ui-monospace,SFMono-Regular,Menlo,Consolas,monospace' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">1,024</text>
+<text x="585.2" y="372.0" font-family='ui-monospace,SFMono-Regular,Menlo,Consolas,monospace' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">4,096</text>
+<text x="759.0" y="372.0" font-family='ui-monospace,SFMono-Regular,Menlo,Consolas,monospace' font-size="11" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">16,384</text>
+<text x="411.5" y="392.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="400" fill="var(--muted)" text-anchor="middle" dominant-baseline="middle">parallel environments</text>
+<path d="M64.0 311.9 L237.8 306.6 L411.5 305.7 L585.2 305.3 L759.0 305.8" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="311.9" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="306.6" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="305.7" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="305.3" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="305.8" r="4.5" fill="var(--s1)" stroke="var(--surface)" stroke-width="2"/>
+<text x="769.0" y="305.8" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="600" fill="var(--s1)" text-anchor="start" dominant-baseline="middle">numpy</text>
+<path d="M64.0 339.5 L237.8 331.1 L411.5 322.5 L585.2 307.7 L759.0 305.0" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="339.5" r="4.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="331.1" r="4.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="322.5" r="4.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="307.7" r="4.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="305.0" r="4.5" fill="var(--s2)" stroke="var(--surface)" stroke-width="2"/>
+<path d="M64.0 327.9 L237.8 294.1 L411.5 260.4 L585.2 170.9 L759.0 132.8" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="327.9" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="294.1" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="260.4" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="170.9" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="132.8" r="4.5" fill="var(--s3)" stroke="var(--surface)" stroke-width="2"/>
+<text x="769.0" y="132.8" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="600" fill="var(--s3)" text-anchor="start" dominant-baseline="middle">torch-cpu+compile</text>
+<path d="M64.0 341.0 L237.8 293.2 L411.5 213.3 L585.2 168.9 L759.0 165.8" fill="none" stroke="var(--s4)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="341.0" r="4.5" fill="var(--s4)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="293.2" r="4.5" fill="var(--s4)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="213.3" r="4.5" fill="var(--s4)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="168.9" r="4.5" fill="var(--s4)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="165.8" r="4.5" fill="var(--s4)" stroke="var(--surface)" stroke-width="2"/>
+<path d="M64.0 334.2 L237.8 262.8 L411.5 92.8 L585.2 169.0 L759.0 165.9" fill="none" stroke="var(--s5)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="334.2" r="4.5" fill="var(--s5)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="262.8" r="4.5" fill="var(--s5)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="92.8" r="4.5" fill="var(--s5)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="169.0" r="4.5" fill="var(--s5)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="165.9" r="4.5" fill="var(--s5)" stroke="var(--surface)" stroke-width="2"/>
+<text x="769.0" y="165.9" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="600" fill="var(--s5)" text-anchor="start" dominant-baseline="middle">torch-mps+compile</text>
+<path d="M64.0 258.3 L237.8 220.2 L411.5 192.2 L585.2 187.9 L759.0 194.0" fill="none" stroke="var(--s6)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="64.0" cy="258.3" r="4.5" fill="var(--s6)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="237.8" cy="220.2" r="4.5" fill="var(--s6)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="411.5" cy="192.2" r="4.5" fill="var(--s6)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="585.2" cy="187.9" r="4.5" fill="var(--s6)" stroke="var(--surface)" stroke-width="2"/>
+<circle cx="759.0" cy="194.0" r="4.5" fill="var(--s6)" stroke="var(--surface)" stroke-width="2"/>
+<text x="769.0" y="194.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11.5" font-weight="600" fill="var(--s6)" text-anchor="start" dominant-baseline="middle">jax-scan</text>
+<rect x="64" y="417" width="10" height="10" rx="2" fill="var(--s1)"/>
+<text x="79.0" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">numpy</text>
+<rect x="118.0" y="417" width="10" height="10" rx="2" fill="var(--s2)"/>
+<text x="133.0" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">torch-cpu</text>
+<rect x="197.6" y="417" width="10" height="10" rx="2" fill="var(--s3)"/>
+<text x="212.6" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">torch-cpu+compile</text>
+<rect x="328.4" y="417" width="10" height="10" rx="2" fill="var(--s4)"/>
+<text x="343.4" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">torch-mps</text>
+<rect x="408.0" y="417" width="10" height="10" rx="2" fill="var(--s5)"/>
+<text x="423.0" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">torch-mps+compile</text>
+<rect x="538.8" y="417" width="10" height="10" rx="2" fill="var(--s6)"/>
+<text x="553.8" y="422.0" font-family='ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif' font-size="11" font-weight="400" fill="var(--ink2)" text-anchor="start" dominant-baseline="middle">jax-scan</text>
+</svg>

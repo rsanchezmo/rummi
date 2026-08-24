@@ -1,0 +1,248 @@
+{
+  "config": "standard",
+  "n_actions": 2400,
+  "iters": 30,
+  "machine": "arm64 / Darwin",
+  "rows": [
+    {
+      "backend": "numpy",
+      "batch_size": 64,
+      "env_steps_per_sec": 58347.35669948483,
+      "speedup": 1.0
+    },
+    {
+      "backend": "numpy",
+      "batch_size": 256,
+      "env_steps_per_sec": 65374.15103666658,
+      "speedup": 1.0
+    },
+    {
+      "backend": "numpy",
+      "batch_size": 1024,
+      "env_steps_per_sec": 66675.0227489715,
+      "speedup": 1.0
+    },
+    {
+      "backend": "numpy",
+      "batch_size": 4096,
+      "env_steps_per_sec": 67119.78834496804,
+      "speedup": 1.0
+    },
+    {
+      "backend": "numpy",
+      "batch_size": 16384,
+      "env_steps_per_sec": 66499.4791758814,
+      "speedup": 1.0
+    },
+    {
+      "backend": "torch-cpu",
+      "batch_size": 64,
+      "env_steps_per_sec": 21817.14872598309,
+      "speedup": 0.3739183736865962
+    },
+    {
+      "backend": "torch-cpu",
+      "batch_size": 256,
+      "env_steps_per_sec": 32953.75965688655,
+      "speedup": 0.504079351461156
+    },
+    {
+      "backend": "torch-cpu",
+      "batch_size": 1024,
+      "env_steps_per_sec": 44350.993141881,
+      "speedup": 0.6651815224549756
+    },
+    {
+      "backend": "torch-cpu",
+      "batch_size": 4096,
+      "env_steps_per_sec": 64009.96961937634,
+      "speedup": 0.9536676321205229
+    },
+    {
+      "backend": "torch-cpu",
+      "batch_size": 16384,
+      "env_steps_per_sec": 67540.96363666993,
+      "speedup": 1.0156615431232772
+    },
+    {
+      "backend": "torch-mps",
+      "batch_size": 64,
+      "env_steps_per_sec": 19915.772876337476,
+      "speedup": 0.3413311930977898
+    },
+    {
+      "backend": "torch-mps",
+      "batch_size": 256,
+      "env_steps_per_sec": 83158.169713562,
+      "speedup": 1.272034411076648
+    },
+    {
+      "backend": "torch-mps",
+      "batch_size": 1024,
+      "env_steps_per_sec": 188986.45389760073,
+      "speedup": 2.834441536062557
+    },
+    {
+      "backend": "torch-mps",
+      "batch_size": 4096,
+      "env_steps_per_sec": 247751.65523908776,
+      "speedup": 3.6911864793992852
+    },
+    {
+      "backend": "torch-mps",
+      "batch_size": 16384,
+      "env_steps_per_sec": 251914.29249116807,
+      "speedup": 3.7882145185662526
+    },
+    {
+      "backend": "torch-cpu+compile",
+      "batch_size": 64,
+      "env_steps_per_sec": 37157.1850551012,
+      "speedup": 0.6368272216079547
+    },
+    {
+      "backend": "torch-cpu+compile",
+      "batch_size": 256,
+      "env_steps_per_sec": 82026.1965826512,
+      "speedup": 1.254719109646945
+    },
+    {
+      "backend": "torch-cpu+compile",
+      "batch_size": 1024,
+      "env_steps_per_sec": 126586.69019401832,
+      "speedup": 1.8985623847570563
+    },
+    {
+      "backend": "torch-cpu+compile",
+      "batch_size": 4096,
+      "env_steps_per_sec": 245208.58719066143,
+      "speedup": 3.653297980178221
+    },
+    {
+      "backend": "torch-cpu+compile",
+      "batch_size": 16384,
+      "env_steps_per_sec": 295691.2795820694,
+      "speedup": 4.446520232136092
+    },
+    {
+      "backend": "torch-mps+compile",
+      "batch_size": 64,
+      "env_steps_per_sec": 28858.944393826423,
+      "speedup": 0.49460585751061503
+    },
+    {
+      "backend": "torch-mps+compile",
+      "batch_size": 256,
+      "env_steps_per_sec": 123469.52449532223,
+      "speedup": 1.888659700163013
+    },
+    {
+      "backend": "torch-mps+compile",
+      "batch_size": 1024,
+      "env_steps_per_sec": 348646.3493403937,
+      "speedup": 5.229039825798511
+    },
+    {
+      "backend": "torch-mps+compile",
+      "batch_size": 4096,
+      "env_steps_per_sec": 247700.65187571204,
+      "speedup": 3.690426593758503
+    },
+    {
+      "backend": "torch-mps+compile",
+      "batch_size": 16384,
+      "env_steps_per_sec": 251829.73138965224,
+      "speedup": 3.7869429130955963
+    },
+    {
+      "backend": "jax-step",
+      "batch_size": 64,
+      "env_steps_per_sec": 120684.82605027212,
+      "speedup": 2.068385491254614
+    },
+    {
+      "backend": "jax-step",
+      "batch_size": 256,
+      "env_steps_per_sec": 184507.46104004566,
+      "speedup": 2.822330510059862
+    },
+    {
+      "backend": "jax-step",
+      "batch_size": 1024,
+      "env_steps_per_sec": 214465.54460259245,
+      "speedup": 3.2165799989307193
+    },
+    {
+      "backend": "jax-step",
+      "batch_size": 4096,
+      "env_steps_per_sec": 214220.61952082952,
+      "speedup": 3.191616433887185
+    },
+    {
+      "backend": "jax-step",
+      "batch_size": 16384,
+      "env_steps_per_sec": 211132.07444901366,
+      "speedup": 3.17494327873757
+    },
+    {
+      "backend": "jax-fused",
+      "batch_size": 64,
+      "env_steps_per_sec": 124444.35111563485,
+      "speedup": 2.132819002522759
+    },
+    {
+      "backend": "jax-fused",
+      "batch_size": 256,
+      "env_steps_per_sec": 175278.60511149102,
+      "speedup": 2.68116070850667
+    },
+    {
+      "backend": "jax-fused",
+      "batch_size": 1024,
+      "env_steps_per_sec": 211257.98041843734,
+      "speedup": 3.1684725660134267
+    },
+    {
+      "backend": "jax-fused",
+      "batch_size": 4096,
+      "env_steps_per_sec": 214623.63685113576,
+      "speedup": 3.197620882653246
+    },
+    {
+      "backend": "jax-fused",
+      "batch_size": 16384,
+      "env_steps_per_sec": 204459.79100500568,
+      "speedup": 3.0746074035292734
+    },
+    {
+      "backend": "jax-scan",
+      "batch_size": 64,
+      "env_steps_per_sec": 129365.15597454607,
+      "speedup": 2.217155382733701
+    },
+    {
+      "backend": "jax-scan",
+      "batch_size": 256,
+      "env_steps_per_sec": 179880.54808847498,
+      "speedup": 2.7515546318541846
+    },
+    {
+      "backend": "jax-scan",
+      "batch_size": 1024,
+      "env_steps_per_sec": 216896.30703859762,
+      "speedup": 3.2530368659220796
+    },
+    {
+      "backend": "jax-scan",
+      "batch_size": 4096,
+      "env_steps_per_sec": 222672.09548208598,
+      "speedup": 3.317532742171999
+    },
+    {
+      "backend": "jax-scan",
+      "batch_size": 16384,
+      "env_steps_per_sec": 214608.31143797768,
+      "speedup": 3.227217928585126
+    }
+  ]
+}

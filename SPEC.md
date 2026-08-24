@@ -166,36 +166,40 @@ Truncation pays nothing — it is an artificial cutoff, not a result.
 
 ## 8. Conformance status
 
-| backend | state | env-steps/s | vs NumPy |
-|---|---|---:|---:|
-| NumPy (`rummi/env/numpy/`) | reference | 64k | 1.0x |
-| torch CPU | conformant | 65k | 1.0x |
-| torch CPU + `compile` | conformant | 257k | 4.0x |
-| torch MPS | conformant | 223k | 3.5x |
-| torch MPS + `compile` | conformant | **537k** | **8.5x** |
-| JAX CPU (`jit` per call) | conformant | 194k | 3.1x |
-| JAX CPU (fused) | conformant | 197k | 3.1x |
-| JAX CPU (`lax.scan`) | conformant | 203k | 3.2x |
+| backend | state | peak env-steps/s | vs NumPy | at batch |
+|---|---|---:|---:|---:|
+| NumPy (`rummi/env/numpy/`) | reference | 67k | 1.0x | 4,096 |
+| torch CPU | conformant | 68k | 1.0x | 16,384 |
+| torch CPU + `compile` | conformant | 296k | 4.4x | 16,384 |
+| torch MPS | conformant | 252k | 3.8x | 16,384 |
+| torch MPS + `compile` | conformant | **349k** | **5.2x** | 1,024 |
+| JAX CPU (`lax.scan`) | conformant | 223k | 3.3x | 4,096 |
 
-Standard config, `A=2400`, `B=16384`, action choice held to the cheapest possible
-so the figure measures the simulator. Reproduce with
-`python -m rummi.bench.bench_backends --compile`.
+Standard config, `A=2400`, best of three, action choice held to the cheapest
+possible so the figure measures the simulator. Data in `docs/data/backends.json`;
+reproduce with `python -m rummi.bench.bench_backends --compile --json …`.
 
-Read this carefully rather than off the top row:
+**How this is measured matters more than the numbers.** The state advances while
+it is being timed and the table fills as it goes, so the work per step is not
+constant across a run. Every timed repeat therefore builds a fresh state and
+advances it to the same point before the clock starts, with compilation warmed
+outside the timed region. Reusing one state across repeats measures a later phase
+of the game each time; an earlier version of this table did exactly that and
+overstated the MPS figure by roughly a factor of two.
 
-* **Both accelerated backends land at 3–4x on CPU.** Torch and JAX agree closely
-  once XLA and Inductor are both allowed to fuse, which is a good sign that 3–4x
-  is the real headroom over NumPy for this workload rather than an artefact.
-* **The 8.5x is a GPU result, not a framework result.** It is torch on Metal.
-  JAX has no production Metal backend, so on this machine it cannot be compared
-  on equal hardware; on a CUDA box the JAX figure is the one to re-measure.
-* **Fusion is what matters, not the framework.** Uncompiled torch CPU is exactly
-  at NumPy parity. JAX is ahead of torch at small batches (2.6x vs 1.2x at
-  `B=256`) because XLA fuses without needing a warm Inductor cache.
-* **`lax.scan` buys almost nothing here** (3.2x vs 3.1x fused): the per-step work
-  already dominates, so removing the Python loop is not the bottleneck.
-* NumPy is effectively single-threaded for these ops while torch has 12 threads
-  and XLA uses all cores, so this is a throughput comparison, not a per-core one.
+Read the shape rather than the top row:
+
+* **Fusion is the story, not the framework.** Uncompiled torch CPU sits exactly
+  on the NumPy line; compiled it is 4.4x.
+* **The GPU wins in the middle and gives it back.** MPS peaks near a thousand
+  environments and is overtaken by compiled CPU at sixteen thousand — past a few
+  thousand envs this stops being compute-bound.
+* **Both frameworks agree on CPU** (4.4x, 3.3x), which is decent evidence that
+  3–4x is the real headroom over NumPy.
+* **JAX leads at small batch** (2.2x at 64 envs) and is flattest thereafter.
+  `lax.scan` buys almost nothing over a fused step.
+* JAX is CPU-only here — no production Metal backend — so it cannot be compared
+  against MPS on equal hardware. Re-measure on CUDA.
 
 ## 9. Port notes
 

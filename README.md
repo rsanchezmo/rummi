@@ -62,6 +62,8 @@ Three strengths, all playable out of the box and all usable as opponents in your
 own training loop. Scored here on the `standard-greedy` suite over 120 mirrored
 games; `score` is official Rummikub scoring from the agent's side.
 
+![Agent win rate and stalemate rate, weakest to strongest](docs/charts/agents.svg)
+
 | agent | win rate | score | turns | rack left | stalemates |
 |---|---:|---:|---:|---:|---:|
 | `random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
@@ -176,22 +178,40 @@ against a shared abstraction, so a comparison measures implementations and not
 the cost of a common layer. `rummi.env.api` reconciles them at the boundary,
 so they are swappable by name.
 
-| backend | env-steps/s | vs NumPy |
-|---|---:|---:|
-| NumPy (reference) | 64k | 1.0x |
-| torch CPU | 65k | 1.0x |
-| torch CPU + `compile` | 257k | 4.0x |
-| torch MPS | 223k | 3.5x |
-| torch MPS + `compile` | **537k** | **8.5x** |
-| JAX CPU (`lax.scan`) | 203k | 3.2x |
+![Simulator throughput by backend and batch size](docs/charts/throughput.svg)
 
-Standard config, `B=16384`, cheapest possible action choice so the figure is the
-environment rather than a policy. Two caveats worth more than the top row: the 8.5x is a **GPU** result
-(torch on Metal; JAX has no production Metal backend, so it cannot be compared on
-equal hardware here), and both frameworks land at 3–4x on CPU — two independent
-implementations agreeing is good evidence that 3–4x is the real headroom over
-NumPy, not a tuning artefact. Uncompiled torch is exactly at NumPy parity, so
-fusion is the whole story.
+| backend | peak env-steps/s | vs NumPy | at batch |
+|---|---:|---:|---:|
+| NumPy (reference) | 67k | 1.0x | 4,096 |
+| torch CPU | 68k | 1.0x | 16,384 |
+| torch CPU + `compile` | 296k | 4.4x | 16,384 |
+| torch MPS | 252k | 3.8x | 16,384 |
+| torch MPS + `compile` | **349k** | **5.2x** | 1,024 |
+| JAX (`lax.scan`) | 223k | 3.3x | 4,096 |
+
+Standard config, best of three, with the action choice held to the cheapest
+possible so the figure measures the environment and not a policy. Numbers from
+`docs/data/backends.json`; regenerate with
+`python -m rummi.bench.bench_backends --compile --json docs/data/backends.json`.
+
+Read the shape of the curves rather than the top row:
+
+- **Fusion is the whole story, not the framework.** Uncompiled torch CPU sits
+  exactly on the NumPy line until `compile` fuses it, then it is 4.4x.
+- **The GPU wins in the middle and gives it back.** `torch-mps+compile` peaks at
+  349k around a thousand environments and settles near 250k at sixteen thousand,
+  where `torch-cpu+compile` overtakes it at 296k. Past a few thousand envs this
+  workload stops being compute-bound.
+- **Both frameworks agree on CPU** (4.4x and 3.3x). Two implementations written
+  independently landing in the same band is decent evidence that 3–4x is the real
+  headroom over NumPy rather than a tuning artefact.
+- **JAX is fastest at small batch** — 2.2x at 64 envs, where torch is still
+  paying fixed per-call costs — and flattest thereafter. `lax.scan` buys almost
+  nothing over the fused version: the per-step work already dominates, so the
+  Python loop was never the bottleneck.
+
+JAX here is CPU-only; it has no production Metal backend, so it cannot be
+compared against MPS on equal hardware. On a CUDA box, re-measure.
 
 Conformance is not assumed. Every backend replays recorded trajectories and must
 reproduce 42 state digests per config, and masks and rewards are compared against
