@@ -25,6 +25,16 @@ HIDDEN: tuple[int, ...] = (256, 256)
 class Architecture:
     hidden: tuple[int, ...] = HIDDEN
     activation: str = "relu"
+    head: str = "flat"
+    """`flat` or `bilinear`.
+
+    Flat is 2400 independent logits. But `ASSIGN(kind, slot)` and `PICK(slot, pos)`
+    are 96% of the action space and both are row-major over two indices, so a flat
+    head has to learn "kind k fits slot s" as 1855 unrelated weights. `bilinear`
+    scores each pair as a dot product of a kind representation and a slot
+    representation, so what it learns about one pair transfers to the others.
+    """
+    head_dim: int = 16
     """`relu` or `tanh`. The trunk gain below is `sqrt(2)`, which is the *ReLU*
     gain -- pairing it with `tanh` (as an earlier default did) drives a deep trunk
     towards saturation."""
@@ -41,7 +51,11 @@ class Architecture:
 
 def param_names(arch: Architecture) -> list[str]:
     names = [f"{p}{i}" for i in range(len(arch.hidden)) for p in ("w", "b")]
-    return [*names, "w_pi", "b_pi", "w_v", "b_v"]
+    if arch.head == "bilinear":
+        head = [f"{p}_{n}" for n in ("kind", "slot", "pos", "flat") for p in ("w", "b")]
+    else:
+        head = ["w_pi", "b_pi"]
+    return [*names, *head, "w_v", "b_v"]
 
 
 def init_params(
@@ -65,8 +79,23 @@ def init_params(
         params[f"b{i}"] = np.zeros(fan_out, dtype=np.float32)
 
     last = arch.hidden[-1]
-    params["w_pi"] = _orthogonal(rng, last, cfg.n_actions, 0.01)
-    params["b_pi"] = np.zeros(cfg.n_actions, dtype=np.float32)
+    if arch.head == "bilinear":
+        d = arch.head_dim
+        # Small gains for the same reason the flat head uses 0.01: a bilinear score
+        # is a product of two of these, so each wants to start smaller still.
+        for name, rows in (
+            ("kind", cfg.n_kinds), ("slot", cfg.max_sets), ("pos", cfg.max_set_len)
+        ):
+            params[f"w_{name}"] = _orthogonal(rng, last, rows * d, 0.1)
+            params[f"b_{name}"] = np.zeros(rows * d, dtype=np.float32)
+        # PLACE, DISSOLVE, END_TURN and DRAW stay flat -- 4% of the space, and
+        # neither PLACE(kind) nor DISSOLVE(slot) has a second index to factor over.
+        flat = cfg.n_kinds + cfg.max_sets + 2
+        params["w_flat"] = _orthogonal(rng, last, flat, 0.01)
+        params["b_flat"] = np.zeros(flat, dtype=np.float32)
+    else:
+        params["w_pi"] = _orthogonal(rng, last, cfg.n_actions, 0.01)
+        params["b_pi"] = np.zeros(cfg.n_actions, dtype=np.float32)
     params["w_v"] = _orthogonal(rng, last, 1, 1.0)
     params["b_v"] = np.zeros(1, dtype=np.float32)
 

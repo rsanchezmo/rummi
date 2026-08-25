@@ -126,8 +126,10 @@ def collect(net, env, cfg: RummiConfig, teacher, samples: int, beta: float, gamm
     """
     import torch
 
-    from rummi.agents.base import act_on_state
+    from rummi.agents.base import PlanningAgent, act_on_state, oracle_actions
+    from rummi.env.observation import encode
 
+    replans = isinstance(teacher, PlanningAgent)
     rng = np.random.default_rng(0)
     obs, info = env.reset()
     feats, packed, acts, rewards, dones = [], [], [], [], []
@@ -136,7 +138,13 @@ def collect(net, env, cfg: RummiConfig, teacher, samples: int, beta: float, gamm
 
     while gathered < samples:
         mask = np.asarray(info["action_mask"])
-        wanted = np.asarray(act_on_state(teacher, env.state, mask))
+        # A planning teacher must replan at every state, or off-plan queries come
+        # back as DRAW -- 76% of them, measured. See `oracle_actions`.
+        wanted = (
+            oracle_actions(teacher, encode(env.state), mask)
+            if replans
+            else np.asarray(act_on_state(teacher, env.state, mask))
+        )
         obs_t = {k: torch.as_tensor(np.asarray(v)) for k, v in obs.items()}
         with torch.no_grad():
             x = net.features(obs_t)

@@ -119,6 +119,33 @@ def act_by_seat(
     return actions, illegal_attempts
 
 
+def oracle_actions(agent: PlanningAgent, obs: Observation, mask: np.ndarray) -> np.ndarray:
+    """What would ``agent`` do *from this state*, with no cached plan.
+
+    :meth:`PlanningAgent.act` deliberately replans only at a turn boundary and
+    replays the plan in between -- correct when that agent is the one playing, and
+    wrong when it is being asked for a label. DAgger queries states the *student*
+    steered into, where a plan made for a different state is stale, and a stale plan
+    that hits a masked action falls back to ``DRAW``.
+
+    Measured, that is not a small effect: with the student driving, **76% of the
+    labels came back ``DRAW``** against 26% with the teacher driving. Training on
+    those teaches the student to draw and pass, which is what it learned.
+
+    So: replan every state and take the first action. It costs a plan per step
+    instead of one per turn -- about 2.7x more on the standard config -- and it is
+    the difference between an oracle and an echo.
+    """
+    cfg = agent.cfg
+    n = mask.shape[0]
+    out = np.full(n, cfg.draw_action, dtype=np.int64)
+    for env in range(n):
+        plan = agent.plan(obs, env)
+        if plan and mask[env, plan[0]]:
+            out[env] = plan[0]
+    return out
+
+
 def turn_starting(obs: Observation) -> np.ndarray:
     """``(n_envs,)`` true where a fresh turn is about to begin."""
     return obs["scalars"][:, MICRO_COUNT] == 0
