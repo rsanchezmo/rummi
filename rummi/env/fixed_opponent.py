@@ -74,9 +74,7 @@ class FixedOpponentEnv(RummiVectorEnv):
         if just_reset.any():
             self._reset_seats()
 
-        result = self._advance(
-            actions, active=~just_reset & ~self.state.done, mask=self._mask
-        )
+        result = self._advance(actions, active=~just_reset & ~self.state.done)
         rewards_all = result.rewards + self._run_opponents()
 
         # Read the flags off the state rather than off the first advance: the
@@ -120,7 +118,7 @@ class FixedOpponentEnv(RummiVectorEnv):
                 return total
             actions, illegal = act_by_seat(self._seats, self.state, self._mask)
             self._illegal += illegal
-            total += self._advance(actions, active=waiting, mask=self._mask).rewards
+            total += self._advance(actions, active=waiting).rewards
 
         raise RuntimeError(
             f"seat {self.learner_seat} did not get control back within {budget} "

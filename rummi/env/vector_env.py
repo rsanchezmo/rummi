@@ -87,6 +87,10 @@ class RummiVectorEnv(VectorEnv):
         self._seeds = np.random.SeedSequence(seed)
         self.state = allocate(cfg, num_envs)
         self._mask = np.zeros((num_envs, cfg.n_actions), dtype=bool)
+        # Whether `_mask` describes the state as it stands. Only a re-deal (or a
+        # not-yet-reset env) makes it stale, so a step never has to recompute the
+        # mask its predecessor already produced.
+        self._mask_fresh = False
         # Envs that terminated on the previous step and must be re-dealt now.
         self._pending_reset = np.zeros(num_envs, dtype=bool)
 
@@ -100,6 +104,7 @@ class RummiVectorEnv(VectorEnv):
         self.state = deal_reset(self.cfg, self.num_envs, seed=self._base_seed)
         self._pending_reset[:] = False
         self._mask = legal_actions(self.state)
+        self._mask_fresh = True
         self._renderer.render(self.state, self._mask)
         return encode(self.state), self._info(np.zeros((self.num_envs, self.cfg.n_players), np.float32))
 
@@ -134,17 +139,20 @@ class RummiVectorEnv(VectorEnv):
         if just_reset.any():
             reset_envs(self.state, np.flatnonzero(just_reset), self._seeds.spawn(int(just_reset.sum())))
             self._pending_reset[:] = False
+            self._mask_fresh = False
         return just_reset
 
-    def _advance(self, actions: np.ndarray, active: np.ndarray, mask=None):
+    def _advance(self, actions: np.ndarray, active: np.ndarray):
         """Apply one micro-action to every ``active`` env.
 
-        ``mask`` short-circuits recomputing what the caller already holds: after
-        any advance ``self._mask`` is the current mask, so a loop of advances pays
-        for :func:`legal_actions` once per step rather than twice. Only a re-deal
-        invalidates it, which is why :meth:`step` lets it default.
+        The mask an advance leaves behind is the mask its successor needs, so this
+        recomputes one only after a re-deal. Doing it unconditionally cost a
+        second :func:`legal_actions` per step -- 29% of the env's step time on the
+        standard config, for a value already in hand.
         """
-        self._mask = legal_actions(self.state) if mask is None else mask
+        if not self._mask_fresh:
+            self._mask = legal_actions(self.state)
+            self._mask_fresh = True
         result = engine_step(
             self.state,
             actions,

@@ -219,3 +219,23 @@ def test_make_rejects_the_ids_because_there_is_no_single_env():
 
     with pytest.raises(gym.error.Error):
         gym.make("Rummi-2p-v0")
+
+
+def test_the_reused_mask_always_matches_a_freshly_computed_one():
+    """`step` hands on the mask its predecessor produced rather than recomputing
+    it, which is only sound while the two are identical -- including on the step
+    after an autoreset re-deals, the one case that invalidates it."""
+    from rummi.env.numpy.masks import legal_actions
+
+    env = RummiVectorEnv(num_envs=6, cfg=C, seed=11)
+    rng = np.random.default_rng(0)
+    obs, info = env.reset()
+    np.testing.assert_array_equal(info["action_mask"], legal_actions(env.state))
+
+    resets_seen = 0
+    for _ in range(700):
+        obs, r, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+        np.testing.assert_array_equal(info["action_mask"], legal_actions(env.state))
+        resets_seen += int((term | trunc).sum())
+    assert resets_seen, "no episode ended, so the re-deal path was never exercised"
+    env.close()
