@@ -22,6 +22,15 @@ score by design, which is why it is off by default.
 *The opponent is not the environment.* `FixedOpponentEnv` runs the other seats
 inside one `step`, so every observation is a position the learner can act in and
 the reward already covers the replies.
+
+*On `standard`, `--bc-updates` is not optional.* Forming the first valid set needs
+three compatible tiles PLACEd and then ASSIGNed to the same slot, out of 1855
+ASSIGN variants. Measured: uniform-random play reaches `END_TURN` **zero** times in
+192k steps, at any `initial_meld` including 0 -- the barrier is set formation, not
+the 30-point threshold. PPO explores no better than random until it melds once, so
+without a teacher it never sees a reward that distinguishes any action from any
+other, and lands exactly on the score of passing every turn. Cloning `greedy`
+first is what gets it over the wall.
 """
 
 from __future__ import annotations
@@ -58,6 +67,69 @@ def shaped(cfg: RummiConfig) -> RummiConfig:
     return dataclasses.replace(cfg, tiles_placed_bonus=0.01, rack_value_delta=0.002)
 
 
+def clone_greedy(
+    net,
+    env,
+    cfg: RummiConfig,
+    updates: int,
+    lr: float,
+    seed: int,
+) -> None:
+    """Behaviour cloning from `greedy`, on `greedy`'s own state distribution.
+
+    The teacher drives, so the states visited are ones a competent player reaches
+    -- which is the point, since the learner cannot reach them itself. Loss is
+    cross-entropy on the *masked* logits, so the model never spends capacity
+    learning that 98.5% of the action space is unavailable.
+    """
+    import torch
+
+    from rummi.agents import build
+    from rummi.agents.base import act_on_state
+    from rummi.agents.learned.torch_net import log_prob
+
+    teacher = build("greedy", cfg)
+    teacher.reset(env.num_envs)
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    obs, info = env.reset()
+
+    for update in range(1, updates + 1):
+        batch_obs, batch_mask, batch_act = [], [], []
+        for _ in range(64):
+            mask = np.asarray(info["action_mask"])
+            wanted = np.asarray(act_on_state(teacher, env.state, mask))
+            batch_obs.append({k: np.asarray(v).copy() for k, v in obs.items()})
+            batch_mask.append(mask.copy())
+            batch_act.append(wanted.copy())
+            obs, _, _, _, info = env.step(wanted)
+
+        obs_t = {
+            k: torch.as_tensor(np.concatenate([b[k] for b in batch_obs]))
+            for k in batch_obs[0]
+        }
+        mask_t = torch.as_tensor(np.concatenate(batch_mask))
+        act_t = torch.as_tensor(np.concatenate(batch_act)).long()
+
+        logits, _ = net(obs_t, mask_t)
+        loss = -log_prob(logits, act_t).mean()
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+        opt.step()
+
+        with torch.no_grad():
+            agree = (logits.argmax(-1) == act_t).float().mean().item()
+        if update % max(1, updates // 10) == 0 or update == 1:
+            print(
+                f"  clone {update:>4}/{updates}  nll {loss.detach().item():>7.4f}  "
+                f"agrees with greedy {agree:>6.1%}",
+                flush=True,
+            )
+
+    # The teacher drove, so the env is mid-game in states PPO should not inherit.
+    env.reset()
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="tiny_groups")
@@ -68,6 +140,10 @@ def main() -> None:
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--shaping", action="store_true", help="turn on the per-step reward terms")
+    p.add_argument(
+        "--bc-updates", type=int, default=0,
+        help="clone greedy for this many updates before PPO; required on standard",
+    )
     p.add_argument("--out", type=pathlib.Path, default=None, help="save weights here")
     p.add_argument("--eval-games", type=int, default=0, help="score through the frozen protocol")
     args = p.parse_args()
@@ -99,12 +175,23 @@ def main() -> None:
         f"envs={hyper.envs} horizon={hyper.horizon} params="
         f"{sum(v.numel() for v in net.parameters()):,}"
     )
+    if args.bc_updates:
+        print(f"cloning {args.opponent} for {args.bc_updates} updates first")
+        clone_greedy(net, env, cfg, args.bc_updates, hyper.lr, args.seed)
+        obs, info = env.reset()
+
     started = time.perf_counter()
     # Wins come from `info["winner"]`, not from the sign of the reward. Under
     # `--shaping` a losing episode can still end on a positive reward, so
     # `reward > 0` is not a win rate -- it silently becomes one only when the
     # shaping terms are zero.
     wins_seen: list[bool] = []
+    # The diagnostics that matter before a win rate does. Under
+    # `strict_initial_meld` a seat that has not opened cannot END_TURN at all --
+    # DRAW is its only way to end a turn -- so "did it ever meld" is the real
+    # question on the standard config, and a flat win rate hides it completely.
+    melded_frac = 0.0
+    end_turn_frac = 0.0
 
     for update in range(1, args.updates + 1):
         # --- rollout ---------------------------------------------------------
@@ -115,6 +202,7 @@ def main() -> None:
         b_val = torch.zeros((hyper.horizon, hyper.envs))
         b_rew = torch.zeros((hyper.horizon, hyper.envs))
         b_done = torch.zeros((hyper.horizon, hyper.envs))
+        melded_frac = end_turn_frac = 0.0
 
         for t in range(hyper.horizon):
             obs_t = {k: torch.as_tensor(np.asarray(v)) for k, v in obs.items()}
@@ -123,6 +211,11 @@ def main() -> None:
                 logits, value = net(obs_t, mask_t)
                 action = sample(logits, generator)
                 logp = log_prob(logits, action)
+
+            melded_frac += float(np.asarray(obs["melded"])[:, 0].mean()) / hyper.horizon
+            end_turn_frac += float(
+                (action.numpy() == cfg.end_turn_action).mean()
+            ) / hyper.horizon
 
             for k, v in obs_t.items():
                 b_obs[k][t] = v.to(b_obs[k].dtype)
@@ -200,10 +293,12 @@ def main() -> None:
         print(
             f"update {update:>4}  steps {steps:>9,}  "
             f"finished {len(wins_seen):>5}  win {win_rate:>6.1%}  "
+            f"melded {melded_frac:>6.1%}  end_turn {end_turn_frac:>6.2%}  "
             f"pi {last_stats[0]:>+8.4f}  v {last_stats[1]:>8.4f}  H {last_stats[2]:>6.3f}  "
             f"{steps / (time.perf_counter() - started):>7.0f} steps/s",
             flush=True,
         )
+        melded_frac = end_turn_frac = 0.0
 
     env.close()
 
