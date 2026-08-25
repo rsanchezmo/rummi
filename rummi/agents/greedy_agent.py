@@ -48,6 +48,28 @@ def _appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.nda
     return grown_valid & base.is_valid[:, None] & has_room[:, None] & np.asarray(rack > 0)[None, :]
 
 
+def _appendable_row(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray, slot: int) -> np.ndarray:
+    """`(K,)` -- :func:`_appendable` for one slot.
+
+    Appending a tile changes that slot's row and nothing else, so the planning loop
+    refreshes one row instead of all `S`. On the standard config that is 53 grown
+    variants to evaluate per iteration rather than 1855, and `slot_stats` over the
+    grown table was 75% of the agent's remaining runtime.
+    """
+    k = cfg.n_kinds
+    row = table[slot : slot + 1]
+    base = evaluate_slots(cfg, row)
+    has_room = bool(np.asarray((row < 0).any(-1))[0])
+    if not has_room or not bool(np.asarray(base.is_valid)[0]):
+        return np.zeros(k, dtype=bool)
+
+    pos = int(np.argmax(row[0] < 0))
+    grown = np.repeat(row[:, None, :], k, axis=1)
+    grown[0, np.arange(k), pos] = np.arange(k, dtype=np.int16)
+    grown_valid = np.asarray(evaluate_slots(cfg, grown).is_valid)[0]
+    return grown_valid & np.asarray(rack > 0)
+
+
 def _realise(cfg: RummiConfig, counts: np.ndarray, rack: np.ndarray) -> list[int] | None:
     """Tile list for a candidate, substituting jokers for whatever is missing."""
     missing = np.maximum(0, counts - rack)
@@ -65,20 +87,41 @@ def _realise(cfg: RummiConfig, counts: np.ndarray, rack: np.ndarray) -> list[int
 def _best_new_set(
     cfg: RummiConfig, rack: np.ndarray, by_value: bool
 ) -> tuple[list[int], int] | None:
-    """Highest-scoring set formable from ``rack`` alone, or ``None``."""
+    """Highest-scoring set formable from ``rack`` alone, or ``None``.
+
+    Ranked across every candidate at once, then realised only for the winner.
+    The loop this replaces called :func:`_realise` per candidate -- 329 of them on
+    the standard config -- and profiling put 643k of those calls, each a handful of
+    tiny NumPy reductions, at 60% of the whole agent's runtime.
+
+    Two facts make the vectorised form exact rather than approximate. A realised
+    candidate always has `counts.sum()` tiles (a missing tile becomes a joker, so
+    the count is unchanged), which is precomputed as `cand.length`; and feasibility
+    is just "the shortfall fits in the jokers held", which is one matrix op.
+    """
     cand = candidates(cfg)
-    best: tuple[list[int], int] | None = None
-    best_key = (-1, -1)
-    for i in range(len(cand)):
-        tiles = _realise(cfg, cand.counts[i], rack)
-        if tiles is None:
-            continue
-        value = int(cand.value[i])
-        # Melding needs points; afterwards, shedding tiles is what wins.
-        key = (value, len(tiles)) if by_value else (len(tiles), value)
-        if key > best_key:
-            best_key, best = key, (tiles, value)
-    return best
+    counts = cand.counts.astype(np.int64)
+
+    shortfall = np.maximum(0, counts - rack[None, :].astype(np.int64)).sum(-1)
+    feasible = shortfall <= int(rack[cfg.joker_kind])
+    if not feasible.any():
+        return None
+
+    length = cand.length.astype(np.int64)
+    value = cand.value.astype(np.int64)
+    # Melding needs points; afterwards, shedding tiles is what wins. Packed into
+    # one integer so `argmax` does the lexicographic comparison -- and `argmax`
+    # returns the *first* maximum, which is what the strict `>` in the previous
+    # loop over ascending indices did.
+    if by_value:
+        key = value * (int(length.max()) + 1) + length
+    else:
+        key = length * (int(value.max()) + 1) + value
+
+    best = int(np.argmax(np.where(feasible, key, -1)))
+    tiles = _realise(cfg, cand.counts[best], rack)
+    assert tiles is not None, "the feasibility test and _realise disagree"
+    return tiles, int(cand.value[best])
 
 
 def plan_turn(
@@ -92,8 +135,10 @@ def plan_turn(
 
     if has_melded:
         offload = _offload_values(cfg)
+        # Computed in full once, then refreshed a row at a time: an append touches
+        # the slot it landed in, and the kind's column only if the rack ran out.
+        allowed = _appendable(cfg, table, rack)
         while True:
-            allowed = _appendable(cfg, table, rack)
             if not allowed.any():
                 break
             # Shed the most expensive tile available.
@@ -106,6 +151,10 @@ def plan_turn(
             rack[kind] -= 1
             lengths[slot] += 1
             placements.append((kind, slot))
+
+            allowed[slot] = _appendable_row(cfg, table, rack, slot)
+            if rack[kind] <= 0:
+                allowed[:, kind] = False
 
     empty = [i for i in range(cfg.max_sets) if lengths[i] == 0]
     meld_total = 0
