@@ -36,6 +36,22 @@ Only a vector entry point is registered, so `gym.make` fails by design: a batch
 of one is not a single-agent env. `RummiVectorEnv` is importable directly from
 `rummi.env.vector_env` when you want to pass a `cfg` of your own.
 
+That env is **self-play**: one policy plays every seat. To hold one seat and let
+the bundled agents play the rest:
+
+```python
+from rummi.env.fixed_opponent import FixedOpponentEnv
+from rummi.rules.config import STANDARD_4P
+
+env = FixedOpponentEnv(num_envs=256, cfg=STANDARD_4P, opponent="greedy")
+obs, info = env.reset()      # obs is always a position your seat can act in
+```
+
+One `step` is your micro-action plus however many the other seats need to hand
+control back, so reward covers their replies rather than arriving on a step you
+could not act on. `opponent="optimal"` costs a CP-SAT solve per opponent turn per
+env and cannot batch — that one is for evaluation, not training.
+
 One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
 single shared policy play self-play without learning two conventions.

@@ -105,25 +105,9 @@ class RummiVectorEnv(VectorEnv):
         return encode(self.state), self._info(np.zeros((self.num_envs, self.cfg.n_players), np.float32))
 
     def step(self, actions):
-        actions = np.asarray(actions, dtype=np.int64)
-        if actions.shape != (self.num_envs,):
-            raise ValueError(f"expected {(self.num_envs,)} actions, got {actions.shape}")
-
-        # Next-step autoreset: re-deal whatever finished last step, then hold
-        # those envs out of this step so the action supplied for them is
-        # discarded rather than played on the fresh episode.
-        just_reset = self._pending_reset.copy()
-        if just_reset.any():
-            reset_envs(self.state, np.flatnonzero(just_reset), self._seeds.spawn(int(just_reset.sum())))
-            self._pending_reset[:] = False
-
-        self._mask = legal_actions(self.state)
-        result = engine_step(
-            self.state,
-            actions,
-            self._mask if self.validate_actions else None,
-            active=~just_reset,
-        )
+        actions = self._check_actions(actions)
+        just_reset = self._autoreset()
+        result = self._advance(actions, active=~just_reset)
 
         rewards_all = result.rewards
         acting = (self.state.current - 1) % self.cfg.n_players
@@ -132,10 +116,45 @@ class RummiVectorEnv(VectorEnv):
         terminated = result.terminated.copy()
         truncated = result.truncated.copy()
         self._pending_reset = terminated | truncated
+        return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
 
+    # --- pieces a subclass drives differently --------------------------------
+    def _check_actions(self, actions) -> np.ndarray:
+        actions = np.asarray(actions, dtype=np.int64)
+        if actions.shape != (self.num_envs,):
+            raise ValueError(f"expected {(self.num_envs,)} actions, got {actions.shape}")
+        return actions
+
+    def _autoreset(self) -> np.ndarray:
+        """Re-deal whatever finished last step; returns which envs those were.
+
+        Next-step autoreset: the caller then holds those envs out of this step, so
+        the action supplied alongside a fresh deal is discarded rather than played.
+        """
+        just_reset = self._pending_reset.copy()
+        if just_reset.any():
+            reset_envs(self.state, np.flatnonzero(just_reset), self._seeds.spawn(int(just_reset.sum())))
+            self._pending_reset[:] = False
+        return just_reset
+
+    def _advance(self, actions: np.ndarray, active: np.ndarray, mask=None):
+        """Apply one micro-action to every ``active`` env.
+
+        ``mask`` short-circuits recomputing what the caller already holds: after
+        any advance ``self._mask`` is the current mask, so a loop of advances pays
+        for :func:`legal_actions` once per step rather than twice. Only a re-deal
+        invalidates it, which is why :meth:`step` lets it default.
+        """
+        self._mask = legal_actions(self.state) if mask is None else mask
+        result = engine_step(
+            self.state,
+            actions,
+            self._mask if self.validate_actions else None,
+            active=active,
+        )
         self._mask = legal_actions(self.state)
         self._renderer.render(self.state, self._mask)
-        return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
+        return result
 
     def render(self):
         """Always draws, ignoring the throttle: an explicit call wants a frame.

@@ -83,6 +83,14 @@ Only `vector_entry_point` is registered. `gym.make` failing is the intended
 behaviour: there is no single-env implementation, and wrapping a batch of one
 would hide that.
 
+`FixedOpponentEnv` is a **subclass, not a wrapper**, and that is not a style
+choice. An opponent's whole turn must run inside one `step`, but the base env
+re-deals a finished episode on the *following* step -- driving it from outside
+would start a fresh deal partway through and the learner would never see the
+terminal observation. Owning the autoreset boundary is the whole difference,
+which is why `step` is decomposed into `_check_actions` / `_autoreset` /
+`_advance` for it to recombine.
+
 ## One way to write an agent
 
 `rummi/agents/` is it — there is no parallel "policies" concept any more, and the
