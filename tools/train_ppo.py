@@ -173,6 +173,12 @@ def main() -> None:
     )
     p.add_argument("--clone-states", type=int, default=50_000)
     p.add_argument("--clone-epochs", type=int, default=20)
+    p.add_argument(
+        "--hidden", default="256,256",
+        help="trunk widths, comma separated. The default is small: at 570 inputs "
+             "and 2400 actions, 74%% of a (256,256) net is the output projection.",
+    )
+    p.add_argument("--activation", default="relu", choices=["relu", "tanh"])
     p.add_argument("--out", type=pathlib.Path, default=None, help="save weights here")
     p.add_argument("--eval-games", type=int, default=0, help="score through the frozen protocol")
     args = p.parse_args()
@@ -189,7 +195,9 @@ def main() -> None:
 
     torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
-    arch = Architecture()
+    arch = Architecture(
+        hidden=tuple(int(w) for w in args.hidden.split(",")), activation=args.activation
+    )
     net = TorchPolicy(cfg, arch, seed=args.seed)
     opt = torch.optim.Adam(net.parameters(), lr=hyper.lr, eps=1e-5)
 

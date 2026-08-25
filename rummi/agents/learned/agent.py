@@ -85,6 +85,7 @@ def jax_agent(
         logits, _ = jax_net.apply(
             cfg,
             depth,
+            arch.activation,
             params,
             {k: jnp.asarray(np.asarray(v)) for k, v in obs.items()},
             jnp.asarray(np.asarray(mask)),

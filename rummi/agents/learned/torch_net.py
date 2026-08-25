@@ -75,6 +75,9 @@ class TorchPolicy(nn.Module):
         assert flat.shape[-1] == feature_dim(self.cfg), flat.shape
         return flat / self.scale
 
+    def _act(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.relu(x) if self.arch.activation == "relu" else torch.tanh(x)
+
     def head(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """`(masked_logits, value)` from already-scaled features.
 
@@ -84,7 +87,7 @@ class TorchPolicy(nn.Module):
         enough to clone CP-SAT is the difference between fitting in memory and not.
         """
         for layer in self.trunk:
-            x = torch.tanh(layer(x))
+            x = self._act(layer(x))
         logits = self.pi(x)
         legal = torch.as_tensor(mask, dtype=torch.bool, device=logits.device)
         return torch.where(legal, logits, torch.full_like(logits, MASKED)), self.v(x).squeeze(-1)

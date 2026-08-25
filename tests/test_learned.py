@@ -174,6 +174,7 @@ def test_the_two_frameworks_agree_on_logits(cfg: RummiConfig):
     j_logits, j_value = jax_net.apply(
         cfg,
         len(SMALL.hidden),
+        SMALL.activation,
         {k: jnp.asarray(v) for k, v in p.items()},
         {k: jnp.asarray(v) for k, v in obs.items()},
         jnp.asarray(mask),

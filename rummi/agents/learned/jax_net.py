@@ -55,22 +55,25 @@ def features(cfg: RummiConfig, obs: dict[str, jax.Array]) -> jax.Array:
     return flat / jnp.asarray(feature_scale(cfg))
 
 
-@partial(jax.jit, static_argnums=(0, 1))
+@partial(jax.jit, static_argnums=(0, 1, 2))
 def apply(
     cfg: RummiConfig,
     n_hidden: int,
+    activation: str,
     params: Params,
     obs: dict[str, jax.Array],
     mask: jax.Array,
 ) -> tuple[jax.Array, jax.Array]:
     """`(masked_logits, value)`.
 
-    `n_hidden` is static and separate from `params` because the trunk depth sets
-    the loop bound, and a Python loop over a traced dict cannot see its own length.
+    `n_hidden` and `activation` are static and separate from `params`: the depth
+    sets a Python loop bound, which a traced dict cannot report, and the activation
+    picks the function being traced.
     """
+    act = jax.nn.relu if activation == "relu" else jnp.tanh
     x = features(cfg, obs)
     for i in range(n_hidden):
-        x = jnp.tanh(x @ params[f"w{i}"] + params[f"b{i}"])
+        x = act(x @ params[f"w{i}"] + params[f"b{i}"])
     logits = x @ params["w_pi"] + params["b_pi"]
     value = (x @ params["w_v"] + params["b_v"]).squeeze(-1)
     return jnp.where(mask.astype(bool), logits, MASKED), value

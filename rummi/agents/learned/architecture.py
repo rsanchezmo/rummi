@@ -24,10 +24,19 @@ HIDDEN: tuple[int, ...] = (256, 256)
 @dataclass(frozen=True, slots=True)
 class Architecture:
     hidden: tuple[int, ...] = HIDDEN
+    activation: str = "relu"
+    """`relu` or `tanh`. The trunk gain below is `sqrt(2)`, which is the *ReLU*
+    gain -- pairing it with `tanh` (as an earlier default did) drives a deep trunk
+    towards saturation."""
 
     def layer_sizes(self, cfg: RummiConfig) -> list[tuple[int, int]]:
         dims = [feature_dim(cfg), *self.hidden]
         return list(pairwise(dims))
+
+    @property
+    def trunk_gain(self) -> float:
+        # torch.nn.init.calculate_gain's values for the two we support.
+        return float(np.sqrt(2.0)) if self.activation == "relu" else 5.0 / 3.0
 
 
 def param_names(arch: Architecture) -> list[str]:
@@ -40,7 +49,8 @@ def init_params(
 ) -> dict[str, np.ndarray]:
     """Orthogonal init, PPO's usual gains.
 
-    The gains are the part that matters: `sqrt(2)` through the trunk, **0.01 on
+    The gains are the part that matters: `arch.trunk_gain` through the trunk --
+    matched to the activation, which is the bug an earlier version had -- **0.01 on
     the policy head** so the first policy is near-uniform over legal actions
     rather than confidently wrong, and 1.0 on the value head. A policy head at
     full gain starts out committed to arbitrary actions, which with 1.5% of the
@@ -51,7 +61,7 @@ def init_params(
     params: dict[str, np.ndarray] = {}
 
     for i, (fan_in, fan_out) in enumerate(arch.layer_sizes(cfg)):
-        params[f"w{i}"] = _orthogonal(rng, fan_in, fan_out, np.sqrt(2.0))
+        params[f"w{i}"] = _orthogonal(rng, fan_in, fan_out, arch.trunk_gain)
         params[f"b{i}"] = np.zeros(fan_out, dtype=np.float32)
 
     last = arch.hidden[-1]
