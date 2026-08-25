@@ -4,18 +4,21 @@ import numpy as np
 import pytest
 
 from rummi.bench.fuzz import fuzz, make_policy
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, STANDARD, RummiConfig
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 
-CONFIGS = [(TINY, "tiny"), (TINY_GROUPS, "tiny_groups"), (STANDARD, "standard")]
+# Driven off the preset map rather than a list: an invariant that only holds on
+# the configs someone remembered to add is not an invariant. Golden fixtures are
+# the opposite case -- see CONFIG_BY_NAME.
+CONFIGS = [(cfg, name) for name, cfg in CONFIG_BY_NAME.items()]
 
 
 @pytest.mark.parametrize("cfg,name", CONFIGS, ids=[n for _, n in CONFIGS])
 @pytest.mark.parametrize("policy", ["random", "greedy"])
 def test_fuzz_holds_every_invariant(cfg: RummiConfig, name: str, policy: str):
-    games = 4 if name == "standard" else 20
+    games = 4 if name.startswith("standard") else 20
     stats = fuzz(cfg, games=games, batch_size=8, seed=0, policy_name=policy)
     assert stats.games >= games
     assert stats.steps > 0

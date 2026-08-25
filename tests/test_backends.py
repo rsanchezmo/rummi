@@ -48,7 +48,7 @@ def test_backend_reproduces_the_golden_trajectory(backend_name: str, config: str
             state = backend.reset_envs(cfg, state, resets[i], payload["reset_seed"], i)
     seen.append(backend.digest(state))
 
-    bad = next((i for i, (a, b) in enumerate(zip(seen, payload["digests"])) if a != b), None)
+    bad = next((i for i, (a, b) in enumerate(zip(seen, payload["digests"], strict=False)) if a != b), None)
     assert bad is None, f"{backend.name} on {config}: diverged at digest {bad}"
 
 

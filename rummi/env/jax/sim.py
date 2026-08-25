@@ -133,7 +133,9 @@ def derived_deck_orders(cfg: RummiConfig, base: int, step_index: int, envs) -> j
 
 def allocate(cfg: RummiConfig, b: int) -> JaxState:
     p, k, s, ell = cfg.n_players, cfg.n_kinds, cfg.max_sets, cfg.max_set_len
-    z = lambda shape: jnp.zeros(shape, jnp.int32)
+    def z(shape):
+        return jnp.zeros(shape, jnp.int32)
+
     return JaxState(
         racks=z((b, p, k)),
         table_sets=jnp.full((b, s, ell), EMPTY, jnp.int32),

@@ -9,7 +9,7 @@ definition nobody has optimised. Only tractable on the reduced configs.
 from __future__ import annotations
 
 from collections import Counter
-from functools import lru_cache
+from functools import cache
 from itertools import combinations
 
 from rummi.rules.config import RummiConfig
@@ -39,7 +39,7 @@ def _base_sets(cfg: RummiConfig) -> list[list[tuple[int, int]]]:
     return out
 
 
-@lru_cache(maxsize=None)
+@cache
 def valid_sets(cfg: RummiConfig, max_jokers: int) -> dict[Content, int]:
     """Map every legal slot content to its best-case face-value total.
 
@@ -82,7 +82,7 @@ def is_extendable(cfg: RummiConfig, content, max_jokers: int = 2) -> bool:
     return False
 
 
-@lru_cache(maxsize=None)
+@cache
 def _sets_by_lowest(cfg: RummiConfig, max_jokers: int) -> tuple[tuple[Content, ...], ...]:
     """Legal contents indexed by their lowest kind, for the partition search.
 
@@ -107,7 +107,7 @@ def partitionable(cfg: RummiConfig, counts, max_jokers: int | None = None) -> bo
     return _partition(tuple(int(c) for c in counts), by_lowest)
 
 
-@lru_cache(maxsize=None)
+@cache
 def _partition(counts: tuple[int, ...], by_lowest) -> bool:
     lowest = next((k for k, n in enumerate(counts) if n), None)
     if lowest is None:

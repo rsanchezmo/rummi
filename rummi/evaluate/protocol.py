@@ -146,7 +146,6 @@ def _play_batch(
 
 
 def _score_batch(suite: Suite, state, result: Result) -> None:
-    cfg = suite.cfg
     values = state.rack_values()
     for env in range(state.batch_size):
         if not state.done[env]:

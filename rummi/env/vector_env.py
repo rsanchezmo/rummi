@@ -29,7 +29,6 @@ from typing import Any
 import numpy as np
 
 try:
-    import gymnasium as gym
     from gymnasium import spaces
     from gymnasium.vector import AutoresetMode, VectorEnv
     from gymnasium.vector.utils import batch_space
@@ -49,7 +48,7 @@ from rummi.render.driver import RenderMode, Renderer
 
 
 class RummiVectorEnv(VectorEnv):
-    metadata = {
+    metadata = {  # noqa: RUF012 -- VectorEnv declares this as an instance variable
         "render_modes": [m.value for m in RenderMode],
         "autoreset_mode": AutoresetMode.NEXT_STEP,
     }

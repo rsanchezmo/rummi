@@ -18,7 +18,7 @@ pytest.importorskip("numpy")
 import sys
 
 sys.path.insert(0, str(ROOT / "tools"))
-import render_charts as rc  # noqa: E402
+import render_charts as rc
 
 VIEWBOX = re.compile(r'viewBox="0 0 ([\d.]+) ([\d.]+)"')
 RECT = re.compile(r'<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"')
@@ -46,7 +46,7 @@ def test_nothing_escapes_the_viewbox(charts, name):
         assert float(x) + float(rw) <= w + 0.5, f"{name}: a rect runs past the right edge"
         assert float(y) + float(rh) <= h + 0.5, f"{name}: a rect runs past the bottom"
 
-    for cx, cy, r in CIRCLE.findall(svg):
+    for cx, _cy, r in CIRCLE.findall(svg):
         assert float(cx) + float(r) <= w + 0.5, f"{name}: a marker runs past the right edge"
 
     for x, y, size, anchor, content in TEXT.findall(svg):

@@ -15,7 +15,12 @@ pytest                                                   # 224 tests, ~50s
 python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
+ruff check rummi tests tools && mypy rummi                # what CI's lint job runs
 ```
+
+`mypy rummi` is clean, but `pyproject.toml` exempts `rummi/render/pygame_view.py`
+and `rummi/env/torch/sim.py`. That is a ratchet with a reason written next to it,
+not a blanket pass -- read it before adding a third.
 
 Git identity is set **repo-locally** to the personal address, and the remote is
 the `github-personal` SSH alias. Don't "fix" either to the global config.

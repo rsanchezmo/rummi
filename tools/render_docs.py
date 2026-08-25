@@ -56,8 +56,6 @@ def _spans(line: str):
     for m in SGR.finditer(line):
         if m.start() > pos:
             out.append((line[pos : m.start()], colour, bold, dim))
-        for code in (m.group(1) or "0").split(";"):
-            pass
         params = [int(p) for p in (m.group(1) or "0").split(";") if p != ""]
         i = 0
         while i < len(params):

@@ -15,7 +15,7 @@ variables into one integer per kind.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -164,8 +164,8 @@ def solve_turn(
     use = {}
     subs = {}
     for k in numbered:
-        upper = int(available[k])
-        use[k] = model.NewIntVar(int(visible_table[k]), upper, f"use{k}")
+        kind_upper = int(available[k])
+        use[k] = model.NewIntVar(int(visible_table[k]), kind_upper, f"use{k}")
         subs[k] = model.NewIntVar(0, cfg.n_jokers, f"sub{k}")
         # Every slot a set demands is filled either by a real tile or by a joker.
         model.Add(demand[k] == use[k] + subs[k])

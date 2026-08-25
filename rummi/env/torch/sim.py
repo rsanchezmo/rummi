@@ -72,7 +72,7 @@ class TorchState:
     def pool_size(self) -> torch.Tensor:
         return self.cfg.n_tiles - self.draw_ptr
 
-    def clone(self) -> "TorchState":
+    def clone(self) -> TorchState:
         return TorchState(
             cfg=self.cfg,
             **{f.name: getattr(self, f.name).clone() for f in fields(self) if f.name != "cfg"},
@@ -124,7 +124,7 @@ def counts_of(cfg: RummiConfig, kinds: torch.Tensor) -> torch.Tensor:
 def allocate(cfg: RummiConfig, batch_size: int, device: torch.device) -> TorchState:
     b, p, k = batch_size, cfg.n_players, cfg.n_kinds
     s, ell = cfg.max_sets, cfg.max_set_len
-    i64 = dict(dtype=torch.int64, device=device)
+    i64 = {"dtype": torch.int64, "device": device}
     return TorchState(
         cfg=cfg,
         racks=torch.zeros((b, p, k), **i64),

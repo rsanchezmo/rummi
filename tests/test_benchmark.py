@@ -8,7 +8,7 @@ machines and months, and a subtle bias here is much worse than a crash.
 import numpy as np
 import pytest
 
-from rummi.agents.base import Agent, PlanningAgent, has_melded, table, turn_starting
+from rummi.agents.base import Agent, has_melded, table, turn_starting
 from rummi.agents import REGISTRY, GreedyAgent, build
 from rummi.evaluate import protocol
 from rummi.evaluate.protocol import (

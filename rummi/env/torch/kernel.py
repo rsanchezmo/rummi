@@ -44,7 +44,9 @@ def lookup(cfg: RummiConfig, device: torch.device) -> Lookup:
     if hit is not None:
         return hit
     t = tables(cfg)
-    to = lambda a, dtype=torch.int64: torch.as_tensor(a.copy(), dtype=dtype, device=device)
+    def to(a, dtype=torch.int64):
+        return torch.as_tensor(a.copy(), dtype=dtype, device=device)
+
     offload = t.value.astype("int64").copy()
     offload[cfg.joker_kind] = cfg.joker_penalty
     built = Lookup(

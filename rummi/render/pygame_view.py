@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from rummi.render.atlas import (
     BACKGROUND,
@@ -38,7 +39,6 @@ from rummi.render.atlas import (
     build,
 )
 from rummi.render.board import (
-    BUTTON_H,
     CARD_PAD,
     CAPTION_H,
     PAD,
@@ -53,6 +53,9 @@ from rummi.render.board import (
 )
 from rummi.render.view_model import GameView, SlotShape
 from rummi.rules.config import RummiConfig
+
+if TYPE_CHECKING:  # pygame is imported in __post_init__, not at module scope
+    import pygame
 
 SHAPE_TAG = {
     SlotShape.RUN: "run",
@@ -99,12 +102,14 @@ class PygameView:
     """The play window: buttons, a status of chips, and no action log. Off, this is
     the view an env renders -- telemetry and a log, to read a rollout by."""
     caption: str = "rummi"
-    _atlas: Atlas | None = field(default=None, init=False)
-    _metrics: Metrics | None = field(default=None, init=False)
-    _surface: object = field(default=None, init=False)
-    _font: object = field(default=None, init=False)
-    _small: object = field(default=None, init=False)
-    _big: object = field(default=None, init=False)
+    # Non-optional and defaultless: __post_init__ sets every one unconditionally,
+    # and typing them `| None` made each of the ~90 uses below a type error.
+    _atlas: Atlas = field(init=False)
+    _metrics: Metrics = field(init=False)
+    _surface: pygame.Surface = field(init=False)
+    _font: pygame.font.Font = field(init=False)
+    _small: pygame.font.Font = field(init=False)
+    _big: pygame.font.Font = field(init=False)
 
     def __post_init__(self) -> None:
         if self.headless:
@@ -238,7 +243,7 @@ class PygameView:
                 line = word
             else:
                 line = trial
-        return lines + [line] if line else lines
+        return [*lines, line] if line else lines
 
     def _draw_hint(self, rect, text: str) -> None:
         """The margin opposite the buttons: what to do next, in one sentence, where

@@ -356,7 +356,7 @@ def cards_for(m: Metrics, view: GameView) -> tuple[Card, ...]:
                 pos,
             )
             for i, (kind, pos) in enumerate(
-                zip(slot.shown, storage_order(slot.tiles, slot.shown))
+                zip(slot.shown, storage_order(slot.tiles, slot.shown), strict=False)
             )
         )
         out.append(Card(rect=rect, slot=slot.index, tiles=slot.tiles, shape=slot.shape, spots=spots))

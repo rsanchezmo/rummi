@@ -13,14 +13,13 @@ import time
 
 import numpy as np
 
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots, slot_stats
 from rummi.env.numpy.state import BatchState
 
-CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def sample_legal(mask: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -79,13 +78,13 @@ def bench(cfg: RummiConfig, batch_size: int, iters: int, seed: int = 0) -> dict[
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--batch-sizes", type=int, nargs="+", default=[1, 8, 64, 256, 1024, 4096])
     p.add_argument("--iters", type=int, default=200)
     p.add_argument("--seed", type=int, default=0)
     args = p.parse_args()
 
-    cfg = CONFIGS[args.config]
+    cfg = CONFIG_BY_NAME[args.config]
     print(f"config={args.config}  A={cfg.n_actions}  S={cfg.max_sets}  K={cfg.n_kinds}")
     header = f"{'B':>6} {'env-steps/s':>12} {'ms/step':>9} " + " ".join(
         f"{n:>13}" for n in ("slot_stats", "evaluate", "legal_actions", "sample")

@@ -36,7 +36,7 @@ def _appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.nda
     s, ell = table.shape
     k = cfg.n_kinds
     base = evaluate_slots(cfg, table)
-    has_room = (table < 0).any(-1)
+    has_room = np.asarray((table < 0).any(-1))
     pos = np.argmax(table < 0, axis=-1)
 
     grown = np.repeat(table[:, None, :], k, axis=1)
@@ -45,7 +45,7 @@ def _appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.nda
     )
     grown_valid = evaluate_slots(cfg, grown).is_valid
 
-    return grown_valid & base.is_valid[:, None] & has_room[:, None] & (rack > 0)[None, :]
+    return grown_valid & base.is_valid[:, None] & has_room[:, None] & np.asarray(rack > 0)[None, :]
 
 
 def _realise(cfg: RummiConfig, counts: np.ndarray, rack: np.ndarray) -> list[int] | None:
@@ -98,13 +98,14 @@ def plan_turn(
                 break
             # Shed the most expensive tile available.
             scores = np.where(allowed, offload[None, :], -1)
-            slot, kind = np.unravel_index(int(np.argmax(scores)), scores.shape)
+            flat_slot, flat_kind = np.unravel_index(int(np.argmax(scores)), scores.shape)
+            slot, kind = int(flat_slot), int(flat_kind)
             table[slot, int(np.argmax(table[slot] < 0))] = kind
             table[slot] = np.sort(np.where(table[slot] >= 0, table[slot], cfg.n_kinds))
             table[slot] = np.where(table[slot] == cfg.n_kinds, -1, table[slot])
             rack[kind] -= 1
             lengths[slot] += 1
-            placements.append((int(kind), int(slot)))
+            placements.append((kind, slot))
 
     empty = [i for i in range(cfg.max_sets) if lengths[i] == 0]
     meld_total = 0

@@ -9,7 +9,6 @@ from rummi.env.numpy.deal import reset
 from rummi.rules.encoding import EMPTY, kind_of
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.state import NO_WINNER
 
 from tests.conftest import drain_pool, play, rebalance_pool, state_with
 
@@ -66,7 +65,7 @@ def test_pick_takes_one_tile_and_recanonicalises():
 
 def test_end_turn_commits_and_passes_play():
     s = state_with(C, rack=RUN_36)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.melded[0, 0])
     assert s.current[0] == 1
     assert s.turn_count[0] == 1
@@ -107,7 +106,7 @@ def test_draw_on_an_empty_pool_is_a_pass():
 
 def test_emptying_the_rack_wins():
     s = state_with(C, rack=RUN_36, melded=True)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.done[0]) and not bool(s.truncated[0])
     assert int(s.winner[0]) == 0
     s.check_invariants()
@@ -175,7 +174,7 @@ def test_illegal_action_is_rejected_loudly():
 
 def test_done_envs_ignore_further_actions():
     s = state_with(C, rack=RUN_36, melded=True)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.done[0])
     frozen = s.clone()
     step(s, np.array([C.draw_action]), legal_actions(s))

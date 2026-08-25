@@ -6,7 +6,6 @@ comparison of the validity kernel, host-side action validation (which cannot liv
 inside the traced step), and that the step actually lowers and compiles.
 """
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -15,13 +14,8 @@ import pytest
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from rummi.env.numpy import masks as np_masks
 from rummi.env.numpy import sets as np_sets
 from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.env.numpy.deal import derived_seeds
-from rummi.env.numpy.deal import reset as np_reset
-from rummi.env.numpy.deal import reset_envs as np_reset_envs
-from rummi.env.numpy.engine import step as np_step
 from rummi.env.numpy.sets import pad_slot
 
 from rummi.env.jax import kernel as j_kernel

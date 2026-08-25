@@ -13,14 +13,14 @@ clock is read; without that the loop would measure enqueue time.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 import pathlib
 import time
 
 import numpy as np
 
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 
-CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def _best(samples: list[float]) -> float:
@@ -151,7 +151,7 @@ def bench_jax(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--batch-sizes", type=int, nargs="+", default=[64, 256, 1024, 4096])
     p.add_argument("--iters", type=int, default=60)
     p.add_argument("--compile", action="store_true", help="also time torch.compile")
@@ -167,11 +167,11 @@ def main() -> None:
     )
     args = p.parse_args()
 
-    cfg = CONFIGS[args.config]
+    cfg = CONFIG_BY_NAME[args.config]
     import torch
 
     reps = args.repeats
-    backends: list[tuple[str, callable]] = [
+    backends: list[tuple[str, Callable[[int, int], float]]] = [
         ("numpy", lambda b, n: bench_numpy(cfg, b, n, repeats=reps))
     ]
     backends.append(("torch-cpu", lambda b, n: bench_torch(cfg, b, n, "cpu", repeats=reps)))

@@ -13,7 +13,7 @@ kind ids within one colour::
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 
 import numpy as np
 
@@ -58,7 +58,7 @@ class Tables:
         return int(self.copies.sum())
 
 
-@lru_cache(maxsize=None)
+@cache
 def tables(cfg: RummiConfig) -> Tables:
     """Build (and memoise) the lookup tables for ``cfg``."""
     k = cfg.n_kinds

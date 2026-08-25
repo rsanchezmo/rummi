@@ -33,6 +33,7 @@ def build(name: str, cfg: RummiConfig, **kwargs) -> Agent:
 
 
 __all__ = [
+    "REGISTRY",
     "Agent",
     "GreedyAgent",
     "Observation",
@@ -40,7 +41,6 @@ __all__ = [
     "PlanningAgent",
     "RandomAgent",
     "RearrangeAgent",
-    "REGISTRY",
     "WeightedRandomAgent",
     "build",
 ]

@@ -124,7 +124,7 @@ def reading_order(cfg: RummiConfig, tiles: tuple[int, ...], is_run: bool) -> tup
     n = len(tiles)
     # The best-case start, matching SlotEval.value.
     start = min(reals[0], cfg.n_numbers - n + 1)
-    by_number = {}
+    by_number: dict[int, list[int]] = {}
     for kind in tiles:
         if kind != cfg.joker_kind:
             by_number.setdefault(int(t.number[kind]), []).append(kind)

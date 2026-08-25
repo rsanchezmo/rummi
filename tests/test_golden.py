@@ -50,7 +50,7 @@ def test_golden_trajectory_is_reproduced(name: str):
     _, seen = replay(payload)
     assert seen == payload["digests"], (
         f"{name}: state diverged from the recorded trajectory at digest "
-        f"{next(i for i, (a, b) in enumerate(zip(seen, payload['digests'])) if a != b)}"
+        f"{next(i for i, (a, b) in enumerate(zip(seen, payload['digests'], strict=False)) if a != b)}"
     )
 
 

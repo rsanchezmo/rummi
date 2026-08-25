@@ -20,8 +20,43 @@ docs = ["pillow>=10"]        # regenerating the README animation
 video = ["moviepy>=1.0"]     # gymnasium RecordVideo writes MP4 through moviepy
 torch = ["torch>=2.2"]
 jax = ["jax>=0.4"]
-dev = ["pytest>=8", "pytest-xdist"]
+dev = ["pytest>=8", "pytest-xdist", "ruff>=0.16", "mypy>=1.11"]
 all = ["gymnasium>=0.29", "pygame-ce>=2.4", "ortools>=9.9"]
+
+[tool.ruff]
+# The current maximum, pinned so it cannot creep further rather than as a target.
+line-length = 120
+
+[tool.ruff.lint]
+# `I` (import sorting) is deliberately absent: imports here go rules -> env ->
+# render, foundation first, and isort would flatten that to alphabetical.
+select = ["E", "W", "F", "UP", "B", "C4", "PYI", "RUF"]
+ignore = [
+    # Unpacking Gymnasium's five-tuple and naming the three parts a test uses is
+    # clearer than indexing it, and every call site does that on purpose.
+    "RUF059",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Optional extras are probed with `pytest.importorskip` before the imports that
+# need them, so the module skips cleanly instead of failing to collect. Imports
+# after that call are the point, not an oversight.
+"tests/*" = ["E402"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# A ratchet, not a verdict. Making the tree check clean took two root fixes --
+# `RummiConfig`'s derived capacities and `PygameView`'s lazily built fields were
+# both typed optional while always being set -- which took 209 errors down to 30,
+# all of them in these two files. What is left needs per-site narrowing in the
+# interactive draw path and in the torch sim's tensor arithmetic. Everything else
+# is clean and CI holds it there.
+module = ["rummi.render.pygame_view", "rummi.env.torch.sim"]
+ignore_errors = true
 
 [tool.setuptools.packages.find]
 include = ["rummi*"]

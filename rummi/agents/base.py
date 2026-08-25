@@ -63,7 +63,7 @@ class Agent(Protocol):
         """
 
 
-def act_on_state(agent: "Agent", state, mask: np.ndarray, active=None) -> np.ndarray:
+def act_on_state(agent: Agent, state, mask: np.ndarray, active=None) -> np.ndarray:
     """Drive an agent from a raw ``BatchState`` by encoding the observation.
 
     The single bridge between the simulator and the agent interface. Anything
@@ -76,7 +76,7 @@ def act_on_state(agent: "Agent", state, mask: np.ndarray, active=None) -> np.nda
 
 
 def act_by_seat(
-    seats: Sequence["Agent | None"],
+    seats: Sequence[Agent | None],
     state,
     mask: np.ndarray,
     actions: np.ndarray | None = None,

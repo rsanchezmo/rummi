@@ -37,6 +37,21 @@ jobs:
         run: uv pip install -e '.[dev,env,render,solver,torch,jax]'
       - run: uv run pytest -q
 
+  lint:
+    name: lint and types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv venv --python 3.12
+      # mypy needs the optional extras installed to see their types at all;
+      # without them every `import gymnasium` is silently Any.
+      - run: uv pip install -e '.[dev,env,render,solver,torch,jax]'
+      - run: uv run ruff check rummi tests tools
+      - run: uv run mypy rummi
+
   fuzz:
     name: invariants
     runs-on: ubuntu-latest
