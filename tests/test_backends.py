@@ -20,6 +20,7 @@ from rummi.env.numpy.deal import derived_seeds
 from rummi.env.numpy.deal import reset as np_reset
 from rummi.env.numpy.deal import reset_envs as np_reset_envs
 from rummi.env.numpy.engine import step as np_step
+from rummi.env.observation import encode as np_encode
 
 CONFIGS = {"tiny": TINY, "tiny_groups": TINY_GROUPS, "standard": STANDARD}
 GOLDEN = Path(__file__).parent / "golden"
@@ -232,3 +233,46 @@ def test_shaping_is_credited_only_to_the_seat_that_acted(backend_name: str):
             shaped_steps += int(rewards[env, acting[env]] != 0)
 
     assert shaped_steps, "no shaped step was observed, so this proved nothing"
+
+
+# --- observation -------------------------------------------------------------
+@pytest.mark.parametrize("config", sorted(CONFIGS))
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_the_observation_matches_the_reference_field_for_field(backend_name: str, config: str):
+    """SPEC.md section 8 is the contract each backend's encoder was written
+    against; this is what makes that claim checkable.
+
+    Replayed over a recorded trajectory rather than a fresh deal, because a fresh
+    deal has an empty table -- every `slot_features` column, the workbench and
+    `placed_this_turn` would all be zero and any divergence in them invisible.
+    """
+    backend = get_backend(backend_name)
+    cfg = CONFIGS[config]
+    payload = _payload(config)
+
+    ref = np_reset(cfg, payload["batch_size"], seed=payload["seed"])
+    state = backend.reset(cfg, payload["batch_size"], seed=payload["seed"])
+    nonzero_seen = set()
+
+    for i, actions in enumerate(payload["actions"][:80]):
+        ref_obs = np_encode(ref)
+        obs = backend.encode(cfg, state)
+        assert set(obs) == set(ref_obs), f"{backend.name}: field names differ"
+        for name, want in ref_obs.items():
+            got = backend.to_numpy(obs[name])
+            assert got.shape == want.shape, f"{backend.name}/{name}: {got.shape} != {want.shape}"
+            assert got.dtype == want.dtype, f"{backend.name}/{name}: {got.dtype} != {want.dtype}"
+            np.testing.assert_array_equal(
+                got, want, err_msg=f"{backend.name}/{config}: {name} differs at step {i}",
+            )
+            if want.any():
+                nonzero_seen.add(name)
+
+        mask = backend.legal_actions(cfg, state)
+        state, _ = backend.step(cfg, state, np.asarray(actions), mask)
+        np_step(ref, np.asarray(actions), np_masks.legal_actions(ref))
+
+    # Otherwise a trajectory that never touched the table would pass vacuously.
+    assert "table_sets" in nonzero_seen or "workbench" in nonzero_seen, (
+        f"{config}: the trajectory never put a tile in play, so this proved little"
+    )

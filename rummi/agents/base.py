@@ -20,7 +20,7 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.env.observation import MICRO_COUNT
+from rummi.rules.observation import MICRO_COUNT
 
 Observation = dict[str, np.ndarray]
 """Batched observation as produced by :func:`rummi.env.observation.encode`.

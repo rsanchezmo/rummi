@@ -11,7 +11,8 @@ import pytest
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.observation import SLOT_FEATURES, encode
+from rummi.env.observation import encode
+from rummi.rules.observation import SLOT_FEATURES
 from rummi.rules.config import STANDARD_4P, TINY_GROUPS, RummiConfig
 
 CONFIGS = [TINY_GROUPS, STANDARD_4P]

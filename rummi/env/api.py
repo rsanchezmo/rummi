@@ -49,6 +49,14 @@ class Backend(Protocol):
 
     def legal_actions(self, cfg: RummiConfig, state: Any) -> Any: ...
 
+    def encode(self, cfg: RummiConfig, state: Any) -> dict[str, Any]:
+        """The observation of SPEC.md section 8, in the backend's own array type.
+
+        Not converted to NumPy: a device backend that copied its observation to
+        the host every step would give back the speedup it was chosen for.
+        Gymnasium's ``wrappers.vector`` conversions are the boundary.
+        """
+
     def step(
         self, cfg: RummiConfig, state: Any, actions, mask=None, active=None
     ) -> tuple[Any, StepOut]: ...
@@ -78,6 +86,11 @@ class NumpyBackend:
         from rummi.env.numpy.masks import legal_actions
 
         return legal_actions(state)
+
+    def encode(self, cfg, state):
+        from rummi.env.observation import encode
+
+        return encode(state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         from rummi.env.numpy.engine import step
@@ -128,6 +141,11 @@ class TorchBackend:
 
         return sim.legal_actions(state)
 
+    def encode(self, cfg, state):
+        from rummi.env.torch.observation import encode
+
+        return encode(state)
+
     def step(self, cfg, state, actions, mask=None, active=None):
         import torch
 
@@ -174,6 +192,11 @@ class JaxBackend:
         from rummi.env.jax import sim
 
         return sim.legal_actions(cfg, state)
+
+    def encode(self, cfg, state):
+        from rummi.env.jax.observation import encode
+
+        return encode(cfg, state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import jax.numpy as jnp

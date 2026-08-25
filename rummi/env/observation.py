@@ -18,31 +18,11 @@ import numpy as np
 
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import tables
+from rummi.rules.observation import N_SCALARS, SLOT_FEATURES, max_meld_value
 from rummi.env.numpy.masks import current_rack, meld_value
 from rummi.env.numpy.sets import evaluate, slot_stats
 from rummi.env.numpy.state import BatchState
 
-SLOT_FEATURES = 10
-"""[len, run_valid, group_valid, extendable, colour, lo, hi, n_jokers, value, is_new]"""
-
-# Index into obs["scalars"]. Named so an agent never has to count positions.
-POOL_SIZE = 0
-MELD_PROGRESS = 1
-MELD_REMAINING = 2
-MICRO_COUNT = 3
-N_SCALARS = 4
-
-# Index into obs["slot_features"].
-F_LEN = 0
-F_RUN_VALID = 1
-F_GROUP_VALID = 2
-F_EXTENDABLE = 3
-F_COLOR = 4
-F_LO = 5
-F_HI = 6
-F_JOKERS = 7
-F_VALUE = 8
-F_IS_NEW = 9
 
 
 def observation_space(cfg: RummiConfig):
@@ -67,7 +47,7 @@ def observation_space(cfg: RummiConfig):
             "scalars": spaces.Box(
                 low=np.zeros(N_SCALARS, dtype=np.int32),
                 high=np.array(
-                    [cfg.n_tiles, _max_meld_value(cfg), cfg.initial_meld, cfg.max_micro_per_turn],
+                    [cfg.n_tiles, max_meld_value(cfg), cfg.initial_meld, cfg.max_micro_per_turn],
                     dtype=np.int32,
                 ),
                 dtype=np.int32,
@@ -77,11 +57,6 @@ def observation_space(cfg: RummiConfig):
     # scalars = [pool_size, meld_progress, initial_meld_remaining, micro_count]
 
 
-def _max_meld_value(cfg: RummiConfig) -> int:
-    """Loosest bound on a turn's declared meld value: every slot a top-value set."""
-    top_run = sum(range(cfg.n_numbers - cfg.max_set_len + 1, cfg.n_numbers + 1))
-    top_group = cfg.n_colors * cfg.n_numbers
-    return cfg.max_sets * max(top_run, top_group)
 
 
 def _seat_rotation(state: BatchState) -> np.ndarray:
