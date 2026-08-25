@@ -25,6 +25,8 @@ HIDDEN: tuple[int, ...] = (256, 256)
 class Architecture:
     hidden: tuple[int, ...] = HIDDEN
     activation: str = "relu"
+    """`relu` or `tanh`. `trunk_gain` is matched to this: `sqrt(2)` is ReLU's gain,
+    and carrying it into `tanh` drives a deep trunk towards saturation."""
     head: str = "flat"
     """`flat` or `bilinear`.
 
@@ -35,9 +37,9 @@ class Architecture:
     representation, so what it learns about one pair transfers to the others.
     """
     head_dim: int = 16
-    """`relu` or `tanh`. The trunk gain below is `sqrt(2)`, which is the *ReLU*
-    gain -- pairing it with `tanh` (as an earlier default did) drives a deep trunk
-    towards saturation."""
+    """Width of the `bilinear` head's per-index representations, and so the rank of
+    the `(K, S)` score matrix it factors: it bounds how many independent ways a
+    kind can relate to a slot. Unused by the flat head."""
 
     def layer_sizes(self, cfg: RummiConfig) -> list[tuple[int, int]]:
         dims = [feature_dim(cfg), *self.hidden]

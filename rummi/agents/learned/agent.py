@@ -77,15 +77,13 @@ def jax_agent(
     from rummi.agents.learned import jax_net
 
     arch = arch or Architecture()
-    depth = len(arch.hidden)
     key = jax.random.PRNGKey(seed)
 
     def choose(obs: Observation, mask: np.ndarray) -> np.ndarray:
         nonlocal key
         logits, _ = jax_net.apply(
             cfg,
-            depth,
-            arch.activation,
+            arch,
             params,
             {k: jnp.asarray(np.asarray(v)) for k, v in obs.items()},
             jnp.asarray(np.asarray(mask)),

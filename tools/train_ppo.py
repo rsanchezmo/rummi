@@ -418,6 +418,11 @@ def main() -> None:
     )
     p.add_argument("--activation", default="relu", choices=["relu", "tanh"])
     p.add_argument(
+        "--head", default="flat", choices=["flat", "bilinear"],
+        help="bilinear scores ASSIGN(kind, slot) and PICK(slot, pos) as dot products "
+             "of per-index representations; those blocks are 96% of the action space",
+    )
+    p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
         help="start from a saved checkpoint (skips cloning; takes its architecture)",
     )
@@ -460,16 +465,28 @@ def main() -> None:
     generator = torch.Generator().manual_seed(args.seed)
     if args.init_from:
         checkpoint = torch.load(args.init_from, weights_only=False)
+        # The whole architecture comes from the checkpoint, not the CLI: the two
+        # heads have different parameter tensors, so a `head` taken from a flag
+        # the resume did not repeat fails `load_state_dict` outright. Checkpoints
+        # that predate the head keys are flat, which is what the defaults give.
         arch = Architecture(
             hidden=tuple(checkpoint["hidden"]),
             activation=checkpoint.get("activation", args.activation),
+            head=checkpoint.get("head", args.head),
+            head_dim=checkpoint.get("head_dim", Architecture().head_dim),
         )
         net = TorchPolicy(cfg, arch, seed=args.seed)
         net.load_state_dict(checkpoint["state"])
-        print(f"resumed from {args.init_from} (hidden={arch.hidden}, {arch.activation})")
+        head = arch.head if arch.head == "flat" else f"{arch.head} d={arch.head_dim}"
+        print(
+            f"resumed from {args.init_from} "
+            f"(hidden={arch.hidden}, {arch.activation}, {head} head)"
+        )
     else:
         arch = Architecture(
-            hidden=tuple(int(w) for w in args.hidden.split(",")), activation=args.activation
+            hidden=tuple(int(w) for w in args.hidden.split(",")),
+            activation=args.activation,
+            head=args.head,
         )
         net = TorchPolicy(cfg, arch, seed=args.seed)
     opt = torch.optim.Adam(net.parameters(), lr=hyper.lr, eps=1e-5)
@@ -697,6 +714,8 @@ def main() -> None:
                 "cfg": args.config,
                 "hidden": arch.hidden,
                 "activation": arch.activation,
+                "head": arch.head,
+                "head_dim": arch.head_dim,
                 "state": net.state_dict(),
             },
             args.out,
@@ -713,6 +732,8 @@ def main() -> None:
                     "reward_mode": args.reward_mode,
                     "rack_shaping": args.rack_shaping,
                     "hidden": list(arch.hidden),
+                    "head": arch.head,
+                    "head_dim": arch.head_dim,
                     "clone": args.clone,
                     "history": history,
                 },

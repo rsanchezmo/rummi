@@ -48,8 +48,19 @@ class TorchPolicy(nn.Module):
             _load(layer, params[f"w{i}"], params[f"b{i}"])
             self.trunk.append(layer)
 
-        self.pi = nn.Linear(self.arch.hidden[-1], cfg.n_actions)
-        _load(self.pi, params["w_pi"], params["b_pi"])
+        last = self.arch.hidden[-1]
+        if self.arch.head == "bilinear":
+            self.kind = nn.Linear(last, cfg.n_kinds * self.arch.head_dim)
+            _load(self.kind, params["w_kind"], params["b_kind"])
+            self.slot = nn.Linear(last, cfg.max_sets * self.arch.head_dim)
+            _load(self.slot, params["w_slot"], params["b_slot"])
+            self.pos = nn.Linear(last, cfg.max_set_len * self.arch.head_dim)
+            _load(self.pos, params["w_pos"], params["b_pos"])
+            self.flat = nn.Linear(last, cfg.n_kinds + cfg.max_sets + 2)
+            _load(self.flat, params["w_flat"], params["b_flat"])
+        else:
+            self.pi = nn.Linear(last, cfg.n_actions)
+            _load(self.pi, params["w_pi"], params["b_pi"])
         self.v = nn.Linear(self.arch.hidden[-1], 1)
         _load(self.v, params["w_v"], params["b_v"])
 
@@ -78,6 +89,28 @@ class TorchPolicy(nn.Module):
     def _act(self, x: torch.Tensor) -> torch.Tensor:
         return torch.relu(x) if self.arch.activation == "relu" else torch.tanh(x)
 
+    def _logits(self, x: torch.Tensor) -> torch.Tensor:
+        """Action logits, assembled in the block order of SPEC.md section 4.
+
+        `ASSIGN(kind, slot)` is `assign_offset + kind*S + slot` and
+        `PICK(slot, pos)` is `pick_offset + slot*L + pos` -- both row-major, so a
+        `(K, S)` or `(S, L)` matrix flattens straight onto its block.
+        """
+        if self.arch.head != "bilinear":
+            return self.pi(x)
+
+        cfg, d = self.cfg, self.arch.head_dim
+        b = x.shape[0]
+        kind = self.kind(x).view(b, cfg.n_kinds, d)
+        slot = self.slot(x).view(b, cfg.max_sets, d)
+        pos = self.pos(x).view(b, cfg.max_set_len, d)
+        flat = self.flat(x)
+
+        place, dissolve, tail = flat.split([cfg.n_kinds, cfg.max_sets, 2], dim=-1)
+        pick = torch.einsum("bsd,bpd->bsp", slot, pos).reshape(b, -1)
+        assign = torch.einsum("bkd,bsd->bks", kind, slot).reshape(b, -1)
+        return torch.cat([place, pick, dissolve, assign, tail], dim=-1)
+
     def head(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """`(masked_logits, value)` from already-scaled features.
 
@@ -88,7 +121,7 @@ class TorchPolicy(nn.Module):
         """
         for layer in self.trunk:
             x = self._act(layer(x))
-        logits = self.pi(x)
+        logits = self._logits(x)
         legal = torch.as_tensor(mask, dtype=torch.bool, device=logits.device)
         return torch.where(legal, logits, torch.full_like(logits, MASKED)), self.v(x).squeeze(-1)
 

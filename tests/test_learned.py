@@ -6,6 +6,8 @@ NumPy parameter dict and required to produce the same logits -- the same trick
 `tests/test_backends.py` plays on the simulator.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -25,6 +27,11 @@ from rummi.rules.config import STANDARD, STANDARD_4P, TINY_GROUPS, RummiConfig
 
 CONFIGS = [TINY_GROUPS, STANDARD, STANDARD_4P]
 SMALL = Architecture(hidden=(32, 32))
+# The two action heads, differing in nothing else, so a test taking this
+# parametrisation isolates the head. Without it the parity test below would pass
+# with the bilinear branch never once evaluated.
+HEADS = [SMALL, dataclasses.replace(SMALL, head="bilinear")]
+by_head = pytest.mark.parametrize("arch", HEADS, ids=lambda a: a.head)
 
 
 def played(cfg: RummiConfig, batch: int = 6, steps: int = 30, seed: int = 0):
@@ -83,30 +90,48 @@ def test_scaling_lands_every_feature_in_a_sane_range(cfg: RummiConfig):
     assert scaled.min() >= -1.5, f"min feature {scaled.min():.2f}"
 
 
-def test_the_same_seed_gives_the_same_weights():
-    a = init_params(TINY_GROUPS, SMALL, seed=3)
-    b = init_params(TINY_GROUPS, SMALL, seed=3)
-    c = init_params(TINY_GROUPS, SMALL, seed=4)
-    assert set(a) == set(param_names(SMALL))
+@by_head
+def test_the_same_seed_gives_the_same_weights(arch: Architecture):
+    a = init_params(TINY_GROUPS, arch, seed=3)
+    b = init_params(TINY_GROUPS, arch, seed=3)
+    c = init_params(TINY_GROUPS, arch, seed=4)
+    assert set(a) == set(param_names(arch))
     assert all(np.array_equal(a[k], b[k]) for k in a)
     assert not all(np.array_equal(a[k], c[k]) for k in a)
 
 
-def test_the_policy_head_starts_small_and_the_trunk_does_not():
-    """PPO's usual gains. A policy head at full gain starts out confidently wrong
-    about which of ~1.5% legal actions to take, which is slow to unlearn."""
-    p = init_params(STANDARD, SMALL, seed=0)
-    assert p["w_pi"].std() < 0.01 * p["w0"].std()
+@by_head
+def test_the_head_starts_small_and_the_trunk_does_not(arch: Architecture):
+    """PPO's usual gains. A head at full gain starts out confidently wrong about
+    which of ~1.5% legal actions to take, which is slow to unlearn.
+
+    Asserted on the logits rather than per weight matrix, because a bilinear score
+    is a *product* of two factors: each factor is initialised an order of magnitude
+    above the flat head's single projection, and only what they multiply out to is
+    comparable. Measured spread is 0.0006 flat and 0.0030 bilinear, against 0.06
+    and 0.30 for the same heads left at unit gain."""
+    torch = pytest.importorskip("torch")
+    from rummi.agents.learned import torch_net
+
+    cfg = STANDARD
+    _, obs, mask = played(cfg)
+    net = torch_net.TorchPolicy(cfg, arch, init_params(cfg, arch, seed=0))
+    logits, _ = net({k: torch.as_tensor(v) for k, v in obs.items()}, torch.as_tensor(mask))
+
+    spread = logits.detach().numpy()[mask].std()
+    assert spread < 0.02, f"head logits start at spread {spread:.4f}"
+    assert init_params(cfg, arch, seed=0)["w0"].std() > 0.01, "the trunk is small too"
 
 
 # --- torch -------------------------------------------------------------------
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
-def test_torch_never_prefers_an_illegal_action(cfg: RummiConfig):
+@by_head
+def test_torch_never_prefers_an_illegal_action(cfg: RummiConfig, arch: Architecture):
     torch = pytest.importorskip("torch")
     from rummi.agents.learned import torch_net
 
     _, obs, mask = played(cfg)
-    net = torch_net.TorchPolicy(cfg, SMALL, init_params(cfg, SMALL, seed=1))
+    net = torch_net.TorchPolicy(cfg, arch, init_params(cfg, arch, seed=1))
     logits, value = net({k: torch.as_tensor(v) for k, v in obs.items()}, torch.as_tensor(mask))
 
     assert logits.shape == (mask.shape[0], cfg.n_actions)
@@ -143,14 +168,17 @@ def test_entropy_and_log_prob_stay_finite_with_almost_everything_masked():
 
 
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
-def test_a_fresh_policy_is_near_uniform_over_the_legal_actions(cfg: RummiConfig):
+@by_head
+def test_a_fresh_policy_is_near_uniform_over_the_legal_actions(
+    cfg: RummiConfig, arch: Architecture
+):
     """What the 0.01 policy-head gain buys, stated as a number: entropy should sit
     on `log(n_legal)`, not below it."""
     torch = pytest.importorskip("torch")
     from rummi.agents.learned import torch_net
 
     _, obs, mask = played(cfg)
-    net = torch_net.TorchPolicy(cfg, SMALL, init_params(cfg, SMALL, seed=0))
+    net = torch_net.TorchPolicy(cfg, arch, init_params(cfg, arch, seed=0))
     logits, _ = net({k: torch.as_tensor(v) for k, v in obs.items()}, torch.as_tensor(mask))
     ent = torch_net.entropy(logits).detach().numpy()
     np.testing.assert_allclose(ent, np.log(mask.sum(-1)), rtol=0.02)
@@ -158,23 +186,23 @@ def test_a_fresh_policy_is_near_uniform_over_the_legal_actions(cfg: RummiConfig)
 
 # --- parity ------------------------------------------------------------------
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
-def test_the_two_frameworks_agree_on_logits(cfg: RummiConfig):
+@by_head
+def test_the_two_frameworks_agree_on_logits(cfg: RummiConfig, arch: Architecture):
     torch = pytest.importorskip("torch")
     pytest.importorskip("jax")
     import jax.numpy as jnp
 
     from rummi.agents.learned import jax_net, torch_net
 
-    p = init_params(cfg, SMALL, seed=5)
+    p = init_params(cfg, arch, seed=5)
     _, obs, mask = played(cfg)
 
-    t_logits, t_value = torch_net.TorchPolicy(cfg, SMALL, p)(
+    t_logits, t_value = torch_net.TorchPolicy(cfg, arch, p)(
         {k: torch.as_tensor(v) for k, v in obs.items()}, torch.as_tensor(mask)
     )
     j_logits, j_value = jax_net.apply(
         cfg,
-        len(SMALL.hidden),
-        SMALL.activation,
+        arch,
         {k: jnp.asarray(v) for k, v in p.items()},
         {k: jnp.asarray(v) for k, v in obs.items()},
         jnp.asarray(mask),
@@ -195,29 +223,31 @@ def test_the_two_frameworks_agree_on_logits(cfg: RummiConfig):
 
 
 # --- the agent contract ------------------------------------------------------
-def _agents(cfg: RummiConfig):
+def _agents(cfg: RummiConfig, arch: Architecture):
     import jax.numpy as jnp
 
     from rummi.agents.learned.agent import jax_agent, torch_agent
     from rummi.agents.learned.torch_net import TorchPolicy
 
-    p = init_params(cfg, SMALL, seed=7)
+    p = init_params(cfg, arch, seed=7)
     return [
-        ("torch", torch_agent(TorchPolicy(cfg, SMALL, p))),
-        ("jax", jax_agent(cfg, {k: jnp.asarray(v) for k, v in p.items()}, SMALL)),
+        ("torch", torch_agent(TorchPolicy(cfg, arch, p))),
+        ("jax", jax_agent(cfg, {k: jnp.asarray(v) for k, v in p.items()}, arch)),
     ]
 
 
-def test_both_adapters_satisfy_the_agent_protocol():
+@by_head
+def test_both_adapters_satisfy_the_agent_protocol(arch: Architecture):
     pytest.importorskip("torch")
     pytest.importorskip("jax")
-    for _, agent in _agents(TINY_GROUPS):
+    for _, agent in _agents(TINY_GROUPS, arch):
         assert isinstance(agent, Agent)
         assert agent.name
         agent.reset(4)
 
 
-def test_both_adapters_score_identically_through_the_frozen_protocol():
+@by_head
+def test_both_adapters_score_identically_through_the_frozen_protocol(arch: Architecture):
     """An untrained net is weak, but it must be *legal* and it must be
     reproducible: the same weights through either framework is the same score."""
     pytest.importorskip("torch")
@@ -226,7 +256,7 @@ def test_both_adapters_score_identically_through_the_frozen_protocol():
 
     suite = SUITE_BY_NAME["tiny"]
     results = {}
-    for label, agent in _agents(TINY_GROUPS):
+    for label, agent in _agents(TINY_GROUPS, arch):
         r = evaluate(f"untrained-{label}", suite, build_agent=lambda c, a=agent: a, games=8)
         assert r.illegal_attempts == 0, f"{label} proposed a masked-out action"
         assert not r.disqualified
