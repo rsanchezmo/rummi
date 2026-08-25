@@ -53,6 +53,20 @@ class TorchPolicy(nn.Module):
         self.v = nn.Linear(self.arch.hidden[-1], 1)
         _load(self.v, params["w_v"], params["b_v"])
 
+    def slot_counts(self, table_sets: torch.Tensor) -> torch.Tensor:
+        """`(B, S, K)` count of each kind per slot. See `features.slot_counts_numpy`.
+
+        `EMPTY` is `-1`, so it is masked out rather than clamped into kind 0 --
+        clamping would put a phantom tile of the lowest kind in every empty
+        position, which is `S*L` of them on a fresh deal.
+        """
+        cfg = self.cfg
+        b, s, _ = table_sets.shape
+        valid = (table_sets >= 0).to(self.scale.dtype)
+        idx = table_sets.clamp(min=0).long()
+        counts = torch.zeros((b, s, cfg.n_kinds), dtype=self.scale.dtype, device=idx.device)
+        return counts.scatter_add_(-1, idx, valid)
+
     def features(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         batch = obs["rack"].shape[0]
         flat = torch.cat(

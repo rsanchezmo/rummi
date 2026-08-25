@@ -33,6 +33,17 @@ def init(
     return {k: jnp.asarray(v) for k, v in init_params(cfg, arch, seed).items()}
 
 
+def slot_counts(cfg: RummiConfig, table_sets: jax.Array) -> jax.Array:
+    """`(B, S, K)` count of each kind per slot. See `features.slot_counts_numpy`.
+
+    `EMPTY` is masked rather than clamped: clamping would place a phantom tile of
+    kind 0 in every empty position.
+    """
+    valid = (table_sets >= 0).astype(jnp.float32)
+    idx = jnp.clip(table_sets, 0, cfg.n_kinds - 1).astype(jnp.int32)
+    return (jax.nn.one_hot(idx, cfg.n_kinds) * valid[..., None]).sum(-2)
+
+
 def features(cfg: RummiConfig, obs: dict[str, jax.Array]) -> jax.Array:
     batch = obs["rack"].shape[0]
     flat = jnp.concatenate(

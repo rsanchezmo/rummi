@@ -11,7 +11,12 @@ import pytest
 
 from rummi.agents.base import Agent
 from rummi.agents.learned.architecture import Architecture, init_params, param_names
-from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
+from rummi.agents.learned.features import (
+    FEATURE_FIELDS,
+    feature_dim,
+    feature_scale,
+    slot_counts_numpy,
+)
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
@@ -36,12 +41,34 @@ def played(cfg: RummiConfig, batch: int = 6, steps: int = 30, seed: int = 0):
 
 
 # --- the feature layout ------------------------------------------------------
+def flat_features(cfg: RummiConfig, obs) -> np.ndarray:
+    """The vector both networks build. `slot_counts` is not in it -- see the
+    `features` module docstring for the measurement that decided that."""
+    batch = obs["rack"].shape[0]
+    return np.concatenate([obs[f].reshape(batch, -1) for f in FEATURE_FIELDS], -1)
+
+
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
 def test_feature_dim_matches_what_the_fields_actually_flatten_to(cfg: RummiConfig):
     _, obs, _ = played(cfg)
-    actual = sum(int(obs[f][0].size) for f in FEATURE_FIELDS)
-    assert actual == feature_dim(cfg)
+    assert flat_features(cfg, obs).shape[-1] == feature_dim(cfg)
     assert feature_scale(cfg).shape == (feature_dim(cfg),)
+
+
+@pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
+def test_slot_counts_account_for_the_table_exactly(cfg: RummiConfig):
+    """Not in the baseline's features (measured: no gain), but kept correct and
+    tested, because a factored action head will want per-slot representations."""
+    state, obs, _ = played(cfg)
+    counts = slot_counts_numpy(cfg, obs["table_sets"])
+    np.testing.assert_array_equal(
+        counts.sum(1).astype(np.int64), state.table_counts().astype(np.int64)
+    )
+    assert counts.sum() > 0, "the probe state has an empty table, so this proved nothing"
+    # EMPTY padding must contribute nothing: clamping it into kind 0 instead of
+    # masking would add S*L phantom tiles of the lowest kind.
+    empty_slots = obs["table_sets"].max(-1) < 0
+    assert counts[empty_slots].sum() == 0
 
 
 @pytest.mark.parametrize("cfg", CONFIGS, ids=lambda c: f"{c.n_kinds}k-{c.n_players}p")
@@ -50,8 +77,7 @@ def test_scaling_lands_every_feature_in_a_sane_range(cfg: RummiConfig):
     neighbours; a divisor that was wrong by a factor of the deck size would show
     up here rather than as a slow-training mystery."""
     _, obs, _ = played(cfg)
-    flat = np.concatenate([obs[f].reshape(obs[f].shape[0], -1) for f in FEATURE_FIELDS], -1)
-    scaled = flat / feature_scale(cfg)
+    scaled = flat_features(cfg, obs) / feature_scale(cfg)
     assert np.isfinite(scaled).all()
     assert scaled.max() <= 1.5, f"max feature {scaled.max():.2f}"
     assert scaled.min() >= -1.5, f"min feature {scaled.min():.2f}"

@@ -7,14 +7,25 @@ fields are concatenated in, and **the divisor** each position is scaled by. Both
 implementations read them from here, so a mismatch is impossible rather than
 merely unlikely.
 
-*Why `table_sets` is left out.* It holds raw kind ids, and a kind id is not an
-ordinal quantity -- kind 5 and kind 6 may be different colours. Feeding it to an
-MLP as a scaled scalar would be worse than not feeding it, and one-hotting it
-costs `S*L*K` inputs. It is also close to redundant: `slot_features` carries
-`len`, `colour`, `lo`, `hi`, `n_jokers` and `value` per slot, which pins a run's
-contents exactly and a group's up to which colours are present. A set-aware
-encoder -- embed each tile, attend over slots -- is the obvious way to use the
-real thing, and is exactly what this reference model is a baseline for.
+*Why `table_sets` is not here, tested rather than argued.* Every bundled agent
+reads it, so a network without it cannot represent their policy exactly, and that
+looked like the obvious cause of cloning plateauing at 75% agreement. It is not.
+Adding it as per-slot kind counts `(S, K)` -- exact, order-free, the same
+representation `rack` and `unseen` use -- at matched budget on `standard` gave
+**74.5% agreement and -360.6**, against **75.6% and -348.3** without. Slightly
+worse, not better.
+
+Two readings, and the data does not separate them: either `slot_features` already
+carries what matters (`run_valid`, `group_valid`, `is_extendable` and `value` are
+precisely the relational facts a policy needs, and `lo`/`hi`/`colour` pin a run
+exactly), or 1855 extra inputs into a 256-unit layer are diluted and 40 epochs
+under-trains them -- the with-table run ended on a *higher* NLL, which is what
+under-fitting looks like.
+
+Either way it is not the cheap win it appeared to be, so the baseline stays lean.
+:func:`slot_counts_numpy` and the per-network `slot_counts` methods are kept and
+tested, because a factored or bilinear action head needs per-slot representations
+and will want them.
 """
 
 from __future__ import annotations
@@ -51,7 +62,33 @@ FEATURE_FIELDS: tuple[str, ...] = (
     "melded",
     "scalars",
 )
-"""Concatenation order. Flattened per field, batch dimension kept."""
+"""Observation fields, in concatenation order. Flattened, batch dimension kept.
+
+`slot_counts` is deliberately *not* among them -- see the module docstring for the
+measurement that settled it.
+"""
+
+
+def slot_counts_numpy(cfg: RummiConfig, table_sets: np.ndarray) -> np.ndarray:
+    """`(B, S, K)` count of each kind in each slot. The reference for the ports.
+
+    `EMPTY` padding contributes nothing, which is the only subtlety: it is `-1`, so
+    it has to be masked out rather than clamped into kind 0.
+    """
+    b, s, _ = table_sets.shape
+    counts = np.zeros((b, s, cfg.n_kinds), dtype=np.float32)
+    valid = table_sets >= 0
+    idx = np.where(valid, table_sets, 0).astype(np.int64)
+    np.add.at(
+        counts,
+        (
+            np.arange(b)[:, None, None].repeat(s, 1).repeat(table_sets.shape[2], 2),
+            np.arange(s)[None, :, None].repeat(b, 0).repeat(table_sets.shape[2], 2),
+            idx,
+        ),
+        valid.astype(np.float32),
+    )
+    return counts
 
 
 def feature_dim(cfg: RummiConfig) -> int:
