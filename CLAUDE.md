@@ -50,6 +50,17 @@ changed — that is either a bug, or a decision that needs `PROTOCOL_VERSION` an
 the published scores revisited. Regenerate only when you intended the rules to
 change, and say so in the commit.
 
+## Reward shaping is outside the fixtures
+
+`tiles_placed_bonus`, `rack_value_delta` and `micro_step_cost` are `0.0` in every
+preset, so **every golden fixture leaves all nine branches that implement them
+untouched** -- three terms in each of three backends. They are specified in
+`SPEC.md` section 7 and covered by `test_each_shaping_term_matches_the_reference_and_actually_fires`,
+which turns on one term at a time and asserts the total actually moved. A
+conformance test that could pass with the term doing nothing is worth nothing.
+
+Those tests need **greedy**, not random, for the reason in the next section.
+
 ## Random play cannot test this game
 
 In 10M fuzz steps, uniform-random play assembled a legal 30-point opening meld

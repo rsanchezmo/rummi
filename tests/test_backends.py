@@ -7,6 +7,7 @@ exhaustive kernel comparison -- stay in the per-backend test modules.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -129,3 +130,105 @@ def test_unknown_backend_is_rejected():
 
 def test_numpy_is_always_available():
     assert "numpy" in available()
+
+
+# --- reward shaping ----------------------------------------------------------
+# Every golden fixture leaves these at zero, so the nine branches implementing
+# them -- three terms in each of three backends -- are the one part of the reward
+# no other test reaches. Each is exercised on its own, so a term that silently
+# does nothing cannot hide behind the other two.
+SHAPING_TERMS = {
+    "tiles_placed_bonus": 0.5,
+    "rack_value_delta": 0.25,
+    "micro_step_cost": 0.01,
+}
+
+
+def _greedy_actions(cfg, batch_size: int, steps: int, seed: int) -> list[np.ndarray]:
+    """A recorded trajectory every backend can replay.
+
+    Greedy rather than random: random play never assembles a legal opening meld,
+    so it never reaches ``END_TURN`` and the meld-time shaping terms would stay at
+    zero no matter how wrong they were.
+    """
+    from rummi.agents import build
+    from rummi.agents.base import act_on_state
+
+    state = np_reset(cfg, batch_size, seed=seed)
+    agent = build("greedy", cfg)
+    recorded = []
+    for _ in range(steps):
+        mask = np_masks.legal_actions(state)
+        actions = act_on_state(agent, state, mask)
+        recorded.append(np.asarray(actions).copy())
+        np_step(state, actions, mask)
+    return recorded
+
+
+def _replay_rewards(backend, cfg, actions: list[np.ndarray], batch_size: int, seed: int):
+    state = backend.reset(cfg, batch_size, seed=seed)
+    total = np.zeros((batch_size, cfg.n_players), dtype=np.float64)
+    per_step = []
+    for step_actions in actions:
+        mask = backend.legal_actions(cfg, state)
+        state, out = backend.step(cfg, state, step_actions, mask)
+        rewards = backend.to_numpy(out.rewards)
+        per_step.append(rewards.copy())
+        total += rewards
+    return total, per_step
+
+
+@pytest.mark.parametrize("term", sorted(SHAPING_TERMS))
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_each_shaping_term_matches_the_reference_and_actually_fires(backend_name: str, term: str):
+    backend = get_backend(backend_name)
+    cfg = replace(TINY_GROUPS, **{term: SHAPING_TERMS[term]})
+    batch_size, steps, seed = 6, 120, 17
+
+    actions = _greedy_actions(cfg, batch_size, steps, seed)
+    plain_total, _ = _replay_rewards(get_backend("numpy"), TINY_GROUPS, actions, batch_size, seed)
+    ref_total, ref_steps = _replay_rewards(get_backend("numpy"), cfg, actions, batch_size, seed)
+    got_total, got_steps = _replay_rewards(backend, cfg, actions, batch_size, seed)
+
+    for i, (got, ref) in enumerate(zip(got_steps, ref_steps, strict=True)):
+        np.testing.assert_allclose(
+            got, ref, atol=1e-6,
+            err_msg=f"{backend.name}: {term} reward differs at step {i}",
+        )
+    assert not np.allclose(ref_total, plain_total, atol=1e-9), (
+        f"{term} changed no reward over {steps} steps, so this proved nothing"
+    )
+    np.testing.assert_allclose(got_total, ref_total, atol=1e-6)
+
+
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_shaping_is_credited_only_to_the_seat_that_acted(backend_name: str):
+    """Shaping is a per-seat signal, so a term leaking into another seat's column
+    would quietly reward a player for an opponent's move."""
+    backend = get_backend(backend_name)
+    cfg = replace(TINY_GROUPS, **SHAPING_TERMS)
+    batch_size, steps, seed = 4, 120, 23
+
+    actions = _greedy_actions(cfg, batch_size, steps, seed)
+    state = backend.reset(cfg, batch_size, seed=seed)
+    ref = np_reset(cfg, batch_size, seed=seed)
+    shaped_steps = 0
+
+    for i, step_actions in enumerate(actions):
+        acting = ref.current.copy()
+        done_before = ref.done.copy()
+        mask = backend.legal_actions(cfg, state)
+        state, out = backend.step(cfg, state, step_actions, mask)
+        np_step(ref, step_actions, np_masks.legal_actions(ref))
+        rewards = backend.to_numpy(out.rewards)
+
+        for env in range(batch_size):
+            if done_before[env] or ref.done[env]:
+                continue  # a terminal payout is zero-sum across every seat
+            others = [p for p in range(cfg.n_players) if p != acting[env]]
+            assert not rewards[env, others].any(), (
+                f"{backend.name}: step {i} paid a seat that did not act"
+            )
+            shaped_steps += int(rewards[env, acting[env]] != 0)
+
+    assert shaped_steps, "no shaped step was observed, so this proved nothing"

@@ -164,6 +164,22 @@ empty and `consecutive_draws >= P` ends the game on lowest rack value. Reaching
 `SCORE_NORMALIZED` divides by `rack_size * max(n_numbers, joker_penalty)`.
 Truncation pays nothing — it is an artificial cutoff, not a result.
 
+**Shaping** is three optional per-step terms, all `0.0` by default and all
+credited to the seat that acted. They are added to the terminal reward above
+rather than replacing it, and unlike it they are *not* zero-sum.
+
+| term | when | amount |
+|---|---|---|
+| `micro_step_cost` | every `PLACE`, `PICK`, `DISSOLVE`, `ASSIGN` — not on a committing action | `-micro_step_cost` |
+| `tiles_placed_bonus` | `END_TURN` | `tiles_placed_bonus * placed_rack.sum()` |
+| `rack_value_delta` | `END_TURN` | `rack_value_delta * face_value(placed_rack)`, jokers at zero |
+
+Shaping accrues as it is earned, so a truncated episode keeps whatever it already
+paid — only the *terminal* reward is withheld. Every bundled config and every
+evaluation suite leaves all three at `0.0`, so they are outside
+`PROTOCOL_VERSION`: turning one on makes a run incomparable to a published score
+by intent, not by accident.
+
 ## 8. Conformance status
 
 | backend | state | peak env-steps/s | vs NumPy | at batch |

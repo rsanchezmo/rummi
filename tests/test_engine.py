@@ -137,6 +137,23 @@ def test_running_out_of_turns_truncates_without_a_winner():
     assert (result.rewards == 0).all(), "an artificial cutoff should not pay out"
 
 
+def test_truncation_withholds_the_terminal_reward_but_keeps_shaping():
+    """Shaping is paid as it is earned, so an artificial cutoff cannot claw it
+    back -- only the result-dependent payout is withheld. SPEC.md section 7 says
+    so, which is why it is pinned here."""
+    cfg = RummiConfig(n_players=2, max_turns=1, micro_step_cost=0.25)
+    s = state_with(cfg, rack=[kind_of(cfg, 0, 1)])
+
+    mask = legal_actions(s)
+    place = step(s, np.array([encode_place(cfg, kind_of(cfg, 0, 1))]), mask)
+    assert place.rewards[0, 0] == pytest.approx(-0.25), "the micro-action should cost"
+    assert not bool(s.done[0])
+
+    result = step(s, np.array([cfg.draw_action]), legal_actions(s))
+    assert bool(result.truncated[0]) and not bool(result.terminated[0])
+    assert (result.rewards == 0).all(), "DRAW commits a turn, so no shaping and no payout"
+
+
 def test_win_loss_reward_is_zero_sum():
     cfg = RummiConfig(n_players=3, reward_mode=RewardMode.WIN_LOSS)
     kinds = [kind_of(cfg, 0, n) for n in (11, 12, 13)]
