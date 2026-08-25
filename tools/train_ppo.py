@@ -67,20 +67,31 @@ def shaped(cfg: RummiConfig) -> RummiConfig:
     return dataclasses.replace(cfg, tiles_placed_bonus=0.01, rack_value_delta=0.002)
 
 
-def clone_greedy(
+def clone_expert(
     net,
     env,
     cfg: RummiConfig,
-    updates: int,
+    teacher_name: str,
+    samples: int,
+    epochs: int,
     lr: float,
     seed: int,
 ) -> None:
-    """Behaviour cloning from `greedy`, on `greedy`'s own state distribution.
+    """Behaviour cloning from a bundled agent, on that agent's own states.
 
-    The teacher drives, so the states visited are ones a competent player reaches
-    -- which is the point, since the learner cannot reach them itself. Loss is
-    cross-entropy on the *masked* logits, so the model never spends capacity
-    learning that 98.5% of the action space is unavailable.
+    Collection and fitting are **separate phases** on purpose. `optimal` costs a
+    CP-SAT solve per turn and cannot batch, so re-querying it for every minibatch
+    -- which the first version of this did -- spends all its time in the solver and
+    almost none in SGD. Gathering once and running many epochs over the dataset
+    makes an expert teacher affordable: `greedy` is cheap either way, `optimal` is
+    only viable this way.
+
+    Features are cached rather than observations: ~570 floats against ~1025, which
+    is what lets the dataset be large enough to be worth many epochs.
+
+    The teacher drives, so the states are ones a competent player reaches. That is
+    the entire point -- the learner cannot reach them itself. On `standard`,
+    uniform-random play never assembles a first meld at all.
     """
     import torch
 
@@ -88,45 +99,61 @@ def clone_greedy(
     from rummi.agents.base import act_on_state
     from rummi.agents.learned.torch_net import log_prob
 
-    teacher = build("greedy", cfg)
+    teacher = build(teacher_name, cfg)
     teacher.reset(env.num_envs)
-    opt = torch.optim.Adam(net.parameters(), lr=lr)
     obs, info = env.reset()
 
-    for update in range(1, updates + 1):
-        batch_obs, batch_mask, batch_act = [], [], []
-        for _ in range(64):
-            mask = np.asarray(info["action_mask"])
-            wanted = np.asarray(act_on_state(teacher, env.state, mask))
-            batch_obs.append({k: np.asarray(v).copy() for k, v in obs.items()})
-            batch_mask.append(mask.copy())
-            batch_act.append(wanted.copy())
-            obs, _, _, _, info = env.step(wanted)
+    feats: list[torch.Tensor] = []
+    masks: list[np.ndarray] = []
+    acts: list[np.ndarray] = []
+    gathered = 0
+    started = time.perf_counter()
 
-        obs_t = {
-            k: torch.as_tensor(np.concatenate([b[k] for b in batch_obs]))
-            for k in batch_obs[0]
-        }
-        mask_t = torch.as_tensor(np.concatenate(batch_mask))
-        act_t = torch.as_tensor(np.concatenate(batch_act)).long()
-
-        logits, _ = net(obs_t, mask_t)
-        loss = -log_prob(logits, act_t).mean()
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
-        opt.step()
-
+    while gathered < samples:
+        mask = np.asarray(info["action_mask"])
+        wanted = np.asarray(act_on_state(teacher, env.state, mask))
         with torch.no_grad():
-            agree = (logits.argmax(-1) == act_t).float().mean().item()
-        if update % max(1, updates // 10) == 0 or update == 1:
+            feats.append(
+                net.features({k: torch.as_tensor(np.asarray(v)) for k, v in obs.items()})
+            )
+        masks.append(mask.copy())
+        acts.append(wanted.copy())
+        gathered += len(wanted)
+        obs, _, _, _, info = env.step(wanted)
+        if gathered % (env.num_envs * 200) == 0:
+            rate = gathered / (time.perf_counter() - started)
+            print(f"  gathering {gathered:>7,}/{samples:,}  {rate:>6.0f} states/s", flush=True)
+
+    x = torch.cat(feats)
+    m = torch.as_tensor(np.concatenate(masks))
+    y = torch.as_tensor(np.concatenate(acts)).long()
+    print(f"  {len(y):,} states from {teacher_name} in {time.perf_counter() - started:.0f}s")
+
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    batch = 4096
+    generator = torch.Generator().manual_seed(seed)
+
+    for epoch in range(1, epochs + 1):
+        order = torch.randperm(len(y), generator=generator)
+        total_nll = total_agree = 0.0
+        for start in range(0, len(y), batch):
+            idx = order[start : start + batch]
+            logits, _ = net.head(x[idx], m[idx])
+            loss = -log_prob(logits, y[idx]).mean()
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+            opt.step()
+            with torch.no_grad():
+                total_nll += loss.detach().item() * len(idx)
+                total_agree += (logits.argmax(-1) == y[idx]).sum().item()
+        if epoch % max(1, epochs // 10) == 0 or epoch == 1:
             print(
-                f"  clone {update:>4}/{updates}  nll {loss.detach().item():>7.4f}  "
-                f"agrees with greedy {agree:>6.1%}",
+                f"  clone epoch {epoch:>3}/{epochs}  nll {total_nll / len(y):>7.4f}  "
+                f"agrees with {teacher_name} {total_agree / len(y):>6.1%}",
                 flush=True,
             )
 
-    # The teacher drove, so the env is mid-game in states PPO should not inherit.
     env.reset()
 
 
@@ -141,9 +168,11 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--shaping", action="store_true", help="turn on the per-step reward terms")
     p.add_argument(
-        "--bc-updates", type=int, default=0,
-        help="clone greedy for this many updates before PPO; required on standard",
+        "--clone", default=None, choices=["greedy", "rearrange", "optimal"],
+        help="clone this agent before PPO. Required on standard -- see the docstring.",
     )
+    p.add_argument("--clone-states", type=int, default=50_000)
+    p.add_argument("--clone-epochs", type=int, default=20)
     p.add_argument("--out", type=pathlib.Path, default=None, help="save weights here")
     p.add_argument("--eval-games", type=int, default=0, help="score through the frozen protocol")
     args = p.parse_args()
@@ -175,9 +204,15 @@ def main() -> None:
         f"envs={hyper.envs} horizon={hyper.horizon} params="
         f"{sum(v.numel() for v in net.parameters()):,}"
     )
-    if args.bc_updates:
-        print(f"cloning {args.opponent} for {args.bc_updates} updates first")
-        clone_greedy(net, env, cfg, args.bc_updates, hyper.lr, args.seed)
+    if args.clone:
+        print(
+            f"cloning {args.clone}: {args.clone_states:,} states, "
+            f"{args.clone_epochs} epochs"
+        )
+        clone_expert(
+            net, env, cfg, args.clone, args.clone_states, args.clone_epochs,
+            hyper.lr, args.seed,
+        )
         obs, info = env.reset()
 
     started = time.perf_counter()

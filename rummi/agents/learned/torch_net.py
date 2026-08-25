@@ -61,16 +61,25 @@ class TorchPolicy(nn.Module):
         assert flat.shape[-1] == feature_dim(self.cfg), flat.shape
         return flat / self.scale
 
-    def forward(
-        self, obs: dict[str, torch.Tensor], mask: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """`(masked_logits, value)`."""
-        x = self.features(obs)
+    def head(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """`(masked_logits, value)` from already-scaled features.
+
+        Split out so a caller can cache features instead of observations. That
+        matters for expert cloning: `slot_features` and the count vectors are ~570
+        floats where the raw observation is ~1025, and an offline dataset large
+        enough to clone CP-SAT is the difference between fitting in memory and not.
+        """
         for layer in self.trunk:
             x = torch.tanh(layer(x))
         logits = self.pi(x)
         legal = torch.as_tensor(mask, dtype=torch.bool, device=logits.device)
         return torch.where(legal, logits, torch.full_like(logits, MASKED)), self.v(x).squeeze(-1)
+
+    def forward(
+        self, obs: dict[str, torch.Tensor], mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """`(masked_logits, value)`."""
+        return self.head(self.features(obs), mask)
 
 
 def _load(layer: nn.Linear, w: np.ndarray, b: np.ndarray) -> None:
