@@ -59,6 +59,13 @@ class Hyper:
     clip: float = 0.2
     value_coef: float = 0.5
     entropy_coef: float = 0.01
+    kl_coef: float = 0.0
+    """Penalty on KL from the policy PPO started with.
+
+    Zero reproduces plain PPO. It matters only after cloning: with ~1 terminal
+    reward per 3,600 steps the advantages are mostly value-error noise, and
+    unanchored PPO walked a cloned policy's melding rate from 3.1% back to 0.0%.
+    The anchor lets it move where it has signal and holds it where it does not."""
     max_grad_norm: float = 0.5
 
 
@@ -76,6 +83,7 @@ def clone_expert(
     epochs: int,
     lr: float,
     seed: int,
+    gamma: float = 0.999,
 ) -> None:
     """Behaviour cloning from a bundled agent, on that agent's own states.
 
@@ -85,6 +93,14 @@ def clone_expert(
     almost none in SGD. Gathering once and running many epochs over the dataset
     makes an expert teacher affordable: `greedy` is cheap either way, `optimal` is
     only viable this way.
+
+    **Both heads are fitted, not just the policy.** The teacher's own returns are
+    right there in the rollout, so the critic can start calibrated on the
+    distribution PPO will begin from. Skipping this left the value head at
+    initialisation: value loss 7.7 against 0.0003 for a trained one, advantages
+    that were pure noise, and a policy destroyed within a handful of updates. There
+    is nothing to copy from the policy head -- it is `(h, n_actions)` against
+    `(h, 1)` -- but its *data* serves both.
 
     Features are cached rather than observations: ~570 floats against ~1025, which
     is what lets the dataset be large enough to be worth many epochs.
@@ -106,6 +122,8 @@ def clone_expert(
     feats: list[torch.Tensor] = []
     masks: list[np.ndarray] = []
     acts: list[np.ndarray] = []
+    rewards: list[np.ndarray] = []
+    dones: list[np.ndarray] = []
     gathered = 0
     started = time.perf_counter()
 
@@ -119,7 +137,9 @@ def clone_expert(
         masks.append(mask.copy())
         acts.append(wanted.copy())
         gathered += len(wanted)
-        obs, _, _, _, info = env.step(wanted)
+        obs, reward, term, trunc, info = env.step(wanted)
+        rewards.append(np.asarray(reward, dtype=np.float32).copy())
+        dones.append((term | trunc).astype(np.float32))
         if gathered % (env.num_envs * 200) == 0:
             rate = gathered / (time.perf_counter() - started)
             print(f"  gathering {gathered:>7,}/{samples:,}  {rate:>6.0f} states/s", flush=True)
@@ -127,7 +147,21 @@ def clone_expert(
     x = torch.cat(feats)
     m = torch.as_tensor(np.concatenate(masks))
     y = torch.as_tensor(np.concatenate(acts)).long()
-    print(f"  {len(y):,} states from {teacher_name} in {time.perf_counter() - started:.0f}s")
+
+    # Discounted returns along each env's own timeline, bootstrapped at zero at the
+    # end of collection -- the tail is a small fraction of a long rollout.
+    reward_grid = np.stack(rewards)
+    done_grid = np.stack(dones)
+    returns = np.zeros_like(reward_grid)
+    running = np.zeros(reward_grid.shape[1], dtype=np.float32)
+    for t in reversed(range(len(reward_grid))):
+        running = reward_grid[t] + gamma * running * (1.0 - done_grid[t])
+        returns[t] = running
+    g = torch.as_tensor(returns.reshape(-1))
+    print(
+        f"  {len(y):,} states from {teacher_name} in {time.perf_counter() - started:.0f}s"
+        f"  (returns: mean {float(g.mean()):+.3f}, std {float(g.std()):.3f})"
+    )
 
     opt = torch.optim.Adam(net.parameters(), lr=lr)
     batch = 4096
@@ -135,21 +169,25 @@ def clone_expert(
 
     for epoch in range(1, epochs + 1):
         order = torch.randperm(len(y), generator=generator)
-        total_nll = total_agree = 0.0
+        total_nll = total_agree = total_vloss = 0.0
         for start in range(0, len(y), batch):
             idx = order[start : start + batch]
-            logits, _ = net.head(x[idx], m[idx])
-            loss = -log_prob(logits, y[idx]).mean()
+            logits, value = net.head(x[idx], m[idx])
+            policy_nll = -log_prob(logits, y[idx]).mean()
+            value_mse = 0.5 * (value - g[idx]).pow(2).mean()
+            loss = policy_nll + 0.5 * value_mse
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
             opt.step()
             with torch.no_grad():
-                total_nll += loss.detach().item() * len(idx)
+                total_nll += policy_nll.detach().item() * len(idx)
+                total_vloss += value_mse.detach().item() * len(idx)
                 total_agree += (logits.argmax(-1) == y[idx]).sum().item()
         if epoch % max(1, epochs // 10) == 0 or epoch == 1:
             print(
                 f"  clone epoch {epoch:>3}/{epochs}  nll {total_nll / len(y):>7.4f}  "
+                f"v {total_vloss / len(y):>7.4f}  "
                 f"agrees with {teacher_name} {total_agree / len(y):>6.1%}",
                 flush=True,
             )
@@ -179,6 +217,22 @@ def main() -> None:
              "and 2400 actions, 74%% of a (256,256) net is the output projection.",
     )
     p.add_argument("--activation", default="relu", choices=["relu", "tanh"])
+    p.add_argument(
+        "--init-from", type=pathlib.Path, default=None,
+        help="start from a saved checkpoint (skips cloning; takes its architecture)",
+    )
+    p.add_argument("--kl-coef", type=float, default=0.0, help="anchor PPO to its starting policy")
+    p.add_argument(
+        "--value-warmup", type=int, default=0,
+        help="updates fitting only the critic before the policy is allowed to move. "
+             "Required after cloning: BC trains the policy head alone, so the value "
+             "head is still at init and its advantages are noise.",
+    )
+    p.add_argument(
+        "--entropy-coef", type=float, default=0.01,
+        help="0.0 after cloning: this game punishes imprecision, since one wrong "
+             "action ends the turn in DRAW and reverts it",
+    )
     p.add_argument("--out", type=pathlib.Path, default=None, help="save weights here")
     p.add_argument("--eval-games", type=int, default=0, help="score through the frozen protocol")
     args = p.parse_args()
@@ -189,17 +243,31 @@ def main() -> None:
     from rummi.agents.learned.torch_net import TorchPolicy, entropy, log_prob, sample
     from rummi.env.fixed_opponent import FixedOpponentEnv
 
-    hyper = Hyper(envs=args.envs, horizon=args.horizon, lr=args.lr)
+    hyper = Hyper(
+        envs=args.envs, horizon=args.horizon, lr=args.lr,
+        entropy_coef=args.entropy_coef, kl_coef=args.kl_coef,
+    )
     base = CONFIG_BY_NAME[args.config]
     cfg = shaped(base) if args.shaping else base
 
     torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
-    arch = Architecture(
-        hidden=tuple(int(w) for w in args.hidden.split(",")), activation=args.activation
-    )
-    net = TorchPolicy(cfg, arch, seed=args.seed)
+    if args.init_from:
+        checkpoint = torch.load(args.init_from, weights_only=False)
+        arch = Architecture(
+            hidden=tuple(checkpoint["hidden"]),
+            activation=checkpoint.get("activation", args.activation),
+        )
+        net = TorchPolicy(cfg, arch, seed=args.seed)
+        net.load_state_dict(checkpoint["state"])
+        print(f"resumed from {args.init_from} (hidden={arch.hidden}, {arch.activation})")
+    else:
+        arch = Architecture(
+            hidden=tuple(int(w) for w in args.hidden.split(",")), activation=args.activation
+        )
+        net = TorchPolicy(cfg, arch, seed=args.seed)
     opt = torch.optim.Adam(net.parameters(), lr=hyper.lr, eps=1e-5)
+    value_opt = torch.optim.Adam(net.v.parameters(), lr=hyper.lr, eps=1e-5)
 
     env = FixedOpponentEnv(
         num_envs=hyper.envs, cfg=cfg, seed=args.seed, opponent=args.opponent
@@ -219,9 +287,19 @@ def main() -> None:
         )
         clone_expert(
             net, env, cfg, args.clone, args.clone_states, args.clone_epochs,
-            hyper.lr, args.seed,
+            hyper.lr, args.seed, hyper.gamma,
         )
         obs, info = env.reset()
+
+    # Frozen snapshot of whatever PPO starts from, for the KL anchor.
+    reference = None
+    if hyper.kl_coef:
+        import copy
+
+        reference = copy.deepcopy(net).eval()
+        for parameter in reference.parameters():
+            parameter.requires_grad_(False)
+        print(f"anchoring PPO to its starting policy, kl_coef={hyper.kl_coef}")
 
     started = time.perf_counter()
     # Wins come from `info["winner"]`, not from the sign of the reward. Under
@@ -302,6 +380,17 @@ def main() -> None:
         size = total // hyper.minibatches
         last_stats = (0.0, 0.0, 0.0)
 
+        # Cloning fits the policy head only, so straight after it the critic is
+        # still at initialisation -- value loss came in at 7.7 against 0.0003 for a
+        # trained one -- and acting on those advantages destroys what cloning
+        # built. Fit the critic first.
+        #
+        # `value_opt` touches the value head *only*, deliberately. The head shares
+        # the trunk, so optimising the critic through the trunk moves the policy
+        # too: measured, that alone took `end_turn` from 1.97% to 0.02% in a single
+        # update. A warmup that perturbs the policy is not a warmup.
+        warming = update <= args.value_warmup
+
         for _ in range(hyper.epochs):
             order = torch.randperm(total, generator=generator)
             for start in range(0, total, size):
@@ -318,12 +407,27 @@ def main() -> None:
                 ).mean()
                 value_loss = 0.5 * (value - ret_b).pow(2).mean()
                 ent = entropy(logits).mean()
-                loss = policy_loss + hyper.value_coef * value_loss - hyper.entropy_coef * ent
+                if warming:
+                    loss = value_loss
+                else:
+                    loss = (
+                        policy_loss + hyper.value_coef * value_loss - hyper.entropy_coef * ent
+                    )
+                if reference is not None and not warming:
+                    with torch.no_grad():
+                        ref_logits, _ = reference(
+                            {k: v[idx] for k, v in flat_obs.items()}, mask_b
+                        )
+                    # Masked entries sit at MASKED in both, so they contribute ~0.
+                    logp_new = torch.log_softmax(logits, dim=-1)
+                    kl = (logp_new.exp() * (logp_new - torch.log_softmax(ref_logits, -1))).sum(-1)
+                    loss = loss + hyper.kl_coef * kl.mean()
 
-                opt.zero_grad(set_to_none=True)
+                active_opt = value_opt if warming else opt
+                active_opt.zero_grad(set_to_none=True)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), hyper.max_grad_norm)
-                opt.step()
+                active_opt.step()
                 last_stats = (
                     policy_loss.detach().item(),
                     value_loss.detach().item(),
@@ -336,7 +440,8 @@ def main() -> None:
         print(
             f"update {update:>4}  steps {steps:>9,}  "
             f"finished {len(wins_seen):>5}  win {win_rate:>6.1%}  "
-            f"melded {melded_frac:>6.1%}  end_turn {end_turn_frac:>6.2%}  "
+            f"{'warm ' if warming else ''}melded {melded_frac:>6.1%}  "
+            f"end_turn {end_turn_frac:>6.2%}  "
             f"pi {last_stats[0]:>+8.4f}  v {last_stats[1]:>8.4f}  H {last_stats[2]:>6.3f}  "
             f"{steps / (time.perf_counter() - started):>7.0f} steps/s",
             flush=True,
@@ -347,7 +452,15 @@ def main() -> None:
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"cfg": args.config, "hidden": arch.hidden, "state": net.state_dict()}, args.out)
+        torch.save(
+            {
+                "cfg": args.config,
+                "hidden": arch.hidden,
+                "activation": arch.activation,
+                "state": net.state_dict(),
+            },
+            args.out,
+        )
         print(f"wrote {args.out}")
 
     if args.eval_games:
