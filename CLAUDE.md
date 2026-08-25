@@ -174,6 +174,41 @@ exactly one tile, `optimal` repartitions the table. It exists so a submission ha
 rungs to place itself between — `optimal` beating `greedy` 100-0 told newcomers
 nothing.
 
+## The reference learned agent
+
+`rummi/agents/learned/` — under `agents/` on purpose. A parallel "policies"
+concept existed here once and was removed; a network is not a second kind of
+agent, it is an agent with weights.
+
+**It is not in `REGISTRY`.** The bundled ladder is `random` through `optimal`, and
+a rung carrying weights has to earn its place by landing between `rearrange` (85%)
+and `optimal` (100%) first. Promoting it is cheap when it does — `evaluate` takes
+`build_agent`, so nothing in the package has to change to score one.
+
+The split, and why:
+
+- `features.py` — concatenation **order** and the per-position **divisor**, as
+  data. Two frameworks reading one scale vector cannot drift on it. `table_sets`
+  is deliberately excluded: raw kind ids are not ordinal, and `slot_features`
+  already pins a run's contents exactly.
+- `architecture.py` — `init_params` returns plain NumPy, so both networks are
+  built from the *same* weights and parity is testable rather than hoped for.
+  The orthogonal init corrects the sign of `diag(R)`; without it `qr` may return
+  either valid factorisation and a seed stops being reproducible across LAPACKs.
+- `torch_net.py`, `jax_net.py` — the two forward passes.
+- `agent.py` — the `Agent` adapter. Deterministic by default: a score has to be
+  reproducible.
+
+**`MASKED` is `-1e8`, not `-inf`.** With `-inf` an illegal action's probability is
+exactly zero and the entropy term computes `0 * -inf` = NaN, which ends a run. At
+-1e8 the probability underflows to zero and the product stays zero.
+
+`tools/train_ppo.py` is the training loop. The mask is **stored in the rollout**
+and reapplied at update time: scoring an old action under a policy that has
+forgotten which actions were legal gives a meaningless ratio. `--shaping` turns on
+the SPEC section 7 terms and makes the run incomparable to a published score by
+design, which is why the eval at the end always uses the unshaped suite.
+
 ## Backend traps already paid for
 
 - **JAX**: constant lookup tables must be **NumPy** arrays. An `lru_cache` first
