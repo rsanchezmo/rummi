@@ -19,6 +19,10 @@ ruff check rummi tests tools && mypy rummi                # what CI's lint job r
 python -m rummi.bench.bench_env                           # env throughput per backend
 ```
 
+`mypy` needs a **3.12+** interpreter: modern numpy stubs use PEP 695 `type`
+statements, which mypy refuses to parse when it is running on anything older --
+and the error names numpy, not your Python. CI's lint job pins 3.12 for this.
+
 `mypy rummi` is clean, but `pyproject.toml` exempts `rummi/render/pygame_view.py`
 and `rummi/env/torch/sim.py`. That is a ratchet with a reason written next to it,
 not a blanket pass -- read it before adding a third.

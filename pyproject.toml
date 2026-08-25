@@ -44,7 +44,13 @@ ignore = [
 "tests/*" = ["E402"]
 
 [tool.mypy]
-python_version = "3.10"
+# No `python_version` pin. It applies to every file mypy reads, third-party stubs
+# included, and a pin below 3.12 makes it reject the PEP 695 `type` statements
+# modern numpy stubs use -- "Type statement is only supported in Python 3.12 and
+# greater", pointing at numpy rather than at this setting. The floor that matters
+# is our own syntax, and ruff already holds it: `target-version` derives from
+# `requires-python`, so PEP 695 in *our* code is an error while stubs are left
+# alone. Run mypy on 3.12+.
 ignore_missing_imports = true
 warn_unused_configs = true
 
