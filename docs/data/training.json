@@ -1,0 +1,4090 @@
+{
+  "config": "standard",
+  "opponent": "greedy",
+  "runs": [
+    {
+      "label": "win_loss",
+      "reward_mode": "win_loss",
+      "rack_shaping": 0.0,
+      "hidden": [
+        2048,
+        2048,
+        1024
+      ],
+      "history": [
+        {
+          "update": 1,
+          "steps": 8192,
+          "win_rate": NaN,
+          "melded": 0.722,
+          "end_turn": 0.0275,
+          "entropy": 0.414,
+          "warmup": true
+        },
+        {
+          "update": 2,
+          "steps": 16384,
+          "win_rate": NaN,
+          "melded": 0.925,
+          "end_turn": 0.0149,
+          "entropy": 0.357,
+          "warmup": true
+        },
+        {
+          "update": 3,
+          "steps": 24576,
+          "win_rate": NaN,
+          "melded": 0.958,
+          "end_turn": 0.0111,
+          "entropy": 0.348,
+          "warmup": true
+        },
+        {
+          "update": 4,
+          "steps": 32768,
+          "win_rate": 0.125,
+          "melded": 0.968,
+          "end_turn": 0.009000000000000001,
+          "entropy": 0.286,
+          "warmup": false
+        },
+        {
+          "update": 5,
+          "steps": 40960,
+          "win_rate": 0.077,
+          "melded": 0.943,
+          "end_turn": 0.001,
+          "entropy": 0.297,
+          "warmup": false
+        },
+        {
+          "update": 6,
+          "steps": 49152,
+          "win_rate": 0.043,
+          "melded": 0.912,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.365,
+          "warmup": false
+        },
+        {
+          "update": 7,
+          "steps": 57344,
+          "win_rate": 0.032,
+          "melded": 0.882,
+          "end_turn": 0.0054,
+          "entropy": 0.313,
+          "warmup": false
+        },
+        {
+          "update": 8,
+          "steps": 65536,
+          "win_rate": 0.024,
+          "melded": 0.8690000000000001,
+          "end_turn": 0.0067,
+          "entropy": 0.331,
+          "warmup": false
+        },
+        {
+          "update": 9,
+          "steps": 73728,
+          "win_rate": 0.021,
+          "melded": 0.8759999999999999,
+          "end_turn": 0.0067,
+          "entropy": 0.346,
+          "warmup": false
+        },
+        {
+          "update": 10,
+          "steps": 81920,
+          "win_rate": 0.017,
+          "melded": 0.8690000000000001,
+          "end_turn": 0.0051,
+          "entropy": 0.326,
+          "warmup": false
+        },
+        {
+          "update": 11,
+          "steps": 90112,
+          "win_rate": 0.016,
+          "melded": 0.866,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 12,
+          "steps": 98304,
+          "win_rate": 0.015,
+          "melded": 0.867,
+          "end_turn": 0.0048,
+          "entropy": 0.328,
+          "warmup": false
+        },
+        {
+          "update": 13,
+          "steps": 106496,
+          "win_rate": 0.013000000000000001,
+          "melded": 0.848,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.34,
+          "warmup": false
+        },
+        {
+          "update": 14,
+          "steps": 114688,
+          "win_rate": 0.012,
+          "melded": 0.812,
+          "end_turn": 0.0031,
+          "entropy": 0.317,
+          "warmup": false
+        },
+        {
+          "update": 15,
+          "steps": 122880,
+          "win_rate": 0.011000000000000001,
+          "melded": 0.799,
+          "end_turn": 0.0043,
+          "entropy": 0.317,
+          "warmup": false
+        },
+        {
+          "update": 16,
+          "steps": 131072,
+          "win_rate": 0.01,
+          "melded": 0.8190000000000001,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 17,
+          "steps": 139264,
+          "win_rate": 0.01,
+          "melded": 0.8320000000000001,
+          "end_turn": 0.0044,
+          "entropy": 0.371,
+          "warmup": false
+        },
+        {
+          "update": 18,
+          "steps": 147456,
+          "win_rate": 0.009000000000000001,
+          "melded": 0.778,
+          "end_turn": 0.0046,
+          "entropy": 0.367,
+          "warmup": false
+        },
+        {
+          "update": 19,
+          "steps": 155648,
+          "win_rate": 0.008,
+          "melded": 0.775,
+          "end_turn": 0.0052,
+          "entropy": 0.362,
+          "warmup": false
+        },
+        {
+          "update": 20,
+          "steps": 163840,
+          "win_rate": 0.008,
+          "melded": 0.7929999999999999,
+          "end_turn": 0.0046,
+          "entropy": 0.361,
+          "warmup": false
+        },
+        {
+          "update": 21,
+          "steps": 172032,
+          "win_rate": 0.008,
+          "melded": 0.813,
+          "end_turn": 0.0067,
+          "entropy": 0.387,
+          "warmup": false
+        },
+        {
+          "update": 22,
+          "steps": 180224,
+          "win_rate": 0.006999999999999999,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.006,
+          "entropy": 0.356,
+          "warmup": false
+        },
+        {
+          "update": 23,
+          "steps": 188416,
+          "win_rate": 0.006999999999999999,
+          "melded": 0.848,
+          "end_turn": 0.0059,
+          "entropy": 0.343,
+          "warmup": false
+        },
+        {
+          "update": 24,
+          "steps": 196608,
+          "win_rate": 0.006,
+          "melded": 0.828,
+          "end_turn": 0.006,
+          "entropy": 0.368,
+          "warmup": false
+        },
+        {
+          "update": 25,
+          "steps": 204800,
+          "win_rate": 0.006,
+          "melded": 0.804,
+          "end_turn": 0.0077,
+          "entropy": 0.388,
+          "warmup": false
+        },
+        {
+          "update": 26,
+          "steps": 212992,
+          "win_rate": 0.006,
+          "melded": 0.835,
+          "end_turn": 0.0073,
+          "entropy": 0.368,
+          "warmup": false
+        },
+        {
+          "update": 27,
+          "steps": 221184,
+          "win_rate": 0.005,
+          "melded": 0.852,
+          "end_turn": 0.0084,
+          "entropy": 0.366,
+          "warmup": false
+        },
+        {
+          "update": 28,
+          "steps": 229376,
+          "win_rate": 0.005,
+          "melded": 0.86,
+          "end_turn": 0.0067,
+          "entropy": 0.359,
+          "warmup": false
+        },
+        {
+          "update": 29,
+          "steps": 237568,
+          "win_rate": 0.005,
+          "melded": 0.8290000000000001,
+          "end_turn": 0.0059,
+          "entropy": 0.372,
+          "warmup": false
+        },
+        {
+          "update": 30,
+          "steps": 245760,
+          "win_rate": 0.005,
+          "melded": 0.841,
+          "end_turn": 0.0054,
+          "entropy": 0.333,
+          "warmup": false
+        },
+        {
+          "update": 31,
+          "steps": 253952,
+          "win_rate": 0.0,
+          "melded": 0.826,
+          "end_turn": 0.0067,
+          "entropy": 0.362,
+          "warmup": false
+        },
+        {
+          "update": 32,
+          "steps": 262144,
+          "win_rate": 0.0,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.349,
+          "warmup": false
+        },
+        {
+          "update": 33,
+          "steps": 270336,
+          "win_rate": 0.0,
+          "melded": 0.821,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.352,
+          "warmup": false
+        },
+        {
+          "update": 34,
+          "steps": 278528,
+          "win_rate": 0.0,
+          "melded": 0.8540000000000001,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.358,
+          "warmup": false
+        },
+        {
+          "update": 35,
+          "steps": 286720,
+          "win_rate": 0.0,
+          "melded": 0.8690000000000001,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.339,
+          "warmup": false
+        },
+        {
+          "update": 36,
+          "steps": 294912,
+          "win_rate": 0.0,
+          "melded": 0.88,
+          "end_turn": 0.0059,
+          "entropy": 0.355,
+          "warmup": false
+        },
+        {
+          "update": 37,
+          "steps": 303104,
+          "win_rate": 0.0,
+          "melded": 0.879,
+          "end_turn": 0.0092,
+          "entropy": 0.359,
+          "warmup": false
+        },
+        {
+          "update": 38,
+          "steps": 311296,
+          "win_rate": 0.0,
+          "melded": 0.922,
+          "end_turn": 0.0072,
+          "entropy": 0.342,
+          "warmup": false
+        },
+        {
+          "update": 39,
+          "steps": 319488,
+          "win_rate": 0.0,
+          "melded": 0.904,
+          "end_turn": 0.0063,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 40,
+          "steps": 327680,
+          "win_rate": 0.0,
+          "melded": 0.868,
+          "end_turn": 0.0088,
+          "entropy": 0.365,
+          "warmup": false
+        },
+        {
+          "update": 41,
+          "steps": 335872,
+          "win_rate": 0.0,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.0043,
+          "entropy": 0.339,
+          "warmup": false
+        },
+        {
+          "update": 42,
+          "steps": 344064,
+          "win_rate": 0.0,
+          "melded": 0.8240000000000001,
+          "end_turn": 0.0054,
+          "entropy": 0.345,
+          "warmup": false
+        },
+        {
+          "update": 43,
+          "steps": 352256,
+          "win_rate": 0.0,
+          "melded": 0.821,
+          "end_turn": 0.0066,
+          "entropy": 0.317,
+          "warmup": false
+        },
+        {
+          "update": 44,
+          "steps": 360448,
+          "win_rate": 0.0,
+          "melded": 0.83,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.356,
+          "warmup": false
+        },
+        {
+          "update": 45,
+          "steps": 368640,
+          "win_rate": 0.0,
+          "melded": 0.8240000000000001,
+          "end_turn": 0.0076,
+          "entropy": 0.324,
+          "warmup": false
+        },
+        {
+          "update": 46,
+          "steps": 376832,
+          "win_rate": 0.0,
+          "melded": 0.79,
+          "end_turn": 0.0063,
+          "entropy": 0.348,
+          "warmup": false
+        },
+        {
+          "update": 47,
+          "steps": 385024,
+          "win_rate": 0.0,
+          "melded": 0.812,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.356,
+          "warmup": false
+        },
+        {
+          "update": 48,
+          "steps": 393216,
+          "win_rate": 0.0,
+          "melded": 0.86,
+          "end_turn": 0.0059,
+          "entropy": 0.335,
+          "warmup": false
+        },
+        {
+          "update": 49,
+          "steps": 401408,
+          "win_rate": 0.0,
+          "melded": 0.872,
+          "end_turn": 0.0059,
+          "entropy": 0.334,
+          "warmup": false
+        },
+        {
+          "update": 50,
+          "steps": 409600,
+          "win_rate": 0.0,
+          "melded": 0.87,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.328,
+          "warmup": false
+        },
+        {
+          "update": 51,
+          "steps": 417792,
+          "win_rate": 0.0,
+          "melded": 0.858,
+          "end_turn": 0.0092,
+          "entropy": 0.337,
+          "warmup": false
+        },
+        {
+          "update": 52,
+          "steps": 425984,
+          "win_rate": 0.005,
+          "melded": 0.866,
+          "end_turn": 0.01,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 53,
+          "steps": 434176,
+          "win_rate": 0.005,
+          "melded": 0.828,
+          "end_turn": 0.0092,
+          "entropy": 0.295,
+          "warmup": false
+        },
+        {
+          "update": 54,
+          "steps": 442368,
+          "win_rate": 0.005,
+          "melded": 0.8759999999999999,
+          "end_turn": 0.0103,
+          "entropy": 0.253,
+          "warmup": false
+        },
+        {
+          "update": 55,
+          "steps": 450560,
+          "win_rate": 0.005,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.0007000000000000001,
+          "entropy": 0.244,
+          "warmup": false
+        },
+        {
+          "update": 56,
+          "steps": 458752,
+          "win_rate": 0.005,
+          "melded": 0.728,
+          "end_turn": 0.0017000000000000001,
+          "entropy": 0.3,
+          "warmup": false
+        },
+        {
+          "update": 57,
+          "steps": 466944,
+          "win_rate": 0.005,
+          "melded": 0.789,
+          "end_turn": 0.0063,
+          "entropy": 0.281,
+          "warmup": false
+        },
+        {
+          "update": 58,
+          "steps": 475136,
+          "win_rate": 0.005,
+          "melded": 0.8190000000000001,
+          "end_turn": 0.0038,
+          "entropy": 0.297,
+          "warmup": false
+        },
+        {
+          "update": 59,
+          "steps": 483328,
+          "win_rate": 0.005,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.0038,
+          "entropy": 0.324,
+          "warmup": false
+        },
+        {
+          "update": 60,
+          "steps": 491520,
+          "win_rate": 0.005,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.0016,
+          "entropy": 0.296,
+          "warmup": false
+        },
+        {
+          "update": 61,
+          "steps": 499712,
+          "win_rate": 0.005,
+          "melded": 0.797,
+          "end_turn": 0.0009,
+          "entropy": 0.275,
+          "warmup": false
+        },
+        {
+          "update": 62,
+          "steps": 507904,
+          "win_rate": 0.005,
+          "melded": 0.768,
+          "end_turn": 0.0018,
+          "entropy": 0.292,
+          "warmup": false
+        },
+        {
+          "update": 63,
+          "steps": 516096,
+          "win_rate": 0.005,
+          "melded": 0.745,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.287,
+          "warmup": false
+        },
+        {
+          "update": 64,
+          "steps": 524288,
+          "win_rate": 0.005,
+          "melded": 0.706,
+          "end_turn": 0.002,
+          "entropy": 0.275,
+          "warmup": false
+        },
+        {
+          "update": 65,
+          "steps": 532480,
+          "win_rate": 0.005,
+          "melded": 0.736,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.29,
+          "warmup": false
+        },
+        {
+          "update": 66,
+          "steps": 540672,
+          "win_rate": 0.005,
+          "melded": 0.7440000000000001,
+          "end_turn": 0.0039000000000000003,
+          "entropy": 0.277,
+          "warmup": false
+        },
+        {
+          "update": 67,
+          "steps": 548864,
+          "win_rate": 0.005,
+          "melded": 0.7829999999999999,
+          "end_turn": 0.0059,
+          "entropy": 0.314,
+          "warmup": false
+        },
+        {
+          "update": 68,
+          "steps": 557056,
+          "win_rate": 0.005,
+          "melded": 0.807,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.311,
+          "warmup": false
+        },
+        {
+          "update": 69,
+          "steps": 565248,
+          "win_rate": 0.005,
+          "melded": 0.831,
+          "end_turn": 0.0027,
+          "entropy": 0.287,
+          "warmup": false
+        },
+        {
+          "update": 70,
+          "steps": 573440,
+          "win_rate": 0.005,
+          "melded": 0.82,
+          "end_turn": 0.0027,
+          "entropy": 0.254,
+          "warmup": false
+        },
+        {
+          "update": 71,
+          "steps": 581632,
+          "win_rate": 0.005,
+          "melded": 0.825,
+          "end_turn": 0.0054,
+          "entropy": 0.303,
+          "warmup": false
+        },
+        {
+          "update": 72,
+          "steps": 589824,
+          "win_rate": 0.005,
+          "melded": 0.8370000000000001,
+          "end_turn": 0.0051,
+          "entropy": 0.327,
+          "warmup": false
+        },
+        {
+          "update": 73,
+          "steps": 598016,
+          "win_rate": 0.005,
+          "melded": 0.823,
+          "end_turn": 0.0051,
+          "entropy": 0.298,
+          "warmup": false
+        },
+        {
+          "update": 74,
+          "steps": 606208,
+          "win_rate": 0.005,
+          "melded": 0.8270000000000001,
+          "end_turn": 0.0034999999999999996,
+          "entropy": 0.265,
+          "warmup": false
+        },
+        {
+          "update": 75,
+          "steps": 614400,
+          "win_rate": 0.005,
+          "melded": 0.8,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.325,
+          "warmup": false
+        },
+        {
+          "update": 76,
+          "steps": 622592,
+          "win_rate": 0.005,
+          "melded": 0.831,
+          "end_turn": 0.0022,
+          "entropy": 0.307,
+          "warmup": false
+        },
+        {
+          "update": 77,
+          "steps": 630784,
+          "win_rate": 0.005,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.0028000000000000004,
+          "entropy": 0.318,
+          "warmup": false
+        },
+        {
+          "update": 78,
+          "steps": 638976,
+          "win_rate": 0.005,
+          "melded": 0.8270000000000001,
+          "end_turn": 0.0034999999999999996,
+          "entropy": 0.309,
+          "warmup": false
+        },
+        {
+          "update": 79,
+          "steps": 647168,
+          "win_rate": 0.0,
+          "melded": 0.812,
+          "end_turn": 0.0032,
+          "entropy": 0.316,
+          "warmup": false
+        },
+        {
+          "update": 80,
+          "steps": 655360,
+          "win_rate": 0.0,
+          "melded": 0.815,
+          "end_turn": 0.0016,
+          "entropy": 0.268,
+          "warmup": false
+        },
+        {
+          "update": 81,
+          "steps": 663552,
+          "win_rate": 0.0,
+          "melded": 0.767,
+          "end_turn": 0.0022,
+          "entropy": 0.269,
+          "warmup": false
+        },
+        {
+          "update": 82,
+          "steps": 671744,
+          "win_rate": 0.0,
+          "melded": 0.755,
+          "end_turn": 0.0029,
+          "entropy": 0.34,
+          "warmup": false
+        },
+        {
+          "update": 83,
+          "steps": 679936,
+          "win_rate": 0.0,
+          "melded": 0.746,
+          "end_turn": 0.0037,
+          "entropy": 0.343,
+          "warmup": false
+        },
+        {
+          "update": 84,
+          "steps": 688128,
+          "win_rate": 0.0,
+          "melded": 0.7440000000000001,
+          "end_turn": 0.0016,
+          "entropy": 0.305,
+          "warmup": false
+        },
+        {
+          "update": 85,
+          "steps": 696320,
+          "win_rate": 0.0,
+          "melded": 0.7120000000000001,
+          "end_turn": 0.0038,
+          "entropy": 0.302,
+          "warmup": false
+        },
+        {
+          "update": 86,
+          "steps": 704512,
+          "win_rate": 0.0,
+          "melded": 0.73,
+          "end_turn": 0.0033,
+          "entropy": 0.278,
+          "warmup": false
+        },
+        {
+          "update": 87,
+          "steps": 712704,
+          "win_rate": 0.0,
+          "melded": 0.716,
+          "end_turn": 0.0023,
+          "entropy": 0.28,
+          "warmup": false
+        },
+        {
+          "update": 88,
+          "steps": 720896,
+          "win_rate": 0.0,
+          "melded": 0.684,
+          "end_turn": 0.0043,
+          "entropy": 0.314,
+          "warmup": false
+        },
+        {
+          "update": 89,
+          "steps": 729088,
+          "win_rate": 0.0,
+          "melded": 0.733,
+          "end_turn": 0.0054,
+          "entropy": 0.3,
+          "warmup": false
+        },
+        {
+          "update": 90,
+          "steps": 737280,
+          "win_rate": 0.005,
+          "melded": 0.7809999999999999,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.373,
+          "warmup": false
+        },
+        {
+          "update": 91,
+          "steps": 745472,
+          "win_rate": 0.005,
+          "melded": 0.861,
+          "end_turn": 0.0046,
+          "entropy": 0.318,
+          "warmup": false
+        },
+        {
+          "update": 92,
+          "steps": 753664,
+          "win_rate": 0.005,
+          "melded": 0.8740000000000001,
+          "end_turn": 0.006,
+          "entropy": 0.304,
+          "warmup": false
+        },
+        {
+          "update": 93,
+          "steps": 761856,
+          "win_rate": 0.005,
+          "melded": 0.866,
+          "end_turn": 0.0043,
+          "entropy": 0.318,
+          "warmup": false
+        },
+        {
+          "update": 94,
+          "steps": 770048,
+          "win_rate": 0.005,
+          "melded": 0.86,
+          "end_turn": 0.0032,
+          "entropy": 0.294,
+          "warmup": false
+        },
+        {
+          "update": 95,
+          "steps": 778240,
+          "win_rate": 0.005,
+          "melded": 0.809,
+          "end_turn": 0.0028000000000000004,
+          "entropy": 0.302,
+          "warmup": false
+        },
+        {
+          "update": 96,
+          "steps": 786432,
+          "win_rate": 0.005,
+          "melded": 0.833,
+          "end_turn": 0.0116,
+          "entropy": 0.379,
+          "warmup": false
+        },
+        {
+          "update": 97,
+          "steps": 794624,
+          "win_rate": 0.005,
+          "melded": 0.8220000000000001,
+          "end_turn": 0.0044,
+          "entropy": 0.321,
+          "warmup": false
+        },
+        {
+          "update": 98,
+          "steps": 802816,
+          "win_rate": 0.005,
+          "melded": 0.8059999999999999,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.295,
+          "warmup": false
+        },
+        {
+          "update": 99,
+          "steps": 811008,
+          "win_rate": 0.005,
+          "melded": 0.784,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.296,
+          "warmup": false
+        },
+        {
+          "update": 100,
+          "steps": 819200,
+          "win_rate": 0.005,
+          "melded": 0.7909999999999999,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.301,
+          "warmup": false
+        },
+        {
+          "update": 101,
+          "steps": 827392,
+          "win_rate": 0.005,
+          "melded": 0.8,
+          "end_turn": 0.0072,
+          "entropy": 0.345,
+          "warmup": false
+        },
+        {
+          "update": 102,
+          "steps": 835584,
+          "win_rate": 0.005,
+          "melded": 0.802,
+          "end_turn": 0.0034999999999999996,
+          "entropy": 0.295,
+          "warmup": false
+        },
+        {
+          "update": 103,
+          "steps": 843776,
+          "win_rate": 0.005,
+          "melded": 0.765,
+          "end_turn": 0.0039000000000000003,
+          "entropy": 0.306,
+          "warmup": false
+        },
+        {
+          "update": 104,
+          "steps": 851968,
+          "win_rate": 0.005,
+          "melded": 0.79,
+          "end_turn": 0.0046,
+          "entropy": 0.358,
+          "warmup": false
+        },
+        {
+          "update": 105,
+          "steps": 860160,
+          "win_rate": 0.005,
+          "melded": 0.815,
+          "end_turn": 0.004,
+          "entropy": 0.34,
+          "warmup": false
+        },
+        {
+          "update": 106,
+          "steps": 868352,
+          "win_rate": 0.005,
+          "melded": 0.825,
+          "end_turn": 0.0038,
+          "entropy": 0.337,
+          "warmup": false
+        },
+        {
+          "update": 107,
+          "steps": 876544,
+          "win_rate": 0.005,
+          "melded": 0.825,
+          "end_turn": 0.0083,
+          "entropy": 0.365,
+          "warmup": false
+        },
+        {
+          "update": 108,
+          "steps": 884736,
+          "win_rate": 0.005,
+          "melded": 0.794,
+          "end_turn": 0.0034999999999999996,
+          "entropy": 0.354,
+          "warmup": false
+        },
+        {
+          "update": 109,
+          "steps": 892928,
+          "win_rate": 0.005,
+          "melded": 0.784,
+          "end_turn": 0.0044,
+          "entropy": 0.336,
+          "warmup": false
+        },
+        {
+          "update": 110,
+          "steps": 901120,
+          "win_rate": 0.005,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.322,
+          "warmup": false
+        },
+        {
+          "update": 111,
+          "steps": 909312,
+          "win_rate": 0.005,
+          "melded": 0.805,
+          "end_turn": 0.005,
+          "entropy": 0.299,
+          "warmup": false
+        },
+        {
+          "update": 112,
+          "steps": 917504,
+          "win_rate": 0.005,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.0028000000000000004,
+          "entropy": 0.319,
+          "warmup": false
+        },
+        {
+          "update": 113,
+          "steps": 925696,
+          "win_rate": 0.005,
+          "melded": 0.8370000000000001,
+          "end_turn": 0.0072,
+          "entropy": 0.346,
+          "warmup": false
+        },
+        {
+          "update": 114,
+          "steps": 933888,
+          "win_rate": 0.005,
+          "melded": 0.86,
+          "end_turn": 0.0046,
+          "entropy": 0.338,
+          "warmup": false
+        },
+        {
+          "update": 115,
+          "steps": 942080,
+          "win_rate": 0.005,
+          "melded": 0.833,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.35,
+          "warmup": false
+        },
+        {
+          "update": 116,
+          "steps": 950272,
+          "win_rate": 0.005,
+          "melded": 0.816,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.342,
+          "warmup": false
+        },
+        {
+          "update": 117,
+          "steps": 958464,
+          "win_rate": 0.005,
+          "melded": 0.804,
+          "end_turn": 0.0052,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 118,
+          "steps": 966656,
+          "win_rate": 0.0,
+          "melded": 0.816,
+          "end_turn": 0.0062,
+          "entropy": 0.349,
+          "warmup": false
+        },
+        {
+          "update": 119,
+          "steps": 974848,
+          "win_rate": 0.0,
+          "melded": 0.807,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.351,
+          "warmup": false
+        },
+        {
+          "update": 120,
+          "steps": 983040,
+          "win_rate": 0.0,
+          "melded": 0.792,
+          "end_turn": 0.0052,
+          "entropy": 0.344,
+          "warmup": false
+        },
+        {
+          "update": 121,
+          "steps": 991232,
+          "win_rate": 0.0,
+          "melded": 0.795,
+          "end_turn": 0.0059,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 122,
+          "steps": 999424,
+          "win_rate": 0.0,
+          "melded": 0.816,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.358,
+          "warmup": false
+        },
+        {
+          "update": 123,
+          "steps": 1007616,
+          "win_rate": 0.0,
+          "melded": 0.841,
+          "end_turn": 0.0054,
+          "entropy": 0.318,
+          "warmup": false
+        },
+        {
+          "update": 124,
+          "steps": 1015808,
+          "win_rate": 0.0,
+          "melded": 0.833,
+          "end_turn": 0.0067,
+          "entropy": 0.327,
+          "warmup": false
+        },
+        {
+          "update": 125,
+          "steps": 1024000,
+          "win_rate": 0.0,
+          "melded": 0.8220000000000001,
+          "end_turn": 0.0049,
+          "entropy": 0.327,
+          "warmup": false
+        },
+        {
+          "update": 126,
+          "steps": 1032192,
+          "win_rate": 0.0,
+          "melded": 0.8059999999999999,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.319,
+          "warmup": false
+        },
+        {
+          "update": 127,
+          "steps": 1040384,
+          "win_rate": 0.0,
+          "melded": 0.797,
+          "end_turn": 0.0049,
+          "entropy": 0.351,
+          "warmup": false
+        },
+        {
+          "update": 128,
+          "steps": 1048576,
+          "win_rate": 0.0,
+          "melded": 0.7559999999999999,
+          "end_turn": 0.0062,
+          "entropy": 0.362,
+          "warmup": false
+        },
+        {
+          "update": 129,
+          "steps": 1056768,
+          "win_rate": 0.005,
+          "melded": 0.7829999999999999,
+          "end_turn": 0.0054,
+          "entropy": 0.341,
+          "warmup": false
+        },
+        {
+          "update": 130,
+          "steps": 1064960,
+          "win_rate": 0.005,
+          "melded": 0.757,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.346,
+          "warmup": false
+        },
+        {
+          "update": 131,
+          "steps": 1073152,
+          "win_rate": 0.005,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.0062,
+          "entropy": 0.37,
+          "warmup": false
+        },
+        {
+          "update": 132,
+          "steps": 1081344,
+          "win_rate": 0.005,
+          "melded": 0.7859999999999999,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.321,
+          "warmup": false
+        },
+        {
+          "update": 133,
+          "steps": 1089536,
+          "win_rate": 0.005,
+          "melded": 0.823,
+          "end_turn": 0.0051,
+          "entropy": 0.343,
+          "warmup": false
+        },
+        {
+          "update": 134,
+          "steps": 1097728,
+          "win_rate": 0.005,
+          "melded": 0.833,
+          "end_turn": 0.0062,
+          "entropy": 0.332,
+          "warmup": false
+        },
+        {
+          "update": 135,
+          "steps": 1105920,
+          "win_rate": 0.005,
+          "melded": 0.836,
+          "end_turn": 0.0043,
+          "entropy": 0.318,
+          "warmup": false
+        },
+        {
+          "update": 136,
+          "steps": 1114112,
+          "win_rate": 0.005,
+          "melded": 0.821,
+          "end_turn": 0.004,
+          "entropy": 0.333,
+          "warmup": false
+        },
+        {
+          "update": 137,
+          "steps": 1122304,
+          "win_rate": 0.005,
+          "melded": 0.828,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.349,
+          "warmup": false
+        },
+        {
+          "update": 138,
+          "steps": 1130496,
+          "win_rate": 0.005,
+          "melded": 0.825,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.333,
+          "warmup": false
+        },
+        {
+          "update": 139,
+          "steps": 1138688,
+          "win_rate": 0.005,
+          "melded": 0.79,
+          "end_turn": 0.0067,
+          "entropy": 0.348,
+          "warmup": false
+        },
+        {
+          "update": 140,
+          "steps": 1146880,
+          "win_rate": 0.005,
+          "melded": 0.7829999999999999,
+          "end_turn": 0.0059,
+          "entropy": 0.354,
+          "warmup": false
+        },
+        {
+          "update": 141,
+          "steps": 1155072,
+          "win_rate": 0.005,
+          "melded": 0.778,
+          "end_turn": 0.0051,
+          "entropy": 0.32,
+          "warmup": false
+        },
+        {
+          "update": 142,
+          "steps": 1163264,
+          "win_rate": 0.005,
+          "melded": 0.784,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.373,
+          "warmup": false
+        },
+        {
+          "update": 143,
+          "steps": 1171456,
+          "win_rate": 0.005,
+          "melded": 0.823,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.332,
+          "warmup": false
+        },
+        {
+          "update": 144,
+          "steps": 1179648,
+          "win_rate": 0.005,
+          "melded": 0.858,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.331,
+          "warmup": false
+        },
+        {
+          "update": 145,
+          "steps": 1187840,
+          "win_rate": 0.005,
+          "melded": 0.851,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.312,
+          "warmup": false
+        },
+        {
+          "update": 146,
+          "steps": 1196032,
+          "win_rate": 0.005,
+          "melded": 0.872,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.335,
+          "warmup": false
+        },
+        {
+          "update": 147,
+          "steps": 1204224,
+          "win_rate": 0.005,
+          "melded": 0.915,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.285,
+          "warmup": false
+        },
+        {
+          "update": 148,
+          "steps": 1212416,
+          "win_rate": 0.005,
+          "melded": 0.868,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.32,
+          "warmup": false
+        },
+        {
+          "update": 149,
+          "steps": 1220608,
+          "win_rate": 0.005,
+          "melded": 0.894,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.331,
+          "warmup": false
+        },
+        {
+          "update": 150,
+          "steps": 1228800,
+          "win_rate": 0.005,
+          "melded": 0.89,
+          "end_turn": 0.0031,
+          "entropy": 0.29,
+          "warmup": false
+        }
+      ]
+    },
+    {
+      "label": "score",
+      "reward_mode": "score_normalized",
+      "rack_shaping": 0.0,
+      "hidden": [
+        1024,
+        1024
+      ],
+      "history": [
+        {
+          "update": 1,
+          "steps": 8192,
+          "win_rate": NaN,
+          "melded": 0.529,
+          "end_turn": 0.0189,
+          "entropy": 0.588,
+          "warmup": true
+        },
+        {
+          "update": 2,
+          "steps": 16384,
+          "win_rate": NaN,
+          "melded": 0.75,
+          "end_turn": 0.0123,
+          "entropy": 0.519,
+          "warmup": true
+        },
+        {
+          "update": 3,
+          "steps": 24576,
+          "win_rate": NaN,
+          "melded": 0.778,
+          "end_turn": 0.0116,
+          "entropy": 0.514,
+          "warmup": true
+        },
+        {
+          "update": 4,
+          "steps": 32768,
+          "win_rate": 0.0,
+          "melded": 0.8290000000000001,
+          "end_turn": 0.01,
+          "entropy": 0.473,
+          "warmup": false
+        },
+        {
+          "update": 5,
+          "steps": 40960,
+          "win_rate": 0.2,
+          "melded": 0.85,
+          "end_turn": 0.0062,
+          "entropy": 0.495,
+          "warmup": false
+        },
+        {
+          "update": 6,
+          "steps": 49152,
+          "win_rate": 0.125,
+          "melded": 0.929,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.549,
+          "warmup": false
+        },
+        {
+          "update": 7,
+          "steps": 57344,
+          "win_rate": 0.133,
+          "melded": 0.9059999999999999,
+          "end_turn": 0.0072,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 8,
+          "steps": 65536,
+          "win_rate": 0.095,
+          "melded": 0.899,
+          "end_turn": 0.0067,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 9,
+          "steps": 73728,
+          "win_rate": 0.077,
+          "melded": 0.8959999999999999,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.528,
+          "warmup": false
+        },
+        {
+          "update": 10,
+          "steps": 81920,
+          "win_rate": 0.07400000000000001,
+          "melded": 0.93,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.518,
+          "warmup": false
+        },
+        {
+          "update": 11,
+          "steps": 90112,
+          "win_rate": 0.051,
+          "melded": 0.898,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.547,
+          "warmup": false
+        },
+        {
+          "update": 12,
+          "steps": 98304,
+          "win_rate": 0.07,
+          "melded": 0.88,
+          "end_turn": 0.0092,
+          "entropy": 0.533,
+          "warmup": false
+        },
+        {
+          "update": 13,
+          "steps": 106496,
+          "win_rate": 0.055,
+          "melded": 0.8420000000000001,
+          "end_turn": 0.0088,
+          "entropy": 0.534,
+          "warmup": false
+        },
+        {
+          "update": 14,
+          "steps": 114688,
+          "win_rate": 0.048,
+          "melded": 0.7929999999999999,
+          "end_turn": 0.0077,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 15,
+          "steps": 122880,
+          "win_rate": 0.045,
+          "melded": 0.799,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 16,
+          "steps": 131072,
+          "win_rate": 0.057,
+          "melded": 0.8240000000000001,
+          "end_turn": 0.0063,
+          "entropy": 0.512,
+          "warmup": false
+        },
+        {
+          "update": 17,
+          "steps": 139264,
+          "win_rate": 0.052000000000000005,
+          "melded": 0.794,
+          "end_turn": 0.0079,
+          "entropy": 0.513,
+          "warmup": false
+        },
+        {
+          "update": 18,
+          "steps": 147456,
+          "win_rate": 0.05,
+          "melded": 0.773,
+          "end_turn": 0.0049,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 19,
+          "steps": 155648,
+          "win_rate": 0.048,
+          "melded": 0.7829999999999999,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 20,
+          "steps": 163840,
+          "win_rate": 0.044000000000000004,
+          "melded": 0.777,
+          "end_turn": 0.0062,
+          "entropy": 0.5,
+          "warmup": false
+        },
+        {
+          "update": 21,
+          "steps": 172032,
+          "win_rate": 0.040999999999999995,
+          "melded": 0.777,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 22,
+          "steps": 180224,
+          "win_rate": 0.037000000000000005,
+          "melded": 0.7859999999999999,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 23,
+          "steps": 188416,
+          "win_rate": 0.035,
+          "melded": 0.818,
+          "end_turn": 0.0104,
+          "entropy": 0.493,
+          "warmup": false
+        },
+        {
+          "update": 24,
+          "steps": 196608,
+          "win_rate": 0.034,
+          "melded": 0.785,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 25,
+          "steps": 204800,
+          "win_rate": 0.040999999999999995,
+          "melded": 0.7859999999999999,
+          "end_turn": 0.0077,
+          "entropy": 0.51,
+          "warmup": false
+        },
+        {
+          "update": 26,
+          "steps": 212992,
+          "win_rate": 0.038,
+          "melded": 0.825,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.529,
+          "warmup": false
+        },
+        {
+          "update": 27,
+          "steps": 221184,
+          "win_rate": 0.037000000000000005,
+          "melded": 0.818,
+          "end_turn": 0.0092,
+          "entropy": 0.543,
+          "warmup": false
+        },
+        {
+          "update": 28,
+          "steps": 229376,
+          "win_rate": 0.036000000000000004,
+          "melded": 0.841,
+          "end_turn": 0.0073,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 29,
+          "steps": 237568,
+          "win_rate": 0.034,
+          "melded": 0.805,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.489,
+          "warmup": false
+        },
+        {
+          "update": 30,
+          "steps": 245760,
+          "win_rate": 0.032,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.0079,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 31,
+          "steps": 253952,
+          "win_rate": 0.032,
+          "melded": 0.809,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.477,
+          "warmup": false
+        },
+        {
+          "update": 32,
+          "steps": 262144,
+          "win_rate": 0.031,
+          "melded": 0.809,
+          "end_turn": 0.0085,
+          "entropy": 0.507,
+          "warmup": false
+        },
+        {
+          "update": 33,
+          "steps": 270336,
+          "win_rate": 0.035,
+          "melded": 0.7959999999999999,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 34,
+          "steps": 278528,
+          "win_rate": 0.034,
+          "melded": 0.8029999999999999,
+          "end_turn": 0.0085,
+          "entropy": 0.512,
+          "warmup": false
+        },
+        {
+          "update": 35,
+          "steps": 286720,
+          "win_rate": 0.033,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.009000000000000001,
+          "entropy": 0.545,
+          "warmup": false
+        },
+        {
+          "update": 36,
+          "steps": 294912,
+          "win_rate": 0.032,
+          "melded": 0.8320000000000001,
+          "end_turn": 0.0074,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 37,
+          "steps": 303104,
+          "win_rate": 0.031,
+          "melded": 0.86,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 38,
+          "steps": 311296,
+          "win_rate": 0.025,
+          "melded": 0.818,
+          "end_turn": 0.0106,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 39,
+          "steps": 319488,
+          "win_rate": 0.025,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.526,
+          "warmup": false
+        },
+        {
+          "update": 40,
+          "steps": 327680,
+          "win_rate": 0.02,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 41,
+          "steps": 335872,
+          "win_rate": 0.025,
+          "melded": 0.813,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 42,
+          "steps": 344064,
+          "win_rate": 0.025,
+          "melded": 0.82,
+          "end_turn": 0.009399999999999999,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 43,
+          "steps": 352256,
+          "win_rate": 0.025,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.505,
+          "warmup": false
+        },
+        {
+          "update": 44,
+          "steps": 360448,
+          "win_rate": 0.025,
+          "melded": 0.809,
+          "end_turn": 0.0089,
+          "entropy": 0.529,
+          "warmup": false
+        },
+        {
+          "update": 45,
+          "steps": 368640,
+          "win_rate": 0.02,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.505,
+          "warmup": false
+        },
+        {
+          "update": 46,
+          "steps": 376832,
+          "win_rate": 0.02,
+          "melded": 0.823,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.495,
+          "warmup": false
+        },
+        {
+          "update": 47,
+          "steps": 385024,
+          "win_rate": 0.02,
+          "melded": 0.807,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 48,
+          "steps": 393216,
+          "win_rate": 0.02,
+          "melded": 0.818,
+          "end_turn": 0.0066,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 49,
+          "steps": 401408,
+          "win_rate": 0.02,
+          "melded": 0.853,
+          "end_turn": 0.0084,
+          "entropy": 0.497,
+          "warmup": false
+        },
+        {
+          "update": 50,
+          "steps": 409600,
+          "win_rate": 0.015,
+          "melded": 0.872,
+          "end_turn": 0.0066,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 51,
+          "steps": 417792,
+          "win_rate": 0.015,
+          "melded": 0.8740000000000001,
+          "end_turn": 0.0072,
+          "entropy": 0.5,
+          "warmup": false
+        },
+        {
+          "update": 52,
+          "steps": 425984,
+          "win_rate": 0.015,
+          "melded": 0.858,
+          "end_turn": 0.0103,
+          "entropy": 0.55,
+          "warmup": false
+        },
+        {
+          "update": 53,
+          "steps": 434176,
+          "win_rate": 0.015,
+          "melded": 0.838,
+          "end_turn": 0.0054,
+          "entropy": 0.513,
+          "warmup": false
+        },
+        {
+          "update": 54,
+          "steps": 442368,
+          "win_rate": 0.015,
+          "melded": 0.841,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.544,
+          "warmup": false
+        },
+        {
+          "update": 55,
+          "steps": 450560,
+          "win_rate": 0.015,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.0076,
+          "entropy": 0.542,
+          "warmup": false
+        },
+        {
+          "update": 56,
+          "steps": 458752,
+          "win_rate": 0.015,
+          "melded": 0.802,
+          "end_turn": 0.0049,
+          "entropy": 0.525,
+          "warmup": false
+        },
+        {
+          "update": 57,
+          "steps": 466944,
+          "win_rate": 0.025,
+          "melded": 0.794,
+          "end_turn": 0.006,
+          "entropy": 0.558,
+          "warmup": false
+        },
+        {
+          "update": 58,
+          "steps": 475136,
+          "win_rate": 0.025,
+          "melded": 0.802,
+          "end_turn": 0.0077,
+          "entropy": 0.502,
+          "warmup": false
+        },
+        {
+          "update": 59,
+          "steps": 483328,
+          "win_rate": 0.02,
+          "melded": 0.802,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 60,
+          "steps": 491520,
+          "win_rate": 0.02,
+          "melded": 0.8009999999999999,
+          "end_turn": 0.0066,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 61,
+          "steps": 499712,
+          "win_rate": 0.02,
+          "melded": 0.763,
+          "end_turn": 0.0074,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 62,
+          "steps": 507904,
+          "win_rate": 0.02,
+          "melded": 0.746,
+          "end_turn": 0.0087,
+          "entropy": 0.501,
+          "warmup": false
+        },
+        {
+          "update": 63,
+          "steps": 516096,
+          "win_rate": 0.02,
+          "melded": 0.7509999999999999,
+          "end_turn": 0.006,
+          "entropy": 0.478,
+          "warmup": false
+        },
+        {
+          "update": 64,
+          "steps": 524288,
+          "win_rate": 0.02,
+          "melded": 0.7759999999999999,
+          "end_turn": 0.0092,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 65,
+          "steps": 532480,
+          "win_rate": 0.02,
+          "melded": 0.769,
+          "end_turn": 0.0079,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 66,
+          "steps": 540672,
+          "win_rate": 0.02,
+          "melded": 0.804,
+          "end_turn": 0.0083,
+          "entropy": 0.528,
+          "warmup": false
+        },
+        {
+          "update": 67,
+          "steps": 548864,
+          "win_rate": 0.025,
+          "melded": 0.795,
+          "end_turn": 0.0072,
+          "entropy": 0.534,
+          "warmup": false
+        },
+        {
+          "update": 68,
+          "steps": 557056,
+          "win_rate": 0.03,
+          "melded": 0.85,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.546,
+          "warmup": false
+        },
+        {
+          "update": 69,
+          "steps": 565248,
+          "win_rate": 0.03,
+          "melded": 0.828,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.538,
+          "warmup": false
+        },
+        {
+          "update": 70,
+          "steps": 573440,
+          "win_rate": 0.03,
+          "melded": 0.805,
+          "end_turn": 0.0084,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 71,
+          "steps": 581632,
+          "win_rate": 0.035,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.0085,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 72,
+          "steps": 589824,
+          "win_rate": 0.035,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 73,
+          "steps": 598016,
+          "win_rate": 0.035,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.0085,
+          "entropy": 0.513,
+          "warmup": false
+        },
+        {
+          "update": 74,
+          "steps": 606208,
+          "win_rate": 0.035,
+          "melded": 0.797,
+          "end_turn": 0.0084,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 75,
+          "steps": 614400,
+          "win_rate": 0.035,
+          "melded": 0.815,
+          "end_turn": 0.0083,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 76,
+          "steps": 622592,
+          "win_rate": 0.035,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.0103,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 77,
+          "steps": 630784,
+          "win_rate": 0.035,
+          "melded": 0.759,
+          "end_turn": 0.0066,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 78,
+          "steps": 638976,
+          "win_rate": 0.035,
+          "melded": 0.758,
+          "end_turn": 0.0074,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 79,
+          "steps": 647168,
+          "win_rate": 0.04,
+          "melded": 0.7290000000000001,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.526,
+          "warmup": false
+        },
+        {
+          "update": 80,
+          "steps": 655360,
+          "win_rate": 0.04,
+          "melded": 0.743,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.505,
+          "warmup": false
+        },
+        {
+          "update": 81,
+          "steps": 663552,
+          "win_rate": 0.04,
+          "melded": 0.737,
+          "end_turn": 0.0073,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 82,
+          "steps": 671744,
+          "win_rate": 0.04,
+          "melded": 0.746,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.537,
+          "warmup": false
+        },
+        {
+          "update": 83,
+          "steps": 679936,
+          "win_rate": 0.04,
+          "melded": 0.76,
+          "end_turn": 0.0063,
+          "entropy": 0.498,
+          "warmup": false
+        },
+        {
+          "update": 84,
+          "steps": 688128,
+          "win_rate": 0.04,
+          "melded": 0.727,
+          "end_turn": 0.0072,
+          "entropy": 0.5,
+          "warmup": false
+        },
+        {
+          "update": 85,
+          "steps": 696320,
+          "win_rate": 0.04,
+          "melded": 0.726,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.495,
+          "warmup": false
+        },
+        {
+          "update": 86,
+          "steps": 704512,
+          "win_rate": 0.04,
+          "melded": 0.7140000000000001,
+          "end_turn": 0.0066,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 87,
+          "steps": 712704,
+          "win_rate": 0.04,
+          "melded": 0.76,
+          "end_turn": 0.0048,
+          "entropy": 0.549,
+          "warmup": false
+        },
+        {
+          "update": 88,
+          "steps": 720896,
+          "win_rate": 0.04,
+          "melded": 0.778,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 89,
+          "steps": 729088,
+          "win_rate": 0.04,
+          "melded": 0.777,
+          "end_turn": 0.0052,
+          "entropy": 0.501,
+          "warmup": false
+        },
+        {
+          "update": 90,
+          "steps": 737280,
+          "win_rate": 0.04,
+          "melded": 0.785,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 91,
+          "steps": 745472,
+          "win_rate": 0.04,
+          "melded": 0.8759999999999999,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.533,
+          "warmup": false
+        },
+        {
+          "update": 92,
+          "steps": 753664,
+          "win_rate": 0.03,
+          "melded": 0.8590000000000001,
+          "end_turn": 0.0062,
+          "entropy": 0.508,
+          "warmup": false
+        },
+        {
+          "update": 93,
+          "steps": 761856,
+          "win_rate": 0.03,
+          "melded": 0.835,
+          "end_turn": 0.0072,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 94,
+          "steps": 770048,
+          "win_rate": 0.035,
+          "melded": 0.856,
+          "end_turn": 0.0077,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 95,
+          "steps": 778240,
+          "win_rate": 0.035,
+          "melded": 0.853,
+          "end_turn": 0.0059,
+          "entropy": 0.51,
+          "warmup": false
+        },
+        {
+          "update": 96,
+          "steps": 786432,
+          "win_rate": 0.035,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.481,
+          "warmup": false
+        },
+        {
+          "update": 97,
+          "steps": 794624,
+          "win_rate": 0.035,
+          "melded": 0.8170000000000001,
+          "end_turn": 0.0072,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 98,
+          "steps": 802816,
+          "win_rate": 0.035,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.0067,
+          "entropy": 0.492,
+          "warmup": false
+        },
+        {
+          "update": 99,
+          "steps": 811008,
+          "win_rate": 0.035,
+          "melded": 0.769,
+          "end_turn": 0.0033,
+          "entropy": 0.484,
+          "warmup": false
+        },
+        {
+          "update": 100,
+          "steps": 819200,
+          "win_rate": 0.035,
+          "melded": 0.718,
+          "end_turn": 0.0066,
+          "entropy": 0.545,
+          "warmup": false
+        },
+        {
+          "update": 101,
+          "steps": 827392,
+          "win_rate": 0.025,
+          "melded": 0.73,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.528,
+          "warmup": false
+        },
+        {
+          "update": 102,
+          "steps": 835584,
+          "win_rate": 0.02,
+          "melded": 0.755,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 103,
+          "steps": 843776,
+          "win_rate": 0.025,
+          "melded": 0.768,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.473,
+          "warmup": false
+        },
+        {
+          "update": 104,
+          "steps": 851968,
+          "win_rate": 0.025,
+          "melded": 0.7440000000000001,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.518,
+          "warmup": false
+        },
+        {
+          "update": 105,
+          "steps": 860160,
+          "win_rate": 0.025,
+          "melded": 0.802,
+          "end_turn": 0.0066,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 106,
+          "steps": 868352,
+          "win_rate": 0.02,
+          "melded": 0.821,
+          "end_turn": 0.0063,
+          "entropy": 0.518,
+          "warmup": false
+        },
+        {
+          "update": 107,
+          "steps": 876544,
+          "win_rate": 0.02,
+          "melded": 0.8420000000000001,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 108,
+          "steps": 884736,
+          "win_rate": 0.02,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 109,
+          "steps": 892928,
+          "win_rate": 0.02,
+          "melded": 0.779,
+          "end_turn": 0.0048,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 110,
+          "steps": 901120,
+          "win_rate": 0.02,
+          "melded": 0.773,
+          "end_turn": 0.0042,
+          "entropy": 0.508,
+          "warmup": false
+        },
+        {
+          "update": 111,
+          "steps": 909312,
+          "win_rate": 0.015,
+          "melded": 0.745,
+          "end_turn": 0.0048,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 112,
+          "steps": 917504,
+          "win_rate": 0.015,
+          "melded": 0.738,
+          "end_turn": 0.0037,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 113,
+          "steps": 925696,
+          "win_rate": 0.015,
+          "melded": 0.7929999999999999,
+          "end_turn": 0.0072,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 114,
+          "steps": 933888,
+          "win_rate": 0.015,
+          "melded": 0.779,
+          "end_turn": 0.0062,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 115,
+          "steps": 942080,
+          "win_rate": 0.015,
+          "melded": 0.76,
+          "end_turn": 0.0039000000000000003,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 116,
+          "steps": 950272,
+          "win_rate": 0.01,
+          "melded": 0.772,
+          "end_turn": 0.0063,
+          "entropy": 0.513,
+          "warmup": false
+        },
+        {
+          "update": 117,
+          "steps": 958464,
+          "win_rate": 0.01,
+          "melded": 0.7859999999999999,
+          "end_turn": 0.0062,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 118,
+          "steps": 966656,
+          "win_rate": 0.01,
+          "melded": 0.777,
+          "end_turn": 0.0054,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 119,
+          "steps": 974848,
+          "win_rate": 0.01,
+          "melded": 0.785,
+          "end_turn": 0.0052,
+          "entropy": 0.501,
+          "warmup": false
+        },
+        {
+          "update": 120,
+          "steps": 983040,
+          "win_rate": 0.01,
+          "melded": 0.759,
+          "end_turn": 0.005,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 121,
+          "steps": 991232,
+          "win_rate": 0.01,
+          "melded": 0.728,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.512,
+          "warmup": false
+        },
+        {
+          "update": 122,
+          "steps": 999424,
+          "win_rate": 0.01,
+          "melded": 0.723,
+          "end_turn": 0.0043,
+          "entropy": 0.545,
+          "warmup": false
+        },
+        {
+          "update": 123,
+          "steps": 1007616,
+          "win_rate": 0.01,
+          "melded": 0.74,
+          "end_turn": 0.0034999999999999996,
+          "entropy": 0.5,
+          "warmup": false
+        },
+        {
+          "update": 124,
+          "steps": 1015808,
+          "win_rate": 0.01,
+          "melded": 0.757,
+          "end_turn": 0.0054,
+          "entropy": 0.538,
+          "warmup": false
+        },
+        {
+          "update": 125,
+          "steps": 1024000,
+          "win_rate": 0.015,
+          "melded": 0.737,
+          "end_turn": 0.006,
+          "entropy": 0.537,
+          "warmup": false
+        },
+        {
+          "update": 126,
+          "steps": 1032192,
+          "win_rate": 0.02,
+          "melded": 0.752,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.493,
+          "warmup": false
+        },
+        {
+          "update": 127,
+          "steps": 1040384,
+          "win_rate": 0.02,
+          "melded": 0.777,
+          "end_turn": 0.0046,
+          "entropy": 0.533,
+          "warmup": false
+        },
+        {
+          "update": 128,
+          "steps": 1048576,
+          "win_rate": 0.02,
+          "melded": 0.772,
+          "end_turn": 0.0051,
+          "entropy": 0.511,
+          "warmup": false
+        },
+        {
+          "update": 129,
+          "steps": 1056768,
+          "win_rate": 0.02,
+          "melded": 0.763,
+          "end_turn": 0.0044,
+          "entropy": 0.505,
+          "warmup": false
+        },
+        {
+          "update": 130,
+          "steps": 1064960,
+          "win_rate": 0.02,
+          "melded": 0.7509999999999999,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.497,
+          "warmup": false
+        },
+        {
+          "update": 131,
+          "steps": 1073152,
+          "win_rate": 0.02,
+          "melded": 0.74,
+          "end_turn": 0.0054,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 132,
+          "steps": 1081344,
+          "win_rate": 0.02,
+          "melded": 0.779,
+          "end_turn": 0.0067,
+          "entropy": 0.489,
+          "warmup": false
+        },
+        {
+          "update": 133,
+          "steps": 1089536,
+          "win_rate": 0.02,
+          "melded": 0.763,
+          "end_turn": 0.0034000000000000002,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 134,
+          "steps": 1097728,
+          "win_rate": 0.02,
+          "melded": 0.7290000000000001,
+          "end_turn": 0.0054,
+          "entropy": 0.477,
+          "warmup": false
+        },
+        {
+          "update": 135,
+          "steps": 1105920,
+          "win_rate": 0.02,
+          "melded": 0.774,
+          "end_turn": 0.0074,
+          "entropy": 0.542,
+          "warmup": false
+        },
+        {
+          "update": 136,
+          "steps": 1114112,
+          "win_rate": 0.02,
+          "melded": 0.745,
+          "end_turn": 0.0048,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 137,
+          "steps": 1122304,
+          "win_rate": 0.02,
+          "melded": 0.715,
+          "end_turn": 0.0059,
+          "entropy": 0.499,
+          "warmup": false
+        },
+        {
+          "update": 138,
+          "steps": 1130496,
+          "win_rate": 0.02,
+          "melded": 0.727,
+          "end_turn": 0.0072,
+          "entropy": 0.508,
+          "warmup": false
+        },
+        {
+          "update": 139,
+          "steps": 1138688,
+          "win_rate": 0.02,
+          "melded": 0.755,
+          "end_turn": 0.0059,
+          "entropy": 0.543,
+          "warmup": false
+        },
+        {
+          "update": 140,
+          "steps": 1146880,
+          "win_rate": 0.025,
+          "melded": 0.743,
+          "end_turn": 0.0051,
+          "entropy": 0.529,
+          "warmup": false
+        },
+        {
+          "update": 141,
+          "steps": 1155072,
+          "win_rate": 0.025,
+          "melded": 0.7490000000000001,
+          "end_turn": 0.0042,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 142,
+          "steps": 1163264,
+          "win_rate": 0.025,
+          "melded": 0.767,
+          "end_turn": 0.0066,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 143,
+          "steps": 1171456,
+          "win_rate": 0.02,
+          "melded": 0.768,
+          "end_turn": 0.0067,
+          "entropy": 0.536,
+          "warmup": false
+        },
+        {
+          "update": 144,
+          "steps": 1179648,
+          "win_rate": 0.03,
+          "melded": 0.735,
+          "end_turn": 0.0083,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 145,
+          "steps": 1187840,
+          "win_rate": 0.03,
+          "melded": 0.742,
+          "end_turn": 0.0042,
+          "entropy": 0.514,
+          "warmup": false
+        },
+        {
+          "update": 146,
+          "steps": 1196032,
+          "win_rate": 0.03,
+          "melded": 0.752,
+          "end_turn": 0.0027,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 147,
+          "steps": 1204224,
+          "win_rate": 0.03,
+          "melded": 0.747,
+          "end_turn": 0.004,
+          "entropy": 0.508,
+          "warmup": false
+        },
+        {
+          "update": 148,
+          "steps": 1212416,
+          "win_rate": 0.03,
+          "melded": 0.747,
+          "end_turn": 0.01,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 149,
+          "steps": 1220608,
+          "win_rate": 0.03,
+          "melded": 0.7709999999999999,
+          "end_turn": 0.0046,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 150,
+          "steps": 1228800,
+          "win_rate": 0.03,
+          "melded": 0.778,
+          "end_turn": 0.006,
+          "entropy": 0.518,
+          "warmup": false
+        }
+      ]
+    },
+    {
+      "label": "score+rack",
+      "reward_mode": "score_normalized",
+      "rack_shaping": 0.1,
+      "hidden": [
+        1024,
+        1024
+      ],
+      "history": [
+        {
+          "update": 1,
+          "steps": 8192,
+          "win_rate": NaN,
+          "melded": 0.529,
+          "end_turn": 0.0189,
+          "entropy": 0.588,
+          "warmup": true
+        },
+        {
+          "update": 2,
+          "steps": 16384,
+          "win_rate": NaN,
+          "melded": 0.75,
+          "end_turn": 0.0123,
+          "entropy": 0.519,
+          "warmup": true
+        },
+        {
+          "update": 3,
+          "steps": 24576,
+          "win_rate": NaN,
+          "melded": 0.778,
+          "end_turn": 0.0116,
+          "entropy": 0.514,
+          "warmup": true
+        },
+        {
+          "update": 4,
+          "steps": 32768,
+          "win_rate": 0.0,
+          "melded": 0.8290000000000001,
+          "end_turn": 0.01,
+          "entropy": 0.442,
+          "warmup": false
+        },
+        {
+          "update": 5,
+          "steps": 40960,
+          "win_rate": 0.0,
+          "melded": 0.85,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.466,
+          "warmup": false
+        },
+        {
+          "update": 6,
+          "steps": 49152,
+          "win_rate": 0.1,
+          "melded": 0.831,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 7,
+          "steps": 57344,
+          "win_rate": 0.062,
+          "melded": 0.8240000000000001,
+          "end_turn": 0.0051,
+          "entropy": 0.512,
+          "warmup": false
+        },
+        {
+          "update": 8,
+          "steps": 65536,
+          "win_rate": 0.042,
+          "melded": 0.804,
+          "end_turn": 0.006,
+          "entropy": 0.525,
+          "warmup": false
+        },
+        {
+          "update": 9,
+          "steps": 73728,
+          "win_rate": 0.038,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.511,
+          "warmup": false
+        },
+        {
+          "update": 10,
+          "steps": 81920,
+          "win_rate": 0.031,
+          "melded": 0.8370000000000001,
+          "end_turn": 0.0076,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 11,
+          "steps": 90112,
+          "win_rate": 0.027999999999999997,
+          "melded": 0.846,
+          "end_turn": 0.0074,
+          "entropy": 0.534,
+          "warmup": false
+        },
+        {
+          "update": 12,
+          "steps": 98304,
+          "win_rate": 0.024,
+          "melded": 0.81,
+          "end_turn": 0.0059,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 13,
+          "steps": 106496,
+          "win_rate": 0.02,
+          "melded": 0.818,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.501,
+          "warmup": false
+        },
+        {
+          "update": 14,
+          "steps": 114688,
+          "win_rate": 0.018000000000000002,
+          "melded": 0.772,
+          "end_turn": 0.0079,
+          "entropy": 0.518,
+          "warmup": false
+        },
+        {
+          "update": 15,
+          "steps": 122880,
+          "win_rate": 0.016,
+          "melded": 0.746,
+          "end_turn": 0.0077,
+          "entropy": 0.496,
+          "warmup": false
+        },
+        {
+          "update": 16,
+          "steps": 131072,
+          "win_rate": 0.016,
+          "melded": 0.773,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.48,
+          "warmup": false
+        },
+        {
+          "update": 17,
+          "steps": 139264,
+          "win_rate": 0.027999999999999997,
+          "melded": 0.754,
+          "end_turn": 0.0059,
+          "entropy": 0.502,
+          "warmup": false
+        },
+        {
+          "update": 18,
+          "steps": 147456,
+          "win_rate": 0.026000000000000002,
+          "melded": 0.6970000000000001,
+          "end_turn": 0.0072,
+          "entropy": 0.513,
+          "warmup": false
+        },
+        {
+          "update": 19,
+          "steps": 155648,
+          "win_rate": 0.024,
+          "melded": 0.706,
+          "end_turn": 0.0062,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 20,
+          "steps": 163840,
+          "win_rate": 0.022000000000000002,
+          "melded": 0.73,
+          "end_turn": 0.0054,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 21,
+          "steps": 172032,
+          "win_rate": 0.022000000000000002,
+          "melded": 0.7659999999999999,
+          "end_turn": 0.0063,
+          "entropy": 0.541,
+          "warmup": false
+        },
+        {
+          "update": 22,
+          "steps": 180224,
+          "win_rate": 0.02,
+          "melded": 0.738,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.516,
+          "warmup": false
+        },
+        {
+          "update": 23,
+          "steps": 188416,
+          "win_rate": 0.028999999999999998,
+          "melded": 0.784,
+          "end_turn": 0.0062,
+          "entropy": 0.53,
+          "warmup": false
+        },
+        {
+          "update": 24,
+          "steps": 196608,
+          "win_rate": 0.027999999999999997,
+          "melded": 0.7859999999999999,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.514,
+          "warmup": false
+        },
+        {
+          "update": 25,
+          "steps": 204800,
+          "win_rate": 0.035,
+          "melded": 0.769,
+          "end_turn": 0.0066,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 26,
+          "steps": 212992,
+          "win_rate": 0.042,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.466,
+          "warmup": false
+        },
+        {
+          "update": 27,
+          "steps": 221184,
+          "win_rate": 0.040999999999999995,
+          "melded": 0.862,
+          "end_turn": 0.006,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 28,
+          "steps": 229376,
+          "win_rate": 0.038,
+          "melded": 0.804,
+          "end_turn": 0.0074,
+          "entropy": 0.516,
+          "warmup": false
+        },
+        {
+          "update": 29,
+          "steps": 237568,
+          "win_rate": 0.037000000000000005,
+          "melded": 0.8420000000000001,
+          "end_turn": 0.0077,
+          "entropy": 0.526,
+          "warmup": false
+        },
+        {
+          "update": 30,
+          "steps": 245760,
+          "win_rate": 0.036000000000000004,
+          "melded": 0.862,
+          "end_turn": 0.0087,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 31,
+          "steps": 253952,
+          "win_rate": 0.042,
+          "melded": 0.833,
+          "end_turn": 0.006,
+          "entropy": 0.525,
+          "warmup": false
+        },
+        {
+          "update": 32,
+          "steps": 262144,
+          "win_rate": 0.040999999999999995,
+          "melded": 0.8290000000000001,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.528,
+          "warmup": false
+        },
+        {
+          "update": 33,
+          "steps": 270336,
+          "win_rate": 0.039,
+          "melded": 0.823,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 34,
+          "steps": 278528,
+          "win_rate": 0.043,
+          "melded": 0.845,
+          "end_turn": 0.009000000000000001,
+          "entropy": 0.536,
+          "warmup": false
+        },
+        {
+          "update": 35,
+          "steps": 286720,
+          "win_rate": 0.042,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.0084,
+          "entropy": 0.57,
+          "warmup": false
+        },
+        {
+          "update": 36,
+          "steps": 294912,
+          "win_rate": 0.040999999999999995,
+          "melded": 0.851,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.529,
+          "warmup": false
+        },
+        {
+          "update": 37,
+          "steps": 303104,
+          "win_rate": 0.039,
+          "melded": 0.8690000000000001,
+          "end_turn": 0.0083,
+          "entropy": 0.557,
+          "warmup": false
+        },
+        {
+          "update": 38,
+          "steps": 311296,
+          "win_rate": 0.038,
+          "melded": 0.845,
+          "end_turn": 0.0074,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 39,
+          "steps": 319488,
+          "win_rate": 0.036000000000000004,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.514,
+          "warmup": false
+        },
+        {
+          "update": 40,
+          "steps": 327680,
+          "win_rate": 0.036000000000000004,
+          "melded": 0.855,
+          "end_turn": 0.0098,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 41,
+          "steps": 335872,
+          "win_rate": 0.035,
+          "melded": 0.846,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.525,
+          "warmup": false
+        },
+        {
+          "update": 42,
+          "steps": 344064,
+          "win_rate": 0.03,
+          "melded": 0.8540000000000001,
+          "end_turn": 0.0048,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 43,
+          "steps": 352256,
+          "win_rate": 0.03,
+          "melded": 0.866,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.526,
+          "warmup": false
+        },
+        {
+          "update": 44,
+          "steps": 360448,
+          "win_rate": 0.03,
+          "melded": 0.902,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 45,
+          "steps": 368640,
+          "win_rate": 0.03,
+          "melded": 0.856,
+          "end_turn": 0.0077,
+          "entropy": 0.512,
+          "warmup": false
+        },
+        {
+          "update": 46,
+          "steps": 376832,
+          "win_rate": 0.03,
+          "melded": 0.856,
+          "end_turn": 0.0092,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 47,
+          "steps": 385024,
+          "win_rate": 0.03,
+          "melded": 0.8270000000000001,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 48,
+          "steps": 393216,
+          "win_rate": 0.03,
+          "melded": 0.81,
+          "end_turn": 0.0074,
+          "entropy": 0.489,
+          "warmup": false
+        },
+        {
+          "update": 49,
+          "steps": 401408,
+          "win_rate": 0.03,
+          "melded": 0.813,
+          "end_turn": 0.0096,
+          "entropy": 0.548,
+          "warmup": false
+        },
+        {
+          "update": 50,
+          "steps": 409600,
+          "win_rate": 0.03,
+          "melded": 0.878,
+          "end_turn": 0.0052,
+          "entropy": 0.502,
+          "warmup": false
+        },
+        {
+          "update": 51,
+          "steps": 417792,
+          "win_rate": 0.03,
+          "melded": 0.867,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.549,
+          "warmup": false
+        },
+        {
+          "update": 52,
+          "steps": 425984,
+          "win_rate": 0.03,
+          "melded": 0.884,
+          "end_turn": 0.009000000000000001,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 53,
+          "steps": 434176,
+          "win_rate": 0.025,
+          "melded": 0.851,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 54,
+          "steps": 442368,
+          "win_rate": 0.025,
+          "melded": 0.861,
+          "end_turn": 0.0087,
+          "entropy": 0.49,
+          "warmup": false
+        },
+        {
+          "update": 55,
+          "steps": 450560,
+          "win_rate": 0.035,
+          "melded": 0.8540000000000001,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 56,
+          "steps": 458752,
+          "win_rate": 0.035,
+          "melded": 0.914,
+          "end_turn": 0.0095,
+          "entropy": 0.543,
+          "warmup": false
+        },
+        {
+          "update": 57,
+          "steps": 466944,
+          "win_rate": 0.035,
+          "melded": 0.927,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 58,
+          "steps": 475136,
+          "win_rate": 0.03,
+          "melded": 0.9229999999999999,
+          "end_turn": 0.0121,
+          "entropy": 0.559,
+          "warmup": false
+        },
+        {
+          "update": 59,
+          "steps": 483328,
+          "win_rate": 0.03,
+          "melded": 0.925,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.538,
+          "warmup": false
+        },
+        {
+          "update": 60,
+          "steps": 491520,
+          "win_rate": 0.025,
+          "melded": 0.8809999999999999,
+          "end_turn": 0.0087,
+          "entropy": 0.501,
+          "warmup": false
+        },
+        {
+          "update": 61,
+          "steps": 499712,
+          "win_rate": 0.02,
+          "melded": 0.843,
+          "end_turn": 0.0076,
+          "entropy": 0.507,
+          "warmup": false
+        },
+        {
+          "update": 62,
+          "steps": 507904,
+          "win_rate": 0.02,
+          "melded": 0.851,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 63,
+          "steps": 516096,
+          "win_rate": 0.02,
+          "melded": 0.838,
+          "end_turn": 0.0076,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 64,
+          "steps": 524288,
+          "win_rate": 0.025,
+          "melded": 0.8320000000000001,
+          "end_turn": 0.0051,
+          "entropy": 0.511,
+          "warmup": false
+        },
+        {
+          "update": 65,
+          "steps": 532480,
+          "win_rate": 0.02,
+          "melded": 0.835,
+          "end_turn": 0.0074,
+          "entropy": 0.533,
+          "warmup": false
+        },
+        {
+          "update": 66,
+          "steps": 540672,
+          "win_rate": 0.02,
+          "melded": 0.845,
+          "end_turn": 0.0085,
+          "entropy": 0.502,
+          "warmup": false
+        },
+        {
+          "update": 67,
+          "steps": 548864,
+          "win_rate": 0.02,
+          "melded": 0.8320000000000001,
+          "end_turn": 0.0088,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 68,
+          "steps": 557056,
+          "win_rate": 0.015,
+          "melded": 0.851,
+          "end_turn": 0.0089,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 69,
+          "steps": 565248,
+          "win_rate": 0.02,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.0073,
+          "entropy": 0.509,
+          "warmup": false
+        },
+        {
+          "update": 70,
+          "steps": 573440,
+          "win_rate": 0.025,
+          "melded": 0.863,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.492,
+          "warmup": false
+        },
+        {
+          "update": 71,
+          "steps": 581632,
+          "win_rate": 0.025,
+          "melded": 0.884,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.521,
+          "warmup": false
+        },
+        {
+          "update": 72,
+          "steps": 589824,
+          "win_rate": 0.025,
+          "melded": 0.8540000000000001,
+          "end_turn": 0.0085,
+          "entropy": 0.492,
+          "warmup": false
+        },
+        {
+          "update": 73,
+          "steps": 598016,
+          "win_rate": 0.025,
+          "melded": 0.8340000000000001,
+          "end_turn": 0.0063,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 74,
+          "steps": 606208,
+          "win_rate": 0.025,
+          "melded": 0.845,
+          "end_turn": 0.0111,
+          "entropy": 0.518,
+          "warmup": false
+        },
+        {
+          "update": 75,
+          "steps": 614400,
+          "win_rate": 0.025,
+          "melded": 0.899,
+          "end_turn": 0.0085,
+          "entropy": 0.514,
+          "warmup": false
+        },
+        {
+          "update": 76,
+          "steps": 622592,
+          "win_rate": 0.035,
+          "melded": 0.878,
+          "end_turn": 0.0087,
+          "entropy": 0.538,
+          "warmup": false
+        },
+        {
+          "update": 77,
+          "steps": 630784,
+          "win_rate": 0.035,
+          "melded": 0.848,
+          "end_turn": 0.009300000000000001,
+          "entropy": 0.551,
+          "warmup": false
+        },
+        {
+          "update": 78,
+          "steps": 638976,
+          "win_rate": 0.04,
+          "melded": 0.818,
+          "end_turn": 0.0068000000000000005,
+          "entropy": 0.534,
+          "warmup": false
+        },
+        {
+          "update": 79,
+          "steps": 647168,
+          "win_rate": 0.04,
+          "melded": 0.831,
+          "end_turn": 0.0088,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 80,
+          "steps": 655360,
+          "win_rate": 0.04,
+          "melded": 0.83,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.527,
+          "warmup": false
+        },
+        {
+          "update": 81,
+          "steps": 663552,
+          "win_rate": 0.045,
+          "melded": 0.7909999999999999,
+          "end_turn": 0.0085,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 82,
+          "steps": 671744,
+          "win_rate": 0.045,
+          "melded": 0.804,
+          "end_turn": 0.0104,
+          "entropy": 0.549,
+          "warmup": false
+        },
+        {
+          "update": 83,
+          "steps": 679936,
+          "win_rate": 0.045,
+          "melded": 0.846,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.497,
+          "warmup": false
+        },
+        {
+          "update": 84,
+          "steps": 688128,
+          "win_rate": 0.045,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.535,
+          "warmup": false
+        },
+        {
+          "update": 85,
+          "steps": 696320,
+          "win_rate": 0.045,
+          "melded": 0.792,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.526,
+          "warmup": false
+        },
+        {
+          "update": 86,
+          "steps": 704512,
+          "win_rate": 0.045,
+          "melded": 0.772,
+          "end_turn": 0.0051,
+          "entropy": 0.54,
+          "warmup": false
+        },
+        {
+          "update": 87,
+          "steps": 712704,
+          "win_rate": 0.045,
+          "melded": 0.7829999999999999,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.538,
+          "warmup": false
+        },
+        {
+          "update": 88,
+          "steps": 720896,
+          "win_rate": 0.045,
+          "melded": 0.8240000000000001,
+          "end_turn": 0.0063,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 89,
+          "steps": 729088,
+          "win_rate": 0.035,
+          "melded": 0.8140000000000001,
+          "end_turn": 0.0054,
+          "entropy": 0.553,
+          "warmup": false
+        },
+        {
+          "update": 90,
+          "steps": 737280,
+          "win_rate": 0.035,
+          "melded": 0.78,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.536,
+          "warmup": false
+        },
+        {
+          "update": 91,
+          "steps": 745472,
+          "win_rate": 0.035,
+          "melded": 0.7879999999999999,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 92,
+          "steps": 753664,
+          "win_rate": 0.035,
+          "melded": 0.7709999999999999,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 93,
+          "steps": 761856,
+          "win_rate": 0.035,
+          "melded": 0.69,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 94,
+          "steps": 770048,
+          "win_rate": 0.035,
+          "melded": 0.695,
+          "end_turn": 0.006999999999999999,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 95,
+          "steps": 778240,
+          "win_rate": 0.035,
+          "melded": 0.716,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.505,
+          "warmup": false
+        },
+        {
+          "update": 96,
+          "steps": 786432,
+          "win_rate": 0.035,
+          "melded": 0.726,
+          "end_turn": 0.0055000000000000005,
+          "entropy": 0.51,
+          "warmup": false
+        },
+        {
+          "update": 97,
+          "steps": 794624,
+          "win_rate": 0.035,
+          "melded": 0.7490000000000001,
+          "end_turn": 0.0045000000000000005,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 98,
+          "steps": 802816,
+          "win_rate": 0.035,
+          "melded": 0.738,
+          "end_turn": 0.0049,
+          "entropy": 0.524,
+          "warmup": false
+        },
+        {
+          "update": 99,
+          "steps": 811008,
+          "win_rate": 0.035,
+          "melded": 0.763,
+          "end_turn": 0.0063,
+          "entropy": 0.52,
+          "warmup": false
+        },
+        {
+          "update": 100,
+          "steps": 819200,
+          "win_rate": 0.03,
+          "melded": 0.76,
+          "end_turn": 0.0059,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 101,
+          "steps": 827392,
+          "win_rate": 0.03,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.0051,
+          "entropy": 0.492,
+          "warmup": false
+        },
+        {
+          "update": 102,
+          "steps": 835584,
+          "win_rate": 0.03,
+          "melded": 0.8009999999999999,
+          "end_turn": 0.006,
+          "entropy": 0.49,
+          "warmup": false
+        },
+        {
+          "update": 103,
+          "steps": 843776,
+          "win_rate": 0.03,
+          "melded": 0.754,
+          "end_turn": 0.005,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 104,
+          "steps": 851968,
+          "win_rate": 0.03,
+          "melded": 0.779,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.511,
+          "warmup": false
+        },
+        {
+          "update": 105,
+          "steps": 860160,
+          "win_rate": 0.025,
+          "melded": 0.805,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 106,
+          "steps": 868352,
+          "win_rate": 0.02,
+          "melded": 0.78,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 107,
+          "steps": 876544,
+          "win_rate": 0.02,
+          "melded": 0.802,
+          "end_turn": 0.0059,
+          "entropy": 0.504,
+          "warmup": false
+        },
+        {
+          "update": 108,
+          "steps": 884736,
+          "win_rate": 0.02,
+          "melded": 0.8109999999999999,
+          "end_turn": 0.0079,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 109,
+          "steps": 892928,
+          "win_rate": 0.02,
+          "melded": 0.8190000000000001,
+          "end_turn": 0.0111,
+          "entropy": 0.55,
+          "warmup": false
+        },
+        {
+          "update": 110,
+          "steps": 901120,
+          "win_rate": 0.02,
+          "melded": 0.835,
+          "end_turn": 0.009399999999999999,
+          "entropy": 0.547,
+          "warmup": false
+        },
+        {
+          "update": 111,
+          "steps": 909312,
+          "win_rate": 0.01,
+          "melded": 0.8079999999999999,
+          "end_turn": 0.0074,
+          "entropy": 0.537,
+          "warmup": false
+        },
+        {
+          "update": 112,
+          "steps": 917504,
+          "win_rate": 0.01,
+          "melded": 0.778,
+          "end_turn": 0.0074,
+          "entropy": 0.557,
+          "warmup": false
+        },
+        {
+          "update": 113,
+          "steps": 925696,
+          "win_rate": 0.015,
+          "melded": 0.82,
+          "end_turn": 0.0088,
+          "entropy": 0.549,
+          "warmup": false
+        },
+        {
+          "update": 114,
+          "steps": 933888,
+          "win_rate": 0.01,
+          "melded": 0.823,
+          "end_turn": 0.009899999999999999,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 115,
+          "steps": 942080,
+          "win_rate": 0.01,
+          "melded": 0.857,
+          "end_turn": 0.008199999999999999,
+          "entropy": 0.53,
+          "warmup": false
+        },
+        {
+          "update": 116,
+          "steps": 950272,
+          "win_rate": 0.005,
+          "melded": 0.872,
+          "end_turn": 0.011699999999999999,
+          "entropy": 0.552,
+          "warmup": false
+        },
+        {
+          "update": 117,
+          "steps": 958464,
+          "win_rate": 0.005,
+          "melded": 0.899,
+          "end_turn": 0.009399999999999999,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 118,
+          "steps": 966656,
+          "win_rate": 0.005,
+          "melded": 0.857,
+          "end_turn": 0.0098,
+          "entropy": 0.552,
+          "warmup": false
+        },
+        {
+          "update": 119,
+          "steps": 974848,
+          "win_rate": 0.01,
+          "melded": 0.8290000000000001,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 120,
+          "steps": 983040,
+          "win_rate": 0.01,
+          "melded": 0.836,
+          "end_turn": 0.0098,
+          "entropy": 0.539,
+          "warmup": false
+        },
+        {
+          "update": 121,
+          "steps": 991232,
+          "win_rate": 0.01,
+          "melded": 0.831,
+          "end_turn": 0.0078000000000000005,
+          "entropy": 0.521,
+          "warmup": false
+        },
+        {
+          "update": 122,
+          "steps": 999424,
+          "win_rate": 0.01,
+          "melded": 0.855,
+          "end_turn": 0.0060999999999999995,
+          "entropy": 0.507,
+          "warmup": false
+        },
+        {
+          "update": 123,
+          "steps": 1007616,
+          "win_rate": 0.01,
+          "melded": 0.856,
+          "end_turn": 0.0079,
+          "entropy": 0.519,
+          "warmup": false
+        },
+        {
+          "update": 124,
+          "steps": 1015808,
+          "win_rate": 0.01,
+          "melded": 0.841,
+          "end_turn": 0.0077,
+          "entropy": 0.516,
+          "warmup": false
+        },
+        {
+          "update": 125,
+          "steps": 1024000,
+          "win_rate": 0.01,
+          "melded": 0.8390000000000001,
+          "end_turn": 0.0092,
+          "entropy": 0.546,
+          "warmup": false
+        },
+        {
+          "update": 126,
+          "steps": 1032192,
+          "win_rate": 0.01,
+          "melded": 0.8540000000000001,
+          "end_turn": 0.0088,
+          "entropy": 0.521,
+          "warmup": false
+        },
+        {
+          "update": 127,
+          "steps": 1040384,
+          "win_rate": 0.01,
+          "melded": 0.861,
+          "end_turn": 0.0072,
+          "entropy": 0.536,
+          "warmup": false
+        },
+        {
+          "update": 128,
+          "steps": 1048576,
+          "win_rate": 0.015,
+          "melded": 0.825,
+          "end_turn": 0.0063,
+          "entropy": 0.503,
+          "warmup": false
+        },
+        {
+          "update": 129,
+          "steps": 1056768,
+          "win_rate": 0.015,
+          "melded": 0.813,
+          "end_turn": 0.0087,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 130,
+          "steps": 1064960,
+          "win_rate": 0.015,
+          "melded": 0.809,
+          "end_turn": 0.006,
+          "entropy": 0.533,
+          "warmup": false
+        },
+        {
+          "update": 131,
+          "steps": 1073152,
+          "win_rate": 0.015,
+          "melded": 0.797,
+          "end_turn": 0.0077,
+          "entropy": 0.542,
+          "warmup": false
+        },
+        {
+          "update": 132,
+          "steps": 1081344,
+          "win_rate": 0.015,
+          "melded": 0.784,
+          "end_turn": 0.005600000000000001,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 133,
+          "steps": 1089536,
+          "win_rate": 0.015,
+          "melded": 0.807,
+          "end_turn": 0.006,
+          "entropy": 0.517,
+          "warmup": false
+        },
+        {
+          "update": 134,
+          "steps": 1097728,
+          "win_rate": 0.015,
+          "melded": 0.807,
+          "end_turn": 0.0052,
+          "entropy": 0.499,
+          "warmup": false
+        },
+        {
+          "update": 135,
+          "steps": 1105920,
+          "win_rate": 0.015,
+          "melded": 0.809,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.525,
+          "warmup": false
+        },
+        {
+          "update": 136,
+          "steps": 1114112,
+          "win_rate": 0.015,
+          "melded": 0.8370000000000001,
+          "end_turn": 0.006500000000000001,
+          "entropy": 0.531,
+          "warmup": false
+        },
+        {
+          "update": 137,
+          "steps": 1122304,
+          "win_rate": 0.015,
+          "melded": 0.8809999999999999,
+          "end_turn": 0.0085,
+          "entropy": 0.534,
+          "warmup": false
+        },
+        {
+          "update": 138,
+          "steps": 1130496,
+          "win_rate": 0.015,
+          "melded": 0.892,
+          "end_turn": 0.0059,
+          "entropy": 0.528,
+          "warmup": false
+        },
+        {
+          "update": 139,
+          "steps": 1138688,
+          "win_rate": 0.015,
+          "melded": 0.878,
+          "end_turn": 0.0066,
+          "entropy": 0.521,
+          "warmup": false
+        },
+        {
+          "update": 140,
+          "steps": 1146880,
+          "win_rate": 0.015,
+          "melded": 0.8590000000000001,
+          "end_turn": 0.0066,
+          "entropy": 0.523,
+          "warmup": false
+        },
+        {
+          "update": 141,
+          "steps": 1155072,
+          "win_rate": 0.015,
+          "melded": 0.845,
+          "end_turn": 0.0070999999999999995,
+          "entropy": 0.515,
+          "warmup": false
+        },
+        {
+          "update": 142,
+          "steps": 1163264,
+          "win_rate": 0.015,
+          "melded": 0.8190000000000001,
+          "end_turn": 0.0042,
+          "entropy": 0.502,
+          "warmup": false
+        },
+        {
+          "update": 143,
+          "steps": 1171456,
+          "win_rate": 0.015,
+          "melded": 0.8,
+          "end_turn": 0.009000000000000001,
+          "entropy": 0.498,
+          "warmup": false
+        },
+        {
+          "update": 144,
+          "steps": 1179648,
+          "win_rate": 0.015,
+          "melded": 0.7709999999999999,
+          "end_turn": 0.0073,
+          "entropy": 0.506,
+          "warmup": false
+        },
+        {
+          "update": 145,
+          "steps": 1187840,
+          "win_rate": 0.015,
+          "melded": 0.79,
+          "end_turn": 0.0066,
+          "entropy": 0.522,
+          "warmup": false
+        },
+        {
+          "update": 146,
+          "steps": 1196032,
+          "win_rate": 0.015,
+          "melded": 0.7809999999999999,
+          "end_turn": 0.008100000000000001,
+          "entropy": 0.532,
+          "warmup": false
+        },
+        {
+          "update": 147,
+          "steps": 1204224,
+          "win_rate": 0.015,
+          "melded": 0.797,
+          "end_turn": 0.0085,
+          "entropy": 0.51,
+          "warmup": false
+        },
+        {
+          "update": 148,
+          "steps": 1212416,
+          "win_rate": 0.01,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.0088,
+          "entropy": 0.498,
+          "warmup": false
+        },
+        {
+          "update": 149,
+          "steps": 1220608,
+          "win_rate": 0.015,
+          "melded": 0.7609999999999999,
+          "end_turn": 0.0067,
+          "entropy": 0.514,
+          "warmup": false
+        },
+        {
+          "update": 150,
+          "steps": 1228800,
+          "win_rate": 0.015,
+          "melded": 0.7979999999999999,
+          "end_turn": 0.005699999999999999,
+          "entropy": 0.499,
+          "warmup": false
+        }
+      ]
+    }
+  ]
+}

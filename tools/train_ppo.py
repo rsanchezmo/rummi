@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import json
 import pathlib
 import time
 
@@ -270,6 +271,10 @@ def main() -> None:
     )
     p.add_argument("--out", type=pathlib.Path, default=None, help="save weights here")
     p.add_argument("--eval-games", type=int, default=0, help="score through the frozen protocol")
+    p.add_argument(
+        "--log-json", type=pathlib.Path, default=None,
+        help="per-update metrics, for tools/render_charts.py",
+    )
     args = p.parse_args()
 
     import torch
@@ -339,6 +344,7 @@ def main() -> None:
             parameter.requires_grad_(False)
         print(f"anchoring PPO to its starting policy, kl_coef={hyper.kl_coef}")
 
+    history: list[dict[str, float]] = []
     started = time.perf_counter()
     # Wins come from `info["winner"]`, not from the sign of the reward. Under
     # `--shaping` a losing episode can still end on a positive reward, so
@@ -495,6 +501,17 @@ def main() -> None:
             f"{steps / (time.perf_counter() - started):>7.0f} steps/s",
             flush=True,
         )
+        history.append(
+            {
+                "update": update,
+                "steps": steps,
+                "win_rate": win_rate,
+                "melded": melded_frac,
+                "end_turn": end_turn_frac,
+                "entropy": last_stats[2],
+                "warmup": bool(warming),
+            }
+        )
         melded_frac = end_turn_frac = 0.0
 
     env.close()
@@ -511,6 +528,24 @@ def main() -> None:
             args.out,
         )
         print(f"wrote {args.out}")
+
+    if args.log_json:
+        args.log_json.parent.mkdir(parents=True, exist_ok=True)
+        args.log_json.write_text(
+            json.dumps(
+                {
+                    "config": args.config,
+                    "opponent": args.opponent,
+                    "reward_mode": args.reward_mode,
+                    "rack_shaping": args.rack_shaping,
+                    "hidden": list(arch.hidden),
+                    "clone": args.clone,
+                    "history": history,
+                },
+                indent=2,
+            )
+        )
+        print(f"wrote {args.log_json}")
 
     if args.eval_games:
         from rummi.agents.learned.agent import torch_agent

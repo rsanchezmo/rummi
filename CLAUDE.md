@@ -203,6 +203,17 @@ The split, and why:
 exactly zero and the entropy term computes `0 * -inf` = NaN, which ends a run. At
 -1e8 the probability underflows to zero and the product stays zero.
 
+`tools/train_ppo.py` is the training loop, `--log-json` its metrics, and
+`tools/plot_training.py` the curves. **matplotlib, not `render_charts.py`**: that
+module hand-writes SVG because the README's two figures have to be theme-aware
+inside a GitHub `<img>`, which matplotlib cannot do. A training plot carries no
+such constraint, and hand-laying axes produced a clipped legend sitting on top of
+its own title before this was moved over.
+
+The three panels are the diagnosis, and each is one scale -- never two on an axis.
+`melded` sits near greedy's 92% while `end_turn` is flat at ~1% against its 36%:
+**opening is solved, finishing a turn is not, and that is why winning is not.**
+
 `tools/train_ppo.py` is the training loop. The mask is **stored in the rollout**
 and reapplied at update time: scoring an old action under a policy that has
 forgotten which actions were legal gives a meaningless ratio. `--shaping` turns on
