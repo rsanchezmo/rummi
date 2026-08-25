@@ -7,7 +7,7 @@ oracles and fast RL smoke tests tractable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
@@ -153,6 +153,12 @@ TINY = RummiConfig(
 """Small variant used by brute-force oracles and smoke tests."""
 
 STANDARD = RummiConfig()
+
+STANDARD_3P = replace(STANDARD, n_players=3)
+"""Standard deck at three seats; a real game deals fourteen tiles whatever the count."""
+
+STANDARD_4P = replace(STANDARD, n_players=4)
+"""Standard deck at four seats -- 56 tiles dealt, leaving 50 in the pool."""
 
 TINY_GROUPS = RummiConfig(
     n_colors=3,

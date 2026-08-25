@@ -25,13 +25,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rummi.agents.base import Agent
+from rummi.agents.base import Agent, act_by_seat
 from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
 from rummi.env.numpy.deal import reset as deal_reset
 from rummi.env.numpy.deal import reset_envs
 from rummi.env.numpy.engine import step as engine_step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.observation import encode
 
 PROTOCOL_VERSION = "1.0"
 
@@ -129,9 +128,8 @@ def _play_batch(
     Autoreset is deliberately not used: one env slot is one game with one known
     seed, which is what makes a score reproducible.
     """
-    cfg = suite.cfg
     n = len(seeds)
-    state = deal_reset(cfg, n, seed=0)
+    state = deal_reset(suite.cfg, n, seed=0)
     reset_envs(state, np.arange(n), seeds)
     for agent in seats:
         agent.reset(n)
@@ -140,18 +138,8 @@ def _play_batch(
         if state.done.all():
             break
         mask = legal_actions(state)
-        obs = encode(state)
-        actions = np.full(n, cfg.draw_action, dtype=np.int64)
-        for seat, agent in enumerate(seats):
-            active = (state.current == seat) & ~state.done
-            if not active.any():
-                continue
-            proposed = np.asarray(agent.act(obs, mask, active))
-            illegal = active & ~mask[np.arange(n), proposed]
-            result.illegal_attempts += int(illegal.sum())
-            # Substitute DRAW so the suite still completes and reports, rather
-            # than dying halfway with no diagnosis.
-            actions[active] = np.where(illegal[active], cfg.draw_action, proposed[active])
+        actions, illegal = act_by_seat(seats, state, mask)
+        result.illegal_attempts += illegal
         engine_step(state, actions, mask)
 
     _score_batch(suite, state, result)

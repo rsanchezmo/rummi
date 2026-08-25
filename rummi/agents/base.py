@@ -14,6 +14,7 @@ a proof that the observation is sufficient to play the game.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 import numpy as np
@@ -72,6 +73,50 @@ def act_on_state(agent: "Agent", state, mask: np.ndarray, active=None) -> np.nda
     from rummi.env.observation import encode
 
     return agent.act(encode(state), mask, active)
+
+
+def act_by_seat(
+    seats: Sequence["Agent | None"],
+    state,
+    mask: np.ndarray,
+    actions: np.ndarray | None = None,
+) -> tuple[np.ndarray, int]:
+    """Fill in one action per env from the agent seated at whichever seat is acting.
+
+    ``seats[i]`` plays every env whose ``current`` seat is ``i``; a seat mapped to
+    ``None`` keeps whatever ``actions`` already holds, which is how a caller drives
+    one seat itself. Masked-out proposals are replaced by ``DRAW`` and counted
+    rather than raised -- a run that reports its illegal attempts is worth more
+    than one that dies half-way with no diagnosis.
+
+    The single multi-seat counterpart to :func:`act_on_state`: agents still see
+    only the encoded observation, and the seat rotation in it is what lets one
+    agent instance play any seat.
+    """
+    from rummi.env.observation import encode
+
+    cfg = state.cfg
+    n = state.batch_size
+    if actions is None:
+        actions = np.full(n, cfg.draw_action, dtype=np.int64)
+    rows = np.arange(n)
+    obs: Observation | None = None
+    illegal_attempts = 0
+
+    for seat, agent in enumerate(seats):
+        if agent is None:
+            continue
+        active = (state.current == seat) & ~state.done
+        if not active.any():
+            continue
+        if obs is None:
+            obs = encode(state)
+        proposed = np.asarray(agent.act(obs, mask, active))
+        illegal = active & ~mask[rows, proposed]
+        illegal_attempts += int(illegal.sum())
+        actions[active] = np.where(illegal[active], cfg.draw_action, proposed[active])
+
+    return actions, illegal_attempts
 
 
 def turn_starting(obs: Observation) -> np.ndarray:

@@ -193,3 +193,29 @@ def test_gymnasium_record_video_can_drive_the_env():
         env.close()
         written = [f for f in __import__("os").listdir(folder) if f.endswith(".mp4")]
         assert written, "no video was written"
+
+
+@pytest.mark.parametrize("env_id,seats", [("Rummi-2p-v0", 2), ("Rummi-3p-v0", 3), ("Rummi-4p-v0", 4)])
+def test_registered_ids_build_through_make_vec(env_id: str, seats: int):
+    import rummi.env  # noqa: F401  -- importing the package is what registers
+
+    env = gym.make_vec(env_id, num_envs=2)
+    try:
+        assert env.cfg.n_players == seats
+        obs, info = env.reset(seed=0)
+        assert info["rewards_all"].shape == (2, seats)
+        rng = np.random.default_rng(0)
+        obs, rewards, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+        assert rewards.shape == (2,)
+        assert env.observation_space.contains(obs)
+    finally:
+        env.close()
+
+
+def test_make_rejects_the_ids_because_there_is_no_single_env():
+    """Registering only a vector entry point is deliberate: a batch of one is
+    not a single-agent env, and silently wrapping one would hide that."""
+    import rummi.env  # noqa: F401
+
+    with pytest.raises(gym.error.Error):
+        gym.make("Rummi-2p-v0")

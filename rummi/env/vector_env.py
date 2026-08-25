@@ -31,7 +31,7 @@ import numpy as np
 try:
     import gymnasium as gym
     from gymnasium import spaces
-    from gymnasium.vector import VectorEnv
+    from gymnasium.vector import AutoresetMode, VectorEnv
     from gymnasium.vector.utils import batch_space
 except ModuleNotFoundError as exc:  # pragma: no cover
     raise ModuleNotFoundError(
@@ -49,7 +49,10 @@ from rummi.render.driver import RenderMode, Renderer
 
 
 class RummiVectorEnv(VectorEnv):
-    metadata = {"render_modes": [m.value for m in RenderMode], "autoreset_mode": "next-step"}
+    metadata = {
+        "render_modes": [m.value for m in RenderMode],
+        "autoreset_mode": AutoresetMode.NEXT_STEP,
+    }
 
     def __init__(
         self,

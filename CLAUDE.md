@@ -71,6 +71,18 @@ better. This has already caused one false "the engine is broken" diagnosis.
   space exists to keep that out of `step`; CP-SAT solves it once per turn in
   `rummi/solver/`, never per step.
 
+## What belongs in a Gymnasium id
+
+`rummi/env/__init__.py` registers `Rummi-2p-v0`, `Rummi-3p-v0`, `Rummi-4p-v0`.
+The rule for adding another: **an id is for something that changes the
+observation or action space.** Seat count does, so it is in the id. Opponent
+choice does not, so it is a constructor argument -- crossing seats with the five
+bundled agents would be fifteen ids that differ in nothing a policy can see.
+
+Only `vector_entry_point` is registered. `gym.make` failing is the intended
+behaviour: there is no single-env implementation, and wrapping a batch of one
+would hide that.
+
 ## One way to write an agent
 
 `rummi/agents/` is it — there is no parallel "policies" concept any more, and the

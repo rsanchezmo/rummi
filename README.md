@@ -21,14 +21,20 @@ python -m rummi.bench.bench_backends --compile             # compare backends
 ```
 
 ```python
-from rummi.env.vector_env import RummiVectorEnv
+import gymnasium as gym
+import rummi.env                                    # registers the ids below
 
-env = RummiVectorEnv(num_envs=256, seed=0)          # Gymnasium VectorEnv
+env = gym.make_vec("Rummi-2p-v0", num_envs=256)     # or Rummi-3p-v0, Rummi-4p-v0
 obs, info = env.reset()
 obs, rewards, terminated, truncated, info = env.step(actions)
 # info["action_mask"] is (num_envs, 2400) and never all-zero
 # info["current_player"] says whose view obs is — one policy plays every seat
 ```
+
+Seat count is in the id because it changes the observation and action spaces.
+Only a vector entry point is registered, so `gym.make` fails by design: a batch
+of one is not a single-agent env. `RummiVectorEnv` is importable directly from
+`rummi.env.vector_env` when you want to pass a `cfg` of your own.
 
 One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
