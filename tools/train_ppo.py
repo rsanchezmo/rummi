@@ -420,7 +420,12 @@ def main() -> None:
     p.add_argument(
         "--head", default="flat", choices=["flat", "bilinear"],
         help="bilinear scores ASSIGN(kind, slot) and PICK(slot, pos) as dot products "
-             "of per-index representations; those blocks are 96% of the action space",
+             "of per-index representations; those blocks are 96%% of the action space",
+    )
+    p.add_argument(
+        "--factored", action="store_true",
+        help="normalise within each action family, so END_TURN competes against five "
+             "other families instead of against ASSIGN and PICK's 2,310 logits",
     )
     p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
@@ -466,27 +471,31 @@ def main() -> None:
     if args.init_from:
         checkpoint = torch.load(args.init_from, weights_only=False)
         # The whole architecture comes from the checkpoint, not the CLI: the two
-        # heads have different parameter tensors, so a `head` taken from a flag
-        # the resume did not repeat fails `load_state_dict` outright. Checkpoints
-        # that predate the head keys are flat, which is what the defaults give.
+        # heads have different parameter tensors and a factored policy carries a
+        # family head the flat one lacks, so anything taken from a flag the resume
+        # did not repeat fails `load_state_dict` outright. Checkpoints that predate
+        # these keys are flat and unfactored, which is what the defaults give.
         arch = Architecture(
             hidden=tuple(checkpoint["hidden"]),
             activation=checkpoint.get("activation", args.activation),
             head=checkpoint.get("head", args.head),
             head_dim=checkpoint.get("head_dim", Architecture().head_dim),
+            factored=checkpoint.get("factored", Architecture().factored),
         )
         net = TorchPolicy(cfg, arch, seed=args.seed)
         net.load_state_dict(checkpoint["state"])
         head = arch.head if arch.head == "flat" else f"{arch.head} d={arch.head_dim}"
         print(
             f"resumed from {args.init_from} "
-            f"(hidden={arch.hidden}, {arch.activation}, {head} head)"
+            f"(hidden={arch.hidden}, {arch.activation}, {head} head"
+            f"{', factored' if arch.factored else ''})"
         )
     else:
         arch = Architecture(
             hidden=tuple(int(w) for w in args.hidden.split(",")),
             activation=args.activation,
             head=args.head,
+            factored=args.factored,
         )
         net = TorchPolicy(cfg, arch, seed=args.seed)
     opt = torch.optim.Adam(net.parameters(), lr=hyper.lr, eps=1e-5)
@@ -716,6 +725,7 @@ def main() -> None:
                 "activation": arch.activation,
                 "head": arch.head,
                 "head_dim": arch.head_dim,
+                "factored": arch.factored,
                 "state": net.state_dict(),
             },
             args.out,
@@ -734,6 +744,7 @@ def main() -> None:
                     "hidden": list(arch.hidden),
                     "head": arch.head,
                     "head_dim": arch.head_dim,
+                    "factored": arch.factored,
                     "clone": args.clone,
                     "history": history,
                 },

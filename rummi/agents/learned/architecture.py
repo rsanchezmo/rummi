@@ -36,6 +36,19 @@ class Architecture:
     scores each pair as a dot product of a kind representation and a slot
     representation, so what it learns about one pair transfers to the others.
     """
+    factored: bool = False
+    """Normalise per action family instead of over all 2400 actions at once.
+
+    Flat, `END_TURN` is one logit against the 2,310 of `ASSIGN` and `PICK`, so a
+    uniform epsilon across those blocks outweighs it by 2,310x and trunk noise
+    off-distribution drowns the one action that commits a turn. Factored, the
+    policy picks a family and then an argument within it, so `END_TURN` competes
+    six ways and noise inside `ASSIGN` redistributes inside `ASSIGN`.
+
+    It reassembles to 2400 logits -- `log p(family) + log p(arg | family)` -- so a
+    global softmax over them is the factored distribution and nothing downstream
+    changes.
+    """
     head_dim: int = 16
     """Width of the `bilinear` head's per-index representations, and so the rank of
     the `(K, S)` score matrix it factors: it bounds how many independent ways a
@@ -51,12 +64,36 @@ class Architecture:
         return float(np.sqrt(2.0)) if self.activation == "relu" else 5.0 / 3.0
 
 
+def family_bounds(cfg: RummiConfig) -> tuple[int, ...]:
+    """The seven boundaries of the six action families, in `ActionKind` order.
+
+    Read off `cfg`'s own offsets rather than recomputing each block's width, so a
+    family cannot drift from the layout `rules.actions` encodes against.
+    """
+    return (
+        cfg.place_offset,
+        cfg.pick_offset,
+        cfg.dissolve_offset,
+        cfg.assign_offset,
+        cfg.end_turn_action,
+        cfg.draw_action,
+        cfg.n_actions,
+    )
+
+
+def family_sizes(cfg: RummiConfig) -> tuple[int, ...]:
+    """Width of each family's block. `END_TURN` and `DRAW` are singletons."""
+    return tuple(hi - lo for lo, hi in pairwise(family_bounds(cfg)))
+
+
 def param_names(arch: Architecture) -> list[str]:
     names = [f"{p}{i}" for i in range(len(arch.hidden)) for p in ("w", "b")]
     if arch.head == "bilinear":
         head = [f"{p}_{n}" for n in ("kind", "slot", "pos", "flat") for p in ("w", "b")]
     else:
         head = ["w_pi", "b_pi"]
+    if arch.factored:
+        head += ["w_fam", "b_fam"]
     return [*names, *head, "w_v", "b_v"]
 
 
@@ -98,6 +135,18 @@ def init_params(
     else:
         params["w_pi"] = _orthogonal(rng, last, cfg.n_actions, 0.01)
         params["b_pi"] = np.zeros(cfg.n_actions, dtype=np.float32)
+    if arch.factored:
+        params["w_fam"] = _orthogonal(rng, last, len(family_sizes(cfg)), 0.01)
+        # Zero, so the first family distribution is uniform over the families that
+        # hold a legal action and `p(END_TURN)` starts at ~1/5 against the flat
+        # head's 1/n_legal.
+        #
+        # Biasing by `log(width)` instead -- to start where the flat head starts --
+        # does the opposite: it hands `ASSIGN` mass for all 1855 of its ids when a
+        # handful are legal, measured p(END_TURN) 0.0018 against the flat head's
+        # 0.059 on `standard`. Only the *legal* width would be the right weight and
+        # that is state-dependent, so no bias can encode it.
+        params["b_fam"] = np.zeros(len(family_sizes(cfg)), dtype=np.float32)
     params["w_v"] = _orthogonal(rng, last, 1, 1.0)
     params["b_v"] = np.zeros(1, dtype=np.float32)
 

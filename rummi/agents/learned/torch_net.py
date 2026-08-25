@@ -7,12 +7,19 @@ dict as-is and only converts dtype.
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import numpy as np
 import torch
 from torch import nn
 
 from rummi.rules.config import RummiConfig
-from rummi.agents.learned.architecture import Architecture, init_params
+from rummi.agents.learned.architecture import (
+    Architecture,
+    family_bounds,
+    family_sizes,
+    init_params,
+)
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 
 MASKED = -1e8
@@ -61,6 +68,9 @@ class TorchPolicy(nn.Module):
         else:
             self.pi = nn.Linear(last, cfg.n_actions)
             _load(self.pi, params["w_pi"], params["b_pi"])
+        if self.arch.factored:
+            self.fam = nn.Linear(last, len(family_sizes(cfg)))
+            _load(self.fam, params["w_fam"], params["b_fam"])
         self.v = nn.Linear(self.arch.hidden[-1], 1)
         _load(self.v, params["w_v"], params["b_v"])
 
@@ -111,6 +121,27 @@ class TorchPolicy(nn.Module):
         assign = torch.einsum("bkd,bsd->bks", kind, slot).reshape(b, -1)
         return torch.cat([place, pick, dissolve, assign, tail], dim=-1)
 
+    def _factor(self, x: torch.Tensor, h: torch.Tensor, legal: torch.Tensor) -> torch.Tensor:
+        """`log p(family) + log p(arg | family)` over whichever head's raw logits.
+
+        The six blocks are statically-known slices, so this unrolls and reads no
+        device value -- gathering each family's legal actions instead would sync the
+        host on every step. `END_TURN` and `DRAW` are singletons, so their
+        within-family term is exactly 0 and their logit is the family logit alone,
+        which is the whole reason for factoring.
+        """
+        fam = self.fam(x)
+        gone, gone_fam = torch.full_like(h, MASKED), torch.full_like(fam, MASKED)
+        blocks = []
+        for f, (lo, hi) in enumerate(pairwise(family_bounds(self.cfg))):
+            legal_f = legal[:, lo:hi]
+            within = torch.log_softmax(torch.where(legal_f, h[:, lo:hi], gone[:, lo:hi]), dim=-1)
+            # A family with nothing legal must take no mass: its within-family term
+            # is finite garbage, and only the family logit holds it down.
+            fam_f = torch.where(legal_f.any(-1), fam[:, f], gone_fam[:, f])
+            blocks.append(within + fam_f.unsqueeze(-1))
+        return torch.cat(blocks, dim=-1)
+
     def head(self, x: torch.Tensor, mask: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """`(masked_logits, value)` from already-scaled features.
 
@@ -123,6 +154,8 @@ class TorchPolicy(nn.Module):
             x = self._act(layer(x))
         logits = self._logits(x)
         legal = torch.as_tensor(mask, dtype=torch.bool, device=logits.device)
+        if self.arch.factored:
+            logits = self._factor(x, logits, legal)
         return torch.where(legal, logits, torch.full_like(logits, MASKED)), self.v(x).squeeze(-1)
 
     def forward(

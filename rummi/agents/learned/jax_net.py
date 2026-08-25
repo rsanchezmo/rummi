@@ -12,13 +12,14 @@ than two initialisers that happen to look similar.
 from __future__ import annotations
 
 from functools import partial
+from itertools import pairwise
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.agents.learned.architecture import Architecture, init_params
+from rummi.agents.learned.architecture import Architecture, family_bounds, init_params
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 
 MASKED = -1e8
@@ -77,6 +78,33 @@ def _logits(cfg: RummiConfig, arch: Architecture, params: Params, x: jax.Array) 
     return jnp.concatenate([place, pick, dissolve, assign, tail], axis=-1)
 
 
+def _factored(
+    cfg: RummiConfig,
+    params: Params,
+    x: jax.Array,
+    logits: jax.Array,
+    legal: jax.Array,
+) -> jax.Array:
+    """`log p(family) + log p(arg | family)`, so a global softmax over the result
+    is the factored distribution and `sample`, `log_prob` and `entropy` are unchanged.
+
+    Applied to whatever logits the head produced, which is what makes `factored`
+    orthogonal to `head`. `END_TURN` and `DRAW` are singleton families, so their
+    within-family term is exactly 0 and their logit is the family logit alone --
+    that is the point, not a case to special-case.
+    """
+    fam = x @ params["w_fam"] + params["b_fam"]
+    blocks: list[jax.Array] = []
+    for f, (lo, hi) in enumerate(pairwise(family_bounds(cfg))):
+        m = legal[:, lo:hi]
+        within = jax.nn.log_softmax(jnp.where(m, logits[:, lo:hi], MASKED), axis=-1)
+        # A family with nothing legal must not receive mass: its within-family
+        # log_softmax normalises over an all-masked block and is finite garbage.
+        g = jnp.where(m.any(-1), fam[:, f], MASKED)
+        blocks.append(within + g[:, None])
+    return jnp.concatenate(blocks, axis=-1)
+
+
 @partial(jax.jit, static_argnums=(0, 1))
 def apply(
     cfg: RummiConfig,
@@ -95,9 +123,12 @@ def apply(
     x = features(cfg, obs)
     for i in range(len(arch.hidden)):
         x = act(x @ params[f"w{i}"] + params[f"b{i}"])
+    legal = mask.astype(bool)
     logits = _logits(cfg, arch, params, x)
+    if arch.factored:
+        logits = _factored(cfg, params, x, logits, legal)
     value = (x @ params["w_v"] + params["b_v"]).squeeze(-1)
-    return jnp.where(mask.astype(bool), logits, MASKED), value
+    return jnp.where(legal, logits, MASKED), value
 
 
 def sample(logits: jax.Array, key: jax.Array) -> jax.Array:
