@@ -63,11 +63,18 @@ class RummiVectorEnv(VectorEnv):
         render_fps: float | None = None,
         render_every: int = 1,
         validate_actions: bool = True,
+        action_mask: bool = True,
     ) -> None:
         super().__init__()
+        if validate_actions and not action_mask:
+            raise ValueError(
+                "validate_actions needs the mask it validates against; pass "
+                "validate_actions=False as well to assert your actions are legal"
+            )
         self.cfg = cfg
         self.num_envs = num_envs
         self.validate_actions = validate_actions
+        self.wants_mask = action_mask
 
         self.single_action_space = spaces.Discrete(cfg.n_actions)
         self.single_observation_space = observation_space(cfg)
@@ -86,7 +93,7 @@ class RummiVectorEnv(VectorEnv):
         self._base_seed = seed
         self._seeds = np.random.SeedSequence(seed)
         self.state = allocate(cfg, num_envs)
-        self._mask = np.zeros((num_envs, cfg.n_actions), dtype=bool)
+        self._mask: np.ndarray | None = np.zeros((num_envs, cfg.n_actions), dtype=bool)
         # Whether `_mask` describes the state as it stands. Only a re-deal (or a
         # not-yet-reset env) makes it stale, so a step never has to recompute the
         # mask its predecessor already produced.
@@ -103,7 +110,7 @@ class RummiVectorEnv(VectorEnv):
             self._seeds = np.random.SeedSequence(seed)
         self.state = deal_reset(self.cfg, self.num_envs, seed=self._base_seed)
         self._pending_reset[:] = False
-        self._mask = legal_actions(self.state)
+        self._mask = legal_actions(self.state) if self.wants_mask else None
         self._mask_fresh = True
         self._renderer.render(self.state, self._mask)
         return encode(self.state), self._info(np.zeros((self.num_envs, self.cfg.n_players), np.float32))
@@ -150,7 +157,7 @@ class RummiVectorEnv(VectorEnv):
         second :func:`legal_actions` per step -- 29% of the env's step time on the
         standard config, for a value already in hand.
         """
-        if not self._mask_fresh:
+        if self.wants_mask and not self._mask_fresh:
             self._mask = legal_actions(self.state)
             self._mask_fresh = True
         result = engine_step(
@@ -159,7 +166,8 @@ class RummiVectorEnv(VectorEnv):
             self._mask if self.validate_actions else None,
             active=active,
         )
-        self._mask = legal_actions(self.state)
+        if self.wants_mask:
+            self._mask = legal_actions(self.state)
         self._renderer.render(self.state, self._mask)
         return result
 
@@ -182,15 +190,28 @@ class RummiVectorEnv(VectorEnv):
 
     # --- extras --------------------------------------------------------------
     def _info(self, rewards_all: np.ndarray) -> dict[str, Any]:
-        return {
-            "action_mask": self._mask,
+        info: dict[str, Any] = {
             "current_player": self.state.current.copy(),
             "rewards_all": rewards_all,
             "micro_count": self.state.micro_count.copy(),
             "turn_count": self.state.turn_count.copy(),
             "winner": self.state.winner.copy(),
         }
+        if self.wants_mask:
+            info["action_mask"] = self._mask
+        return info
 
     @property
-    def action_mask(self) -> np.ndarray:
+    def action_mask(self) -> np.ndarray | None:
+        return self._mask
+
+    @property
+    def required_mask(self) -> np.ndarray:
+        """The mask, for the internals that cannot work without one.
+
+        `action_mask` is the public, nullable view; this is the one that says so
+        rather than failing later on a `None`.
+        """
+        if self._mask is None:
+            raise RuntimeError("this env was built with action_mask=False")
         return self._mask

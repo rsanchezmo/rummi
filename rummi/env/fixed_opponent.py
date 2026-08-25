@@ -45,6 +45,8 @@ class FixedOpponentEnv(RummiVectorEnv):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if not self.wants_mask:
+            raise ValueError("the opponents choose from the mask, so it cannot be turned off")
         if not 0 <= learner_seat < self.cfg.n_players:
             raise ValueError(
                 f"learner_seat {learner_seat} is not a seat in a "
@@ -116,7 +118,7 @@ class FixedOpponentEnv(RummiVectorEnv):
             waiting = ~self.state.done & (self.state.current != self.learner_seat)
             if not waiting.any():
                 return total
-            actions, illegal = act_by_seat(self._seats, self.state, self._mask)
+            actions, illegal = act_by_seat(self._seats, self.state, self.required_mask)
             self._illegal += illegal
             total += self._advance(actions, active=waiting).rewards
 

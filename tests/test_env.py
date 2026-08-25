@@ -262,3 +262,51 @@ def test_gymnasiums_own_conversion_wrapper_drives_the_env():
         assert isinstance(term, torch.Tensor)
     finally:
         env.close()
+
+
+def test_turning_the_mask_off_changes_speed_and_nothing_else():
+    """`action_mask=False` skips `legal_actions` entirely -- 2.8x on the standard
+    config -- so it must not change the trajectory it produces."""
+    rng = np.random.default_rng(0)
+    guide = RummiVectorEnv(num_envs=4, cfg=C, seed=5)
+    obs, info = guide.reset()
+    actions = []
+    for _ in range(200):
+        a = sample_legal(info["action_mask"], rng)
+        actions.append(a)
+        obs, r, term, trunc, info = guide.step(a)
+    guide.close()
+
+    quiet = RummiVectorEnv(num_envs=4, cfg=C, seed=5, action_mask=False, validate_actions=False)
+    replay = RummiVectorEnv(num_envs=4, cfg=C, seed=5)
+    q_obs, q_info = quiet.reset()
+    r_obs, r_info = replay.reset()
+    assert "action_mask" not in q_info
+    assert quiet.action_mask is None
+
+    for i, a in enumerate(actions):
+        q_obs, q_r, q_te, q_tr, q_info = quiet.step(a)
+        r_obs, r_r, r_te, r_tr, r_info = replay.step(a)
+        np.testing.assert_allclose(q_r, r_r, err_msg=f"reward differs at step {i}")
+        np.testing.assert_array_equal(q_te, r_te)
+        np.testing.assert_array_equal(q_tr, r_tr)
+        for name in r_obs:
+            np.testing.assert_array_equal(
+                q_obs[name], r_obs[name], err_msg=f"{name} differs at step {i}"
+            )
+    quiet.close()
+    replay.close()
+
+
+def test_dropping_the_mask_without_dropping_validation_is_refused():
+    with pytest.raises(ValueError, match="needs the mask it validates against"):
+        RummiVectorEnv(num_envs=2, cfg=C, action_mask=False)
+
+
+def test_the_fixed_opponent_env_needs_the_mask():
+    """Its opponents choose from it, so silently allowing this would give a
+    learner an opponent that draws every turn."""
+    from rummi.env.fixed_opponent import FixedOpponentEnv
+
+    with pytest.raises(ValueError, match="cannot be turned off"):
+        FixedOpponentEnv(num_envs=2, cfg=C, action_mask=False, validate_actions=False)

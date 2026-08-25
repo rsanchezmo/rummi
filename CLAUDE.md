@@ -115,6 +115,31 @@ terminal observation. Owning the autoreset boundary is the whole difference,
 which is why `step` is decomposed into `_check_actions` / `_autoreset` /
 `_advance` for it to recombine.
 
+## Why the mask, when DRAW is always legal
+
+A fair question, because the mask is the most expensive thing in a step: on the
+standard config `legal_actions` costs **2.8x** the rest of the env put together
+(42.3k env-steps/s with it, 117.5k without, same actions in both arms).
+
+It stays because **35 of 2400 actions are legal at a typical step -- 1.47%**. An
+agent choosing without the mask picks an illegal action ~98.5% of the time, and
+`DRAW` is not a benign fallback: per SPEC.md section 4 it *reverts the turn*,
+draws and passes. So "illegal falls back to DRAW" is an env where a learner
+reverts and passes almost every action, which is byte-identical to the
+random-play trap two sections down -- and it destroys a half-built turn rather
+than merely wasting a step. Worse for learning, the fallback teaches the policy
+`DRAW`'s value for every illegal action, so it can never learn that an action is
+illegal *now* and legal next turn.
+
+It is also why the benchmark **disqualifies** an illegal action instead of
+substituting one silently: a fallback with no cost is something to farm.
+
+`RummiVectorEnv(action_mask=False, validate_actions=False)` is there for the
+callers that genuinely do not need it -- a throughput benchmark, or an agent that
+plans a whole turn and only wants the mask once per turn. It is refused unless
+validation is dropped too, and `FixedOpponentEnv` refuses it outright, since its
+opponents choose from it.
+
 ## One way to write an agent
 
 `rummi/agents/` is it — there is no parallel "policies" concept any more, and the
