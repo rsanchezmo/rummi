@@ -13,7 +13,7 @@ readme = "README.md"
 dependencies = ["numpy>=1.24"]
 
 [project.optional-dependencies]
-env = ["gymnasium>=0.29"]
+env = ["gymnasium>=0.29", "array_api_compat>=1.9"]  # array_api_compat: Gymnasium's array-conversion wrappers
 render = ["pygame-ce>=2.4"]
 solver = ["ortools>=9.9"]
 docs = ["pillow>=10"]        # regenerating the README animation

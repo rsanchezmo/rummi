@@ -52,6 +52,11 @@ control back, so reward covers their replies rather than arriving on a step you
 could not act on. `opponent="optimal"` costs a CP-SAT solve per opponent turn per
 env and cannot batch — that one is for evaluation, not training.
 
+Want tensors instead of arrays? Use Gymnasium's own wrappers rather than a mode
+of this env — `gymnasium.wrappers.vector.NumpyToTorch`, and `JaxToTorch` /
+`JaxToNumpy` once a device backend is wired in. They convert through
+`from_dlpack`, so a same-device hand-off is a view, not a copy.
+
 One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
 single shared policy play self-play without learning two conventions.

@@ -99,6 +99,14 @@ Only `vector_entry_point` is registered. `gym.make` failing is the intended
 behaviour: there is no single-env implementation, and wrapping a batch of one
 would hide that.
 
+**Do not add a tensor-returning mode to this env.** Gymnasium already ships
+`wrappers.vector.NumpyToTorch`, `JaxToTorch` and `JaxToNumpy`, which convert
+through `from_dlpack` -- a same-device hand-off is a view, not a copy. Non-numpy
+vector envs are sanctioned; the pattern is that the env is native in its
+backend's array type and the official wrapper converts at the boundary. They are
+lazily imported behind `array_api_compat`, which is why they do not show up in
+`dir(gymnasium.wrappers)`.
+
 `FixedOpponentEnv` is a **subclass, not a wrapper**, and that is not a style
 choice. An opponent's whole turn must run inside one `step`, but the base env
 re-deals a finished episode on the *following* step -- driving it from outside

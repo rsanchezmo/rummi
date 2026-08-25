@@ -239,3 +239,26 @@ def test_the_reused_mask_always_matches_a_freshly_computed_one():
         resets_seen += int((term | trunc).sum())
     assert resets_seen, "no episode ended, so the re-deal path was never exercised"
     env.close()
+
+
+def test_gymnasiums_own_conversion_wrapper_drives_the_env():
+    """The sanctioned interop path, and the reason this env does not grow a
+    tensor-returning mode of its own: Gymnasium ships `NumpyToTorch`, `JaxToTorch`
+    and `JaxToNumpy` for exactly this, converting through `from_dlpack` so a
+    same-device hand-off is a view rather than a copy."""
+    pytest.importorskip("torch")
+    pytest.importorskip("array_api_compat")
+    import torch
+    from gymnasium.wrappers.vector import NumpyToTorch
+
+    env = NumpyToTorch(RummiVectorEnv(num_envs=4, cfg=C, seed=0))
+    try:
+        obs, info = env.reset()
+        assert isinstance(obs["rack"], torch.Tensor)
+        assert isinstance(info["action_mask"], torch.Tensor)
+        actions = torch.as_tensor(np.asarray(info["action_mask"]).argmax(-1))
+        obs, rewards, term, trunc, info = env.step(actions)
+        assert isinstance(rewards, torch.Tensor) and rewards.shape == (4,)
+        assert isinstance(term, torch.Tensor)
+    finally:
+        env.close()
