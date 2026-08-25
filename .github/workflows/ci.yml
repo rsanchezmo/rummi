@@ -35,7 +35,9 @@ jobs:
         # torch and jax are the other two implementations of the rules, so
         # conformance is only really checked when both are present.
         run: uv pip install -e '.[dev,env,render,solver,torch,jax]'
-      - run: uv run pytest -q
+      # `-n auto` because the suite is CPU-bound and independent: 80s serial,
+      # 19s across 16 cores locally. pytest-xdist was already a dev dependency.
+      - run: uv run pytest -q -n auto
 
   lint:
     name: lint and types
