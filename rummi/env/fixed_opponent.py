@@ -45,6 +45,11 @@ class FixedOpponentEnv(RummiVectorEnv):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if self.backend.name != "numpy":
+            raise ValueError(
+                "the opponents go through agents.base, which reads a NumPy "
+                f"BatchState, so the {self.backend.name} backend cannot drive them"
+            )
         if not self.wants_mask:
             raise ValueError("the opponents choose from the mask, so it cannot be turned off")
         if not 0 <= learner_seat < self.cfg.n_players:

@@ -52,6 +52,27 @@ control back, so reward covers their replies rather than arriving on a step you
 could not act on. `opponent="optimal"` costs a CP-SAT solve per opponent turn per
 env and cannot batch — that one is for evaluation, not training.
 
+The env runs on any of the three backends — `backend="numpy" | "torch" |
+"torch-mps" | "jax"` — and the observation comes back in that backend's own array
+type, so a device rollout never round-trips through the host:
+
+| backend | B=1024 | B=4096 | vs numpy |
+|---|---:|---:|---:|
+| `numpy` (reference) | 43k | 43k | 1.0x |
+| torch CPU | 26k | 37k | 0.9x |
+| torch MPS | 105k | 156k | 3.6x |
+| JAX CPU | 187k | 187k | 4.3x |
+
+`RummiVectorEnv.step`, so mask, transition, observation encoding and next-step
+autoreset are all in the figure — this is what a training loop gets, not what the
+simulator does in isolation. Constant `DRAW` actions in every arm, so it measures
+the env rather than the cost of sampling from a `(B, 2400)` mask. Data in
+`docs/data/env_throughput.json`; reproduce with
+`python -m rummi.bench.bench_env --json docs/data/env_throughput.json`.
+
+Rendering is NumPy-only (it reads a `BatchState`), so a device backend refuses a
+render mode at construction rather than failing on the first frame.
+
 Want tensors instead of arrays? Use Gymnasium's own wrappers rather than a mode
 of this env — `gymnasium.wrappers.vector.NumpyToTorch`, and `JaxToTorch` /
 `JaxToNumpy` once a device backend is wired in. They convert through

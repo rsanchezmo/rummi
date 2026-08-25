@@ -38,12 +38,8 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     ) from exc
 
 from rummi.rules.config import STANDARD, RummiConfig
-from rummi.env.numpy.deal import reset as deal_reset
-from rummi.env.numpy.deal import reset_envs
-from rummi.env.numpy.engine import step as engine_step
-from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.state import allocate
-from rummi.env.observation import encode, observation_space
+from rummi.env.api import get_backend
+from rummi.env.observation import observation_space
 from rummi.render.driver import RenderMode, Renderer
 
 
@@ -64,12 +60,19 @@ class RummiVectorEnv(VectorEnv):
         render_every: int = 1,
         validate_actions: bool = True,
         action_mask: bool = True,
+        backend: str = "numpy",
     ) -> None:
         super().__init__()
         if validate_actions and not action_mask:
             raise ValueError(
                 "validate_actions needs the mask it validates against; pass "
                 "validate_actions=False as well to assert your actions are legal"
+            )
+        self.backend = get_backend(backend)
+        if backend != "numpy" and RenderMode(render_mode) is not RenderMode.NONE:
+            raise ValueError(
+                f"rendering reads a NumPy BatchState, so it cannot draw the "
+                f"{self.backend.name} backend's state"
             )
         self.cfg = cfg
         self.num_envs = num_envs
@@ -91,8 +94,11 @@ class RummiVectorEnv(VectorEnv):
         )
 
         self._base_seed = seed
-        self._seeds = np.random.SeedSequence(seed)
-        self.state = allocate(cfg, num_envs)
+        # Re-deal seeds derive from (seed, step, env) rather than from a spawned
+        # SeedSequence: that is the scheme every backend shares, so an autoresetting
+        # run replays identically whichever one is driving it.
+        self._steps = 0
+        self.state = self.backend.reset(cfg, num_envs, seed=seed)
         self._mask: np.ndarray | None = np.zeros((num_envs, cfg.n_actions), dtype=bool)
         # Whether `_mask` describes the state as it stands. Only a re-deal (or a
         # not-yet-reset env) makes it stale, so a step never has to recompute the
@@ -107,13 +113,15 @@ class RummiVectorEnv(VectorEnv):
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if seed is not None:
             self._base_seed = seed
-            self._seeds = np.random.SeedSequence(seed)
-        self.state = deal_reset(self.cfg, self.num_envs, seed=self._base_seed)
+        self._steps = 0
+        self.state = self.backend.reset(self.cfg, self.num_envs, seed=self._base_seed)
         self._pending_reset[:] = False
-        self._mask = legal_actions(self.state) if self.wants_mask else None
+        self._mask = self.backend.legal_actions(self.cfg, self.state) if self.wants_mask else None
         self._mask_fresh = True
-        self._renderer.render(self.state, self._mask)
-        return encode(self.state), self._info(np.zeros((self.num_envs, self.cfg.n_players), np.float32))
+        self._render()
+        return self._encode(), self._info(
+            np.zeros((self.num_envs, self.cfg.n_players), np.float32)
+        )
 
     def step(self, actions):
         actions = self._check_actions(actions)
@@ -121,13 +129,15 @@ class RummiVectorEnv(VectorEnv):
         result = self._advance(actions, active=~just_reset)
 
         rewards_all = result.rewards
-        acting = (self.state.current - 1) % self.cfg.n_players
+        # NumPy, because it indexes the NumPy reward matrix: a device tensor here
+        # would drag `rewards_all` back through `__array__` and fail on MPS.
+        acting = (self.backend.to_numpy(self.state.current) - 1) % self.cfg.n_players
         rewards = rewards_all[np.arange(self.num_envs), acting]
 
         terminated = result.terminated.copy()
         truncated = result.truncated.copy()
         self._pending_reset = terminated | truncated
-        return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
+        return self._encode(), rewards, terminated, truncated, self._info(rewards_all)
 
     # --- pieces a subclass drives differently --------------------------------
     def _check_actions(self, actions) -> np.ndarray:
@@ -144,7 +154,9 @@ class RummiVectorEnv(VectorEnv):
         """
         just_reset = self._pending_reset.copy()
         if just_reset.any():
-            reset_envs(self.state, np.flatnonzero(just_reset), self._seeds.spawn(int(just_reset.sum())))
+            self.state = self.backend.reset_envs(
+                self.cfg, self.state, np.flatnonzero(just_reset), self._base_seed, self._steps
+            )
             self._pending_reset[:] = False
             self._mask_fresh = False
         return just_reset
@@ -158,18 +170,34 @@ class RummiVectorEnv(VectorEnv):
         standard config, for a value already in hand.
         """
         if self.wants_mask and not self._mask_fresh:
-            self._mask = legal_actions(self.state)
+            self._mask = self.backend.legal_actions(self.cfg, self.state)
             self._mask_fresh = True
-        result = engine_step(
+        self.state, result = self.backend.step(
+            self.cfg,
             self.state,
             actions,
             self._mask if self.validate_actions else None,
-            active=active,
+            active,
         )
+        self._steps += 1
         if self.wants_mask:
-            self._mask = legal_actions(self.state)
-        self._renderer.render(self.state, self._mask)
+            self._mask = self.backend.legal_actions(self.cfg, self.state)
+        self._render()
         return result
+
+    def _encode(self) -> dict[str, Any]:
+        """The observation in the backend's own array type.
+
+        Not converted: a device backend that copied its observation to the host
+        every step would give back the speedup it was chosen for. Gymnasium's
+        ``wrappers.vector`` conversions are the boundary -- see the note in
+        CLAUDE.md.
+        """
+        return self.backend.encode(self.cfg, self.state)
+
+    def _render(self) -> None:
+        if self.render_mode != RenderMode.NONE.value:
+            self._renderer.render(self.state, self._mask)
 
     def render(self):
         """Always draws, ignoring the throttle: an explicit call wants a frame.
@@ -190,12 +218,19 @@ class RummiVectorEnv(VectorEnv):
 
     # --- extras --------------------------------------------------------------
     def _info(self, rewards_all: np.ndarray) -> dict[str, Any]:
+        """Telemetry is NumPy whatever the backend is.
+
+        These are `(N,)` bookkeeping vectors a caller reads on the host anyway --
+        which seat is up, who won -- and copying them costs about 1% even on a
+        device backend. The observation is the field where staying native matters.
+        """
+        to_numpy = self.backend.to_numpy
         info: dict[str, Any] = {
-            "current_player": self.state.current.copy(),
+            "current_player": to_numpy(self.state.current).copy(),
             "rewards_all": rewards_all,
-            "micro_count": self.state.micro_count.copy(),
-            "turn_count": self.state.turn_count.copy(),
-            "winner": self.state.winner.copy(),
+            "micro_count": to_numpy(self.state.micro_count).copy(),
+            "turn_count": to_numpy(self.state.turn_count).copy(),
+            "winner": to_numpy(self.state.winner).copy(),
         }
         if self.wants_mask:
             info["action_mask"] = self._mask

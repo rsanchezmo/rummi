@@ -276,3 +276,39 @@ def test_the_observation_matches_the_reference_field_for_field(backend_name: str
     assert "table_sets" in nonzero_seen or "workbench" in nonzero_seen, (
         f"{config}: the trajectory never put a tile in play, so this proved little"
     )
+
+
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_active_opts_envs_out_of_a_step(backend_name: str):
+    """`active` is in the Backend protocol and no golden replay uses it, so until
+    the vector env grew a `backend=` argument nothing converted it -- a NumPy mask
+    reaching the torch sim raised on `state.done |= ...`.
+
+    Half the batch is held out and must be byte-identical to a batch that never
+    took the step at all.
+    """
+    backend = get_backend(backend_name)
+    cfg = TINY_GROUPS
+    n = 8
+    active = np.zeros(n, dtype=bool)
+    active[::2] = True
+
+    stepped = backend.reset(cfg, n, seed=7)
+    held = backend.reset(cfg, n, seed=7)
+    ref = np_reset(cfg, n, seed=7)
+
+    for _ in range(12):
+        mask = backend.legal_actions(cfg, stepped)
+        actions = backend.to_numpy(mask).argmax(-1)
+        stepped, _ = backend.step(cfg, stepped, actions, mask, active)
+        np_step(ref, actions, np_masks.legal_actions(ref), active)
+
+    assert backend.digest(stepped) == ref.digest(), f"{backend.name}: diverged under active"
+
+    # The held-out half never moved: same racks as a state that took no steps.
+    moved = backend.to_numpy(stepped.racks if hasattr(stepped, "racks") else stepped[0])
+    untouched = backend.to_numpy(held.racks if hasattr(held, "racks") else held[0])
+    np.testing.assert_array_equal(
+        moved[~active], untouched[~active],
+        err_msg=f"{backend.name}: an inactive env was stepped anyway",
+    )

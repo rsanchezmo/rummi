@@ -151,6 +151,10 @@ class TorchBackend:
 
         from rummi.env.torch import sim
 
+        # `active` needs converting as much as `actions` does: a NumPy mask reaching
+        # the torch sim makes `state.done |= ...` a byte-into-bool cast and raises.
+        if active is not None:
+            active = torch.as_tensor(np.asarray(active), device=self._dev(), dtype=torch.bool)
         out = sim.step(state, torch.as_tensor(np.asarray(actions), device=self._dev()), mask, active)
         return state, StepOut(
             self.to_numpy(out.rewards), self.to_numpy(out.terminated), self.to_numpy(out.truncated)
@@ -206,6 +210,8 @@ class JaxBackend:
         if mask is not None:
             live = ~np.asarray(state.done) if active is None else np.asarray(active)
             sim.check_actions(mask, jnp.asarray(np.asarray(actions)), live)
+        if active is not None:
+            active = jnp.asarray(np.asarray(active, dtype=bool))
         state, out = sim.step(cfg, state, jnp.asarray(np.asarray(actions)), active)
         return state, StepOut(
             self.to_numpy(out.rewards), self.to_numpy(out.terminated), self.to_numpy(out.truncated)

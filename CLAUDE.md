@@ -16,6 +16,7 @@ python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
 ruff check rummi tests tools && mypy rummi                # what CI's lint job runs
+python -m rummi.bench.bench_env                           # env throughput per backend
 ```
 
 `mypy rummi` is clean, but `pyproject.toml` exempts `rummi/render/pygame_view.py`
@@ -98,6 +99,17 @@ bundled agents would be fifteen ids that differ in nothing a policy can see.
 Only `vector_entry_point` is registered. `gym.make` failing is the intended
 behaviour: there is no single-env implementation, and wrapping a batch of one
 would hide that.
+
+`RummiVectorEnv(backend=...)` drives any of the three through `rummi/env/api.py`,
+and the observation stays in that backend's array type. Two things are host-side
+on purpose: the `info` telemetry (`current_player`, `winner` -- `(N,)` vectors a
+caller reads on the host anyway, ~1% even on MPS) and the `(N,)` done flags
+next-step autoreset needs. I measured the autoreset read at **+1.0%** on MPS at
+B=4096, so device-side autoreset would buy nothing; do not build it on a hunch.
+
+`FixedOpponentEnv` and rendering are NumPy-only and refuse other backends at
+construction -- the first because `agents.base` reads a `BatchState`, the second
+because the renderer does.
 
 **Do not add a tensor-returning mode to this env.** Gymnasium already ships
 `wrappers.vector.NumpyToTorch`, `JaxToTorch` and `JaxToNumpy`, which convert
