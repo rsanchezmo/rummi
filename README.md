@@ -54,29 +54,15 @@ env and cannot batch — that one is for evaluation, not training.
 
 The env runs on any of the three backends — `backend="numpy" | "torch" |
 "torch-mps" | "jax"` — and the observation comes back in that backend's own array
-type, so a device rollout never round-trips through the host:
+type, so a device rollout never round-trips through the host. That is worth about
+**4x** over NumPy; the numbers are under [Backends](#backends). Rendering reads a
+`BatchState`, so a device backend refuses a render mode at construction rather
+than failing on the first frame.
 
-| backend | B=1024 | B=4096 | vs numpy |
-|---|---:|---:|---:|
-| `numpy` (reference) | 43k | 43k | 1.0x |
-| torch CPU | 26k | 37k | 0.9x |
-| torch MPS | 105k | 156k | 3.6x |
-| JAX CPU | 187k | 187k | 4.3x |
-
-`RummiVectorEnv.step`, so mask, transition, observation encoding and next-step
-autoreset are all in the figure — this is what a training loop gets, not what the
-simulator does in isolation. Constant `DRAW` actions in every arm, so it measures
-the env rather than the cost of sampling from a `(B, 2400)` mask. Data in
-`docs/data/env_throughput.json`; reproduce with
-`python -m rummi.bench.bench_env --json docs/data/env_throughput.json`.
-
-Rendering is NumPy-only (it reads a `BatchState`), so a device backend refuses a
-render mode at construction rather than failing on the first frame.
-
-Want tensors instead of arrays? Use Gymnasium's own wrappers rather than a mode
-of this env — `gymnasium.wrappers.vector.NumpyToTorch`, and `JaxToTorch` /
-`JaxToNumpy` once a device backend is wired in. They convert through
-`from_dlpack`, so a same-device hand-off is a view, not a copy.
+Want tensors instead of arrays? Use Gymnasium's own wrappers rather than a mode of
+this env — `gymnasium.wrappers.vector.NumpyToTorch` over the NumPy backend, or
+`JaxToTorch` / `JaxToNumpy` over the JAX one. They convert through `from_dlpack`,
+so a same-device hand-off is a view, not a copy.
 
 One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
@@ -245,6 +231,12 @@ against a shared abstraction, so a comparison measures implementations and not
 the cost of a common layer. `rummi.env.api` reconciles them at the boundary,
 so they are swappable by name.
 
+There are **two** throughput figures below and they are not interchangeable. The
+simulator one is the fair comparison *between implementations*; the env one is
+what a training loop actually gets. Same units, different work.
+
+### The simulator: transition and mask only
+
 ![Simulator throughput by backend and batch size](docs/charts/throughput.svg)
 
 | backend | peak env-steps/s | vs NumPy | at batch |
@@ -256,9 +248,9 @@ so they are swappable by name.
 | torch MPS + `compile` | **349k** | **5.2x** | 1,024 |
 | JAX (`lax.scan`) | 223k | 3.3x | 4,096 |
 
-Standard config, best of three, with the action choice held to the cheapest
-possible so the figure measures the environment and not a policy. Numbers from
-`docs/data/backends.json`; regenerate with
+Standard config, best of three, peak over batch sizes up to 16,384, with the
+action choice held to the cheapest possible so the figure measures the *simulator*
+and not a policy. Numbers from `docs/data/backends.json`; regenerate with
 `python -m rummi.bench.bench_backends --compile --json docs/data/backends.json`.
 
 Read the shape of the curves rather than the top row:
@@ -279,6 +271,29 @@ Read the shape of the curves rather than the top row:
 
 JAX here is CPU-only; it has no production Metal backend, so it cannot be
 compared against MPS on equal hardware. On a CUDA box, re-measure.
+
+### The env: what a training loop gets
+
+| backend | B=1024 | B=4096 | vs NumPy |
+|---|---:|---:|---:|
+| NumPy (reference) | 43k | 43k | 1.0x |
+| torch CPU | 26k | 37k | 0.9x |
+| torch MPS | 105k | 156k | 3.6x |
+| JAX CPU | **187k** | **187k** | **4.3x** |
+
+`RummiVectorEnv.step`, so the mask, the transition, the observation encoding *and*
+next-step autoreset are all inside the figure. Constant `DRAW` actions in every
+arm, so it measures the env rather than the cost of sampling from a `(B, 2400)`
+mask — that sampling is a real cost for a policy, just not the env's. Data in
+`docs/data/env_throughput.json`; regenerate with
+`python -m rummi.bench.bench_env --json docs/data/env_throughput.json`.
+
+**Why the env numbers are lower than the simulator's**, since the tables invite
+the comparison: the env also encodes an observation every step, it is measured at
+batch 4,096 rather than at each backend's best batch, and **it does not
+`torch.compile` anything** — the simulator's 349k is a `compile`d figure and the
+env has no equivalent yet. Compiling the env's step is the obvious next gain, not
+a discrepancy.
 
 Conformance is not assumed. Every backend replays recorded trajectories and must
 reproduce 42 state digests per config, and masks and rewards are compared against
