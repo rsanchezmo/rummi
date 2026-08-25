@@ -14,6 +14,31 @@ the mask is stored in the rollout and reapplied at update time -- scoring an
 action under a policy that has forgotten which actions were available gives a
 meaningless ratio.
 
+*`WIN_LOSS` carries no signal for a losing agent.* Measured: a cloned policy loses
+essentially every game on `standard`, so its terminal reward is **exactly -1.0
+every episode, standard deviation 0.0000**. A constant reward distinguishes no
+action from any other, and PPO then normalises advantages by their standard
+deviation -- dividing no signal by no spread and amplifying critic noise to unit
+variance. That is why PPO degraded a cloned policy no matter what was frozen or
+anchored. `--reward-mode score_normalized` grades the loss instead ("lost by less"
+against "lost by more", std 0.22), which is the difference between a gradient and
+noise. Scores are always reported on the unshaped, `WIN_LOSS` suite.
+
+*`--rack-shaping` is the dense signal the config's own shaping terms cannot give.*
+`tiles_placed_bonus` and `rack_value_delta` both pay at `END_TURN`, which is masked
+until the opening meld is met, so before the first meld they are unreachable --
+measured, turning them on changed a run's numbers not at all. Rack size moves
+*immediately*: `PLACE` takes a tile from the rack to the workbench, so 14 becomes
+13 within one action.
+
+Applied as a **potential**, `Phi = -rack_size`, with
+`F = gamma * Phi(s') - Phi(s)`. That form is policy-invariant (Ng, Harada &
+Russell 1999): it adds signal without moving the optimum, which arbitrary bonuses
+do not. It also self-corrects -- `DRAW` reverts the turn and hands the tiles back,
+and the potential takes the reward back with them. Computed here rather than in
+the env, so `SPEC.md` and the three backends are untouched and every reported score
+still comes from the unshaped suite.
+
 *Episodes are long and reward is terminal.* ~120 turns of ~2.7 micro-actions, and
 `WIN_LOSS` pays only at the end. `--shaping` turns on the per-step terms from
 SPEC.md section 7 to densify that; it makes the run incomparable to a published
@@ -42,7 +67,7 @@ import time
 
 import numpy as np
 
-from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -206,6 +231,16 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--shaping", action="store_true", help="turn on the per-step reward terms")
     p.add_argument(
+        "--rack-shaping", type=float, default=0.0,
+        help="potential-based reward on shrinking the rack; 0.1 is a reasonable start",
+    )
+    p.add_argument(
+        "--reward-mode", default="win_loss",
+        choices=[m.value for m in RewardMode],
+        help="score_normalized grades a loss; win_loss is a constant -1 for an "
+             "agent that loses every game, which carries no gradient at all",
+    )
+    p.add_argument(
         "--clone", default=None, choices=["greedy", "rearrange", "optimal"],
         help="clone this agent before PPO. Required on standard -- see the docstring.",
     )
@@ -247,7 +282,9 @@ def main() -> None:
         envs=args.envs, horizon=args.horizon, lr=args.lr,
         entropy_coef=args.entropy_coef, kl_coef=args.kl_coef,
     )
-    base = CONFIG_BY_NAME[args.config]
+    base = dataclasses.replace(
+        CONFIG_BY_NAME[args.config], reward_mode=RewardMode(args.reward_mode)
+    )
     cfg = shaped(base) if args.shaping else base
 
     torch.manual_seed(args.seed)
@@ -276,7 +313,8 @@ def main() -> None:
     n_actions = cfg.n_actions
 
     print(
-        f"config={args.config} opponent={args.opponent} shaping={args.shaping} "
+        f"config={args.config} opponent={args.opponent} reward={args.reward_mode} "
+        f"shaping={args.shaping} rack_shaping={args.rack_shaping} "
         f"envs={hyper.envs} horizon={hyper.horizon} params="
         f"{sum(v.numel() for v in net.parameters()):,}"
     )
@@ -342,8 +380,19 @@ def main() -> None:
                 b_obs[k][t] = v.to(b_obs[k].dtype)
             b_mask[t], b_act[t], b_logp[t], b_val[t] = mask_t, action, logp, value
 
+            rack_before = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
             obs, reward, term, trunc, info = env.step(action.numpy())
-            b_rew[t] = torch.as_tensor(np.asarray(reward, dtype=np.float32))
+            reward = np.asarray(reward, dtype=np.float32)
+
+            if args.rack_shaping:
+                rack_after = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
+                potential = rack_before - hyper.gamma * rack_after
+                # Zero across an episode boundary: `obs` is then a fresh deal with a
+                # full rack, which would read as a huge loss of progress.
+                finished_now = term | trunc
+                reward = reward + args.rack_shaping * np.where(finished_now, 0.0, potential)
+
+            b_rew[t] = torch.as_tensor(reward)
             b_done[t] = torch.as_tensor((term | trunc).astype(np.float32))
             finished = term | trunc
             if finished.any():
