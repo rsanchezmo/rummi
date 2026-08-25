@@ -18,7 +18,7 @@ from rummi.evaluate.protocol import (
     Suite,
     evaluate,
 )
-from rummi.rules.config import TINY_GROUPS
+from rummi.rules.config import STANDARD_3P, STANDARD_4P, TINY_GROUPS
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.engine import step
@@ -36,14 +36,27 @@ def test_every_reference_agent_satisfies_the_protocol():
 
 @pytest.mark.parametrize("name", ["greedy", "weighted-random"])
 def test_an_agent_against_itself_scores_exactly_even(name: str):
-    """The fairness guarantee. Mirrored matches must cancel the first-player
-    advantage *and* the luck of the deal, so a self-match is 50% exactly -- not
-    50% within noise."""
+    """The fairness guarantee. Seat rotation must cancel the turn-order advantage
+    *and* the luck of the deal, so a self-match is 50% exactly -- not 50% within
+    noise."""
     suite = Suite(TINY.name, TINY.cfg, opponent=name, games=40, seed_base=TINY.seed_base)
     result = evaluate(name, suite)
     assert result.win_rate == pytest.approx(0.5)
     assert result.mean_score == pytest.approx(0.0)
     assert result.wins + result.losses == result.games
+
+
+@pytest.mark.parametrize("cfg,seats", [(STANDARD_3P, 3), (STANDARD_4P, 4)])
+def test_a_self_match_is_exactly_one_over_the_seat_count(cfg, seats: int):
+    """The same guarantee past two seats, which is the whole reason rotation
+    replaced the swap. Exact, not approximate: with one policy in every seat the
+    game is identical whichever seat is under test, so the agent wins exactly one
+    of the `seats` rotations and the payouts cancel to zero."""
+    suite = Suite(f"self-{seats}p", cfg, opponent="greedy", games=6, seed_base=1_000)
+    result = evaluate("greedy", suite)
+    assert result.win_rate == pytest.approx(1 / seats)
+    assert result.mean_score == pytest.approx(0.0)
+    assert result.games == suite.total_games
 
 
 def test_baselines_rank_in_the_expected_order():
@@ -151,7 +164,7 @@ def test_a_passive_agent_is_legal_but_loses():
 def test_the_protocol_is_frozen():
     """A guard, not a formality: editing a suite silently invalidates every score
     published against this version."""
-    assert PROTOCOL_VERSION == "1.0"
+    assert PROTOCOL_VERSION == "2.0"
     fingerprint = [
         (s.name, s.cfg.n_players, s.opponent, s.games, s.seed_base) for s in SUITES
     ]
@@ -159,7 +172,19 @@ def test_the_protocol_is_frozen():
         ("tiny", 2, "greedy", 100, 1_000),
         ("standard-greedy", 2, "greedy", 200, 2_000),
         ("standard-optimal", 2, "optimal", 100, 3_000),
+        ("standard-3p", 3, "greedy", 70, 4_000),
+        ("standard-4p", 4, "greedy", 55, 5_000),
     ]
+
+
+def test_every_registered_env_has_a_suite():
+    """The reason 2.0 exists: an id you can train on and cannot score against is
+    a dead end for a submission."""
+    from rummi.env import ENV_CONFIGS
+
+    scored = {s.cfg.n_players for s in SUITES}
+    for env_id, cfg in ENV_CONFIGS.items():
+        assert cfg.n_players in scored, f"{env_id} has no suite at {cfg.n_players} seats"
 
 
 def test_the_observation_is_sufficient_to_play():

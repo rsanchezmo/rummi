@@ -81,18 +81,18 @@ to anything that does not search.
 ## The opponents
 
 Three strengths, all playable out of the box and all usable as opponents in your
-own training loop. Scored here on the `standard-greedy` suite over 120 mirrored
+own training loop. Scored here on the `standard-greedy` suite over 120
 games; `score` is official Rummikub scoring from the agent's side.
 
 ![Agent win rate and stalemate rate, weakest to strongest](docs/charts/agents.svg)
 
 | agent | win rate | score | turns | rack left | stalemates |
 |---|---:|---:|---:|---:|---:|
-| `random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
-| `weighted-random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
-| `greedy` | 50.0% | +0.0 | 124.7 | 47.5 | 98.3% |
-| `rearrange` | 85.0% | +31.9 | 129.3 | 24.6 | 80.0% |
-| `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0% |
+| `random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
+| `weighted-random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
+| `greedy` | 50.0% | +0.0 | 124.7 | 48.2 | 98.3% |
+| `rearrange` | 85.0% | +31.9 | 129.3 | 21.7 | 80.0% |
+| `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0.0% |
 
 **Read the random row as a warning, not a floor.** On the standard config random
 play is *byte-identical to passing every turn* — same scores, same turn counts. It
@@ -148,6 +148,25 @@ that bookkeeping for free. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest. Pr
 rather than costing reward: the mask exactly describes what the rules permit, so
 an illegal action is a bug, not a strategy.
 
+### Every registered env has a score
+
+`Rummi-3p-v0` and `Rummi-4p-v0` are scored too, on the `standard-3p` (165 games)
+and `standard-4p` (220 games) suites, so an agent trained at any seat count has a
+baseline to beat.
+
+| agent | win 2p | win 3p | win 4p | score 2p | score 3p | score 4p |
+|---|---:|---:|---:|---:|---:|---:|
+| `greedy` | 50.0% | 33.3% | 25.0% | +0.0 | +0.0 | +0.0 |
+| `rearrange` | 85.0% | 64.8% | 54.1% | +31.9 | +49.9 | +60.1 |
+| `optimal` | 100.0% | 100.0% | 99.5% | +44.6 | +94.0 | +139.4 |
+
+Two things the seat count does to the ladder. `greedy` lands on exactly
+`1 / n_players` in every column — it is each suite's own opponent, and that the
+number is *exact* rather than close is the rotation check working, not a
+coincidence. And `optimal` stops being perfect at four seats: with three
+opponents taking turns between yours, playing every turn perfectly is no longer
+quite enough, which finally makes the top rung something a submission can aim at.
+
 ## Scoring yourself
 
 `rummi.evaluate` plays your agent against the bundled ones under a frozen,
@@ -165,8 +184,8 @@ minute per hundred games — fine for a score, too slow to iterate against. Use
 `tiny` while developing.
 
 Every deal is played **twice, with the seats swapped**. That cancels both the
-first-player advantage and the luck of the deal, so an agent mirrored against
-itself scores exactly 50.0% and +0.0 — not 50% within error bars. Each game's
+turn-order advantage and the luck of the deal, so an agent mirrored against
+itself scores exactly `1 / n_players` and +0.0 — not that within error bars. Each game's
 seed is derived from its index alone, so batching cannot change which deals run.
 
 ## How a turn is expressed

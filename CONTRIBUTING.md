@@ -60,8 +60,8 @@ revisited.
 `rummi/evaluate/protocol.py` is frozen and versioned. Editing a suite invalidates
 every score published against the current `PROTOCOL_VERSION`, so bump it.
 
-The mirroring is self-checking: an agent played against itself must score
-*exactly* 50.0% and +0.0. If that stops being exact, the mirroring is broken, not
+The rotation is self-checking: an agent played against itself must score
+*exactly* `1 / n_players` and +0.0. If that stops being exact, it is broken, not
 noisy.
 
 ## Testing

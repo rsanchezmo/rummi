@@ -1,0 +1,58 @@
+{
+  "protocol": "2.0",
+  "suite": "standard-4p",
+  "opponent": "greedy",
+  "games": 220,
+  "agents": [
+    {
+      "name": "random",
+      "win_rate": 0.0,
+      "mean_score": -230.7,
+      "mean_turns": 71.34545454545454,
+      "mean_final_rack": 230.7,
+      "stalemate_rate": 1.0,
+      "games": 220,
+      "disqualified": false
+    },
+    {
+      "name": "weighted-random",
+      "win_rate": 0.0,
+      "mean_score": -230.7,
+      "mean_turns": 71.34545454545454,
+      "mean_final_rack": 230.7,
+      "stalemate_rate": 1.0,
+      "games": 220,
+      "disqualified": false
+    },
+    {
+      "name": "greedy",
+      "win_rate": 0.25,
+      "mean_score": 0.0,
+      "mean_turns": 89.0,
+      "mean_final_rack": 50.03181818181818,
+      "stalemate_rate": 0.9818181818181818,
+      "games": 220,
+      "disqualified": false
+    },
+    {
+      "name": "rearrange",
+      "win_rate": 0.5409090909090909,
+      "mean_score": 60.06818181818182,
+      "mean_turns": 92.80454545454545,
+      "mean_final_rack": 27.613636363636363,
+      "stalemate_rate": 0.9318181818181818,
+      "games": 220,
+      "disqualified": false
+    },
+    {
+      "name": "optimal",
+      "win_rate": 0.9954545454545455,
+      "mean_score": 139.4318181818182,
+      "mean_turns": 39.622727272727275,
+      "mean_final_rack": 0.05454545454545454,
+      "stalemate_rate": 0.004545454545454545,
+      "games": 220,
+      "disqualified": false
+    }
+  ]
+}

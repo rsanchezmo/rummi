@@ -144,12 +144,30 @@ nothing.
 ## Evaluation protocol is frozen
 
 `rummi/evaluate/protocol.py` pins configs, opponents, game counts and per-game
-seeds. Every deal is played twice with seats swapped, which is why an agent
-mirrored against itself scores *exactly* 50.0% and +0.0 — if that stops being
-exact, the mirroring is broken, not noisy.
+seeds. Every deal is played once per seat, the agent under test rotating through
+all of them, which is why an agent mirrored against itself scores *exactly*
+`1 / n_players` and +0.0 — if that stops being exact, the rotation is broken, not
+noisy. At two seats this is the old swap; past two it is the only thing that
+cancels turn order.
+
+There is one suite per registered Gymnasium id, which is the point of `2.0`: an
+id you can train on but not score against is a dead end for a submission.
 
 Editing a suite invalidates every score published against `PROTOCOL_VERSION`.
-Bump the version if you must change one.
+Bump the version if you must change one -- and then **re-capture**, or the
+committed numbers claim a protocol they were not produced under
+(`test_every_published_capture_names_the_current_protocol` catches that):
+
+```bash
+python tools/capture_agents.py --suite standard-greedy --games 60 --out docs/data/agents.json
+python tools/capture_agents.py --suite standard-3p --games 55 --out docs/data/agents-standard-3p.json
+python tools/capture_agents.py --suite standard-4p --games 55 --out docs/data/agents-standard-4p.json
+python tools/render_charts.py
+```
+
+`docs/charts/agents.svg` plots win and stalemate rate only, so a change to
+`mean_final_rack` alone leaves it byte-identical -- the figure not moving is not
+evidence the data did not.
 
 ## The render stack
 
