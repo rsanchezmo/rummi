@@ -100,6 +100,157 @@ def shaped(cfg: RummiConfig) -> RummiConfig:
     return dataclasses.replace(cfg, tiles_placed_bonus=0.01, rack_value_delta=0.002)
 
 
+def _returns(rewards: list[np.ndarray], dones: list[np.ndarray], gamma: float) -> np.ndarray:
+    """Discounted returns along each env's own timeline, bootstrapped at zero."""
+    reward_grid, done_grid = np.stack(rewards), np.stack(dones)
+    out = np.zeros_like(reward_grid)
+    running = np.zeros(reward_grid.shape[1], dtype=np.float32)
+    for t in reversed(range(len(reward_grid))):
+        running = reward_grid[t] + gamma * running * (1.0 - done_grid[t])
+        out[t] = running
+    return out.reshape(-1)
+
+
+def collect(net, env, cfg: RummiConfig, teacher, samples: int, beta: float, gamma: float):
+    """States, teacher labels, and returns. `beta` is the chance the *teacher*
+    drives; the student drives the rest.
+
+    `beta=1.0` is plain behaviour cloning -- every state is one the teacher
+    reached. Below 1 the student steers, which is the entire point of DAgger: the
+    teacher's label is only useful where the student actually goes, and by
+    construction cloning never collects there.
+
+    Masks are bit-packed. At 2400 actions a stored mask is 2400 bools, and an
+    aggregate across rounds runs to hundreds of megabytes of them; packed it is
+    300 bytes.
+    """
+    import torch
+
+    from rummi.agents.base import act_on_state
+
+    rng = np.random.default_rng(0)
+    obs, info = env.reset()
+    feats, packed, acts, rewards, dones = [], [], [], [], []
+    agree = seen = 0
+    gathered = 0
+
+    while gathered < samples:
+        mask = np.asarray(info["action_mask"])
+        wanted = np.asarray(act_on_state(teacher, env.state, mask))
+        obs_t = {k: torch.as_tensor(np.asarray(v)) for k, v in obs.items()}
+        with torch.no_grad():
+            x = net.features(obs_t)
+            logits, _ = net.head(x, torch.as_tensor(mask))
+            mine = logits.argmax(-1).numpy()
+
+        feats.append(x)
+        packed.append(np.packbits(mask, axis=-1))
+        acts.append(wanted.copy())
+        agree += int((mine == wanted).sum())
+        seen += len(wanted)
+
+        # Whoever drives, the label is always the teacher's action.
+        driven = np.where(rng.random(len(wanted)) < beta, wanted, mine)
+        gathered += len(wanted)
+        obs, reward, term, trunc, info = env.step(driven)
+        rewards.append(np.asarray(reward, dtype=np.float32).copy())
+        dones.append((term | trunc).astype(np.float32))
+
+    return {
+        "x": torch.cat(feats),
+        "mask": np.concatenate(packed),
+        "y": torch.as_tensor(np.concatenate(acts)).long(),
+        "g": torch.as_tensor(_returns(rewards, dones, gamma)),
+        "agreement": agree / seen,
+    }
+
+
+def fit(net, data: dict, epochs: int, lr: float, seed: int, n_actions: int, label: str) -> None:
+    """Cross-entropy on the masked logits, plus the value regression."""
+    import torch
+
+    from rummi.agents.learned.torch_net import log_prob
+
+    x, y, g, packed = data["x"], data["y"], data["g"], data["mask"]
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    generator = torch.Generator().manual_seed(seed)
+    batch = 4096
+
+    for epoch in range(1, epochs + 1):
+        order = torch.randperm(len(y), generator=generator)
+        nll = vloss = agree = 0.0
+        for start in range(0, len(y), batch):
+            idx = order[start : start + batch]
+            mask_b = torch.as_tensor(
+                np.unpackbits(packed[idx.numpy()], axis=-1, count=n_actions).astype(bool)
+            )
+            logits, value = net.head(x[idx], mask_b)
+            policy_nll = -log_prob(logits, y[idx]).mean()
+            value_mse = 0.5 * (value - g[idx]).pow(2).mean()
+            loss = policy_nll + 0.5 * value_mse
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+            opt.step()
+            with torch.no_grad():
+                nll += policy_nll.detach().item() * len(idx)
+                vloss += value_mse.detach().item() * len(idx)
+                agree += (logits.argmax(-1) == y[idx]).sum().item()
+        if epoch % max(1, epochs // 6) == 0 or epoch == 1:
+            print(
+                f"    {label} epoch {epoch:>3}/{epochs}  nll {nll / len(y):>7.4f}  "
+                f"v {vloss / len(y):>7.4f}  fit {agree / len(y):>6.1%}",
+                flush=True,
+            )
+
+
+def dagger(
+    net, env, cfg: RummiConfig, teacher_name: str, rounds: int, states: int,
+    epochs: int, lr: float, seed: int, gamma: float,
+) -> None:
+    """Dataset Aggregation. Round 0 at `beta=1` is exactly behaviour cloning.
+
+    The number to watch is `on-policy`: the student's agreement with the teacher on
+    states the *student* reached. Cloning alone measured 79.0% on the teacher's
+    states and **5.7%** on its own -- that gap is the whole failure, and closing it
+    is the only thing this is for.
+
+    The dataset **aggregates** rather than resetting. Training only on the newest
+    round would fix the states the student just visited and forget the ones it used
+    to handle, which oscillates instead of converging.
+    """
+    import torch
+
+    from rummi.agents import build
+
+    teacher = build(teacher_name, cfg)
+    teacher.reset(env.num_envs)
+    pool: dict | None = None
+
+    for r in range(rounds):
+        # beta 1 -> 0 across the rounds: pure teacher first, pure student last.
+        beta = 1.0 if rounds == 1 else max(0.0, 1.0 - r / (rounds - 1))
+        fresh = collect(net, env, cfg, teacher, states, beta, gamma)
+        print(
+            f"  round {r}  beta {beta:.2f}  {len(fresh['y']):,} states  "
+            f"on-policy agreement {fresh['agreement']:>6.1%}",
+            flush=True,
+        )
+        if pool is None:
+            pool = fresh
+        else:
+            pool = {
+                "x": torch.cat([pool["x"], fresh["x"]]),
+                "mask": np.concatenate([pool["mask"], fresh["mask"]]),
+                "y": torch.cat([pool["y"], fresh["y"]]),
+                "g": torch.cat([pool["g"], fresh["g"]]),
+                "agreement": fresh["agreement"],
+            }
+        fit(net, pool, epochs, lr, seed + r, cfg.n_actions, f"round {r}")
+
+    env.reset()
+
+
 def clone_expert(
     net,
     env,
@@ -246,6 +397,11 @@ def main() -> None:
         help="clone this agent before PPO. Required on standard -- see the docstring.",
     )
     p.add_argument("--clone-states", type=int, default=50_000)
+    p.add_argument(
+        "--dagger-rounds", type=int, default=0,
+        help="DAgger instead of one-shot cloning: roll out with the student, label "
+             "with the teacher, aggregate, retrain. Round 0 is plain cloning.",
+    )
     p.add_argument("--clone-epochs", type=int, default=20)
     p.add_argument(
         "--hidden", default="256,256",
@@ -323,7 +479,17 @@ def main() -> None:
         f"envs={hyper.envs} horizon={hyper.horizon} params="
         f"{sum(v.numel() for v in net.parameters()):,}"
     )
-    if args.clone:
+    if args.clone and args.dagger_rounds:
+        print(
+            f"DAgger on {args.clone}: {args.dagger_rounds} rounds x "
+            f"{args.clone_states:,} states, {args.clone_epochs} epochs each"
+        )
+        dagger(
+            net, env, cfg, args.clone, args.dagger_rounds, args.clone_states,
+            args.clone_epochs, hyper.lr, args.seed, hyper.gamma,
+        )
+        obs, info = env.reset()
+    elif args.clone:
         print(
             f"cloning {args.clone}: {args.clone_states:,} states, "
             f"{args.clone_epochs} epochs"
