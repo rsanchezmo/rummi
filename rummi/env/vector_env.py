@@ -29,9 +29,8 @@ from typing import Any
 import numpy as np
 
 try:
-    import gymnasium as gym
     from gymnasium import spaces
-    from gymnasium.vector import VectorEnv
+    from gymnasium.vector import AutoresetMode, VectorEnv
     from gymnasium.vector.utils import batch_space
 except ModuleNotFoundError as exc:  # pragma: no cover
     raise ModuleNotFoundError(
@@ -39,17 +38,16 @@ except ModuleNotFoundError as exc:  # pragma: no cover
     ) from exc
 
 from rummi.rules.config import STANDARD, RummiConfig
-from rummi.env.numpy.deal import reset as deal_reset
-from rummi.env.numpy.deal import reset_envs
-from rummi.env.numpy.engine import step as engine_step
-from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.state import allocate
-from rummi.env.observation import encode, observation_space
+from rummi.env.api import get_backend
+from rummi.env.observation import observation_space
 from rummi.render.driver import RenderMode, Renderer
 
 
 class RummiVectorEnv(VectorEnv):
-    metadata = {"render_modes": [m.value for m in RenderMode], "autoreset_mode": "next-step"}
+    metadata = {  # noqa: RUF012 -- VectorEnv declares this as an instance variable
+        "render_modes": [m.value for m in RenderMode],
+        "autoreset_mode": AutoresetMode.NEXT_STEP,
+    }
 
     def __init__(
         self,
@@ -61,11 +59,25 @@ class RummiVectorEnv(VectorEnv):
         render_fps: float | None = None,
         render_every: int = 1,
         validate_actions: bool = True,
+        action_mask: bool = True,
+        backend: str = "numpy",
     ) -> None:
         super().__init__()
+        if validate_actions and not action_mask:
+            raise ValueError(
+                "validate_actions needs the mask it validates against; pass "
+                "validate_actions=False as well to assert your actions are legal"
+            )
+        self.backend = get_backend(backend)
+        if backend != "numpy" and RenderMode(render_mode) is not RenderMode.NONE:
+            raise ValueError(
+                f"rendering reads a NumPy BatchState, so it cannot draw the "
+                f"{self.backend.name} backend's state"
+            )
         self.cfg = cfg
         self.num_envs = num_envs
         self.validate_actions = validate_actions
+        self.wants_mask = action_mask
 
         self.single_action_space = spaces.Discrete(cfg.n_actions)
         self.single_observation_space = observation_space(cfg)
@@ -82,9 +94,16 @@ class RummiVectorEnv(VectorEnv):
         )
 
         self._base_seed = seed
-        self._seeds = np.random.SeedSequence(seed)
-        self.state = allocate(cfg, num_envs)
-        self._mask = np.zeros((num_envs, cfg.n_actions), dtype=bool)
+        # Re-deal seeds derive from (seed, step, env) rather than from a spawned
+        # SeedSequence: that is the scheme every backend shares, so an autoresetting
+        # run replays identically whichever one is driving it.
+        self._steps = 0
+        self.state = self.backend.reset(cfg, num_envs, seed=seed)
+        self._mask: np.ndarray | None = np.zeros((num_envs, cfg.n_actions), dtype=bool)
+        # Whether `_mask` describes the state as it stands. Only a re-deal (or a
+        # not-yet-reset env) makes it stale, so a step never has to recompute the
+        # mask its predecessor already produced.
+        self._mask_fresh = False
         # Envs that terminated on the previous step and must be re-dealt now.
         self._pending_reset = np.zeros(num_envs, dtype=bool)
 
@@ -94,45 +113,91 @@ class RummiVectorEnv(VectorEnv):
     ) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
         if seed is not None:
             self._base_seed = seed
-            self._seeds = np.random.SeedSequence(seed)
-        self.state = deal_reset(self.cfg, self.num_envs, seed=self._base_seed)
+        self._steps = 0
+        self.state = self.backend.reset(self.cfg, self.num_envs, seed=self._base_seed)
         self._pending_reset[:] = False
-        self._mask = legal_actions(self.state)
-        self._renderer.render(self.state, self._mask)
-        return encode(self.state), self._info(np.zeros((self.num_envs, self.cfg.n_players), np.float32))
-
-    def step(self, actions):
-        actions = np.asarray(actions, dtype=np.int64)
-        if actions.shape != (self.num_envs,):
-            raise ValueError(f"expected {(self.num_envs,)} actions, got {actions.shape}")
-
-        # Next-step autoreset: re-deal whatever finished last step, then hold
-        # those envs out of this step so the action supplied for them is
-        # discarded rather than played on the fresh episode.
-        just_reset = self._pending_reset.copy()
-        if just_reset.any():
-            reset_envs(self.state, np.flatnonzero(just_reset), self._seeds.spawn(int(just_reset.sum())))
-            self._pending_reset[:] = False
-
-        self._mask = legal_actions(self.state)
-        result = engine_step(
-            self.state,
-            actions,
-            self._mask if self.validate_actions else None,
-            active=~just_reset,
+        self._mask = self.backend.legal_actions(self.cfg, self.state) if self.wants_mask else None
+        self._mask_fresh = True
+        self._render()
+        return self._encode(), self._info(
+            np.zeros((self.num_envs, self.cfg.n_players), np.float32)
         )
 
+    def step(self, actions):
+        actions = self._check_actions(actions)
+        just_reset = self._autoreset()
+        result = self._advance(actions, active=~just_reset)
+
         rewards_all = result.rewards
-        acting = (self.state.current - 1) % self.cfg.n_players
+        # NumPy, because it indexes the NumPy reward matrix: a device tensor here
+        # would drag `rewards_all` back through `__array__` and fail on MPS.
+        acting = (self.backend.to_numpy(self.state.current) - 1) % self.cfg.n_players
         rewards = rewards_all[np.arange(self.num_envs), acting]
 
         terminated = result.terminated.copy()
         truncated = result.truncated.copy()
         self._pending_reset = terminated | truncated
+        return self._encode(), rewards, terminated, truncated, self._info(rewards_all)
 
-        self._mask = legal_actions(self.state)
-        self._renderer.render(self.state, self._mask)
-        return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
+    # --- pieces a subclass drives differently --------------------------------
+    def _check_actions(self, actions) -> np.ndarray:
+        actions = np.asarray(actions, dtype=np.int64)
+        if actions.shape != (self.num_envs,):
+            raise ValueError(f"expected {(self.num_envs,)} actions, got {actions.shape}")
+        return actions
+
+    def _autoreset(self) -> np.ndarray:
+        """Re-deal whatever finished last step; returns which envs those were.
+
+        Next-step autoreset: the caller then holds those envs out of this step, so
+        the action supplied alongside a fresh deal is discarded rather than played.
+        """
+        just_reset = self._pending_reset.copy()
+        if just_reset.any():
+            self.state = self.backend.reset_envs(
+                self.cfg, self.state, np.flatnonzero(just_reset), self._base_seed, self._steps
+            )
+            self._pending_reset[:] = False
+            self._mask_fresh = False
+        return just_reset
+
+    def _advance(self, actions: np.ndarray, active: np.ndarray):
+        """Apply one micro-action to every ``active`` env.
+
+        The mask an advance leaves behind is the mask its successor needs, so this
+        recomputes one only after a re-deal. Doing it unconditionally cost a
+        second :func:`legal_actions` per step -- 29% of the env's step time on the
+        standard config, for a value already in hand.
+        """
+        if self.wants_mask and not self._mask_fresh:
+            self._mask = self.backend.legal_actions(self.cfg, self.state)
+            self._mask_fresh = True
+        self.state, result = self.backend.step(
+            self.cfg,
+            self.state,
+            actions,
+            self._mask if self.validate_actions else None,
+            active,
+        )
+        self._steps += 1
+        if self.wants_mask:
+            self._mask = self.backend.legal_actions(self.cfg, self.state)
+        self._render()
+        return result
+
+    def _encode(self) -> dict[str, Any]:
+        """The observation in the backend's own array type.
+
+        Not converted: a device backend that copied its observation to the host
+        every step would give back the speedup it was chosen for. Gymnasium's
+        ``wrappers.vector`` conversions are the boundary -- see the note in
+        CLAUDE.md.
+        """
+        return self.backend.encode(self.cfg, self.state)
+
+    def _render(self) -> None:
+        if self.render_mode != RenderMode.NONE.value:
+            self._renderer.render(self.state, self._mask)
 
     def render(self):
         """Always draws, ignoring the throttle: an explicit call wants a frame.
@@ -153,15 +218,35 @@ class RummiVectorEnv(VectorEnv):
 
     # --- extras --------------------------------------------------------------
     def _info(self, rewards_all: np.ndarray) -> dict[str, Any]:
-        return {
-            "action_mask": self._mask,
-            "current_player": self.state.current.copy(),
+        """Telemetry is NumPy whatever the backend is.
+
+        These are `(N,)` bookkeeping vectors a caller reads on the host anyway --
+        which seat is up, who won -- and copying them costs about 1% even on a
+        device backend. The observation is the field where staying native matters.
+        """
+        to_numpy = self.backend.to_numpy
+        info: dict[str, Any] = {
+            "current_player": to_numpy(self.state.current).copy(),
             "rewards_all": rewards_all,
-            "micro_count": self.state.micro_count.copy(),
-            "turn_count": self.state.turn_count.copy(),
-            "winner": self.state.winner.copy(),
+            "micro_count": to_numpy(self.state.micro_count).copy(),
+            "turn_count": to_numpy(self.state.turn_count).copy(),
+            "winner": to_numpy(self.state.winner).copy(),
         }
+        if self.wants_mask:
+            info["action_mask"] = self._mask
+        return info
 
     @property
-    def action_mask(self) -> np.ndarray:
+    def action_mask(self) -> np.ndarray | None:
+        return self._mask
+
+    @property
+    def required_mask(self) -> np.ndarray:
+        """The mask, for the internals that cannot work without one.
+
+        `action_mask` is the public, nullable view; this is the one that says so
+        rather than failing later on a `None`.
+        """
+        if self._mask is None:
+            raise RuntimeError("this env was built with action_mask=False")
         return self._mask

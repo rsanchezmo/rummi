@@ -10,7 +10,7 @@ candidate's total.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache
 from itertools import combinations
 
 import numpy as np
@@ -34,7 +34,7 @@ class Candidates:
         return int(self.length.shape[0])
 
 
-@lru_cache(maxsize=None)
+@cache
 def candidates(cfg: RummiConfig) -> Candidates:
     rows: list[list[int]] = []
     values: list[int] = []
@@ -61,17 +61,17 @@ def candidates(cfg: RummiConfig) -> Candidates:
     n = len(rows)
     kinds = np.full((n, cfg.max_set_len), EMPTY, dtype=np.int16)
     counts = np.zeros((n, cfg.n_kinds), dtype=np.int16)
-    length = np.zeros(n, dtype=np.int16)
+    lengths = np.zeros(n, dtype=np.int16)
     for i, row in enumerate(rows):
         kinds[i, : len(row)] = row
         counts[i, row] = 1
-        length[i] = len(row)
+        lengths[i] = len(row)
 
     return Candidates(
         cfg=cfg,
         kinds=kinds,
         counts=counts,
-        length=length,
+        length=lengths,
         value=np.asarray(values, dtype=np.int32),
         is_run=np.asarray(runs, dtype=bool),
     )

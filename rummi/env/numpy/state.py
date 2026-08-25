@@ -70,7 +70,7 @@ class BatchState:
     def pool_size(self) -> np.ndarray:
         return (self.cfg.n_tiles - self.draw_ptr).astype(np.int16)
 
-    def clone(self) -> "BatchState":
+    def clone(self) -> BatchState:
         return BatchState(
             cfg=self.cfg,
             **{
@@ -104,7 +104,7 @@ class BatchState:
             h.update(arr.astype(np.int64).tobytes())
         return h.hexdigest()
 
-    def select(self, indices) -> "BatchState":
+    def select(self, indices) -> BatchState:
         """A new state holding just the given envs, in the given order.
 
         Used to check that a batched rollout equals the same envs run

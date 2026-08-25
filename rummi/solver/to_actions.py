@@ -82,7 +82,7 @@ def plan(
     ]
     # One set at a time, lowest free slot first: the mask only ever offers the
     # lowest empty slot, so a set must be started before the next one can be.
-    for content, slot in zip(new_sets, empty):
+    for content, slot in zip(new_sets, empty, strict=False):
         actions += [encode_assign(cfg, kind, slot) for kind in content]
     actions.append(cfg.end_turn_action)
     return actions

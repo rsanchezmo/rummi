@@ -48,7 +48,7 @@ def main() -> None:
 
     wins = [a["win_rate"] for a in agents]
     if wins != sorted(wins):
-        raise SystemExit(f"ladder is out of order: {list(zip(LADDER, wins))}")
+        raise SystemExit(f"ladder is out of order: {list(zip(LADDER, wins, strict=True))}")
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(

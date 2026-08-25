@@ -7,7 +7,7 @@ pytest.importorskip("ortools")
 
 from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
 from rummi.env.numpy.deal import reset
-from rummi.rules.encoding import EMPTY, kind_of, tables
+from rummi.rules.encoding import EMPTY, kind_of
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots
@@ -84,7 +84,6 @@ def test_it_finds_a_rearrangement_greedy_cannot():
 def test_every_returned_set_is_legal_and_uses_the_whole_table():
     s = reset(C, 1, seed=5)
     s.melded[:] = True
-    rng = np.random.default_rng(0)
     for _ in range(12):
         sol = solve_turn(C, s.racks[0, 0].astype(np.int64), s.table_sets[0], True)
         if not sol.feasible:
@@ -103,7 +102,6 @@ def test_every_returned_set_is_legal_and_uses_the_whole_table():
 def test_matches_brute_force_optimum_on_reduced_configs(cfg: RummiConfig):
     """Exhaustive check that "optimal" means it: brute force tries every subset of
     the rack against every partition of the result."""
-    rng = np.random.default_rng(0)
     checked = 0
     for trial in range(25):
         state = reset(cfg, 1, seed=trial)

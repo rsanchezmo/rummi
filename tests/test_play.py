@@ -215,7 +215,7 @@ def test_storage_order_maps_every_displayed_tile_back():
     slot = view(s, 0).slots[0]
     order = storage_order(slot.tiles, slot.shown)
     assert sorted(order) == list(range(len(slot.tiles))), "a position used twice would lift twice"
-    assert all(slot.tiles[pos] == kind for pos, kind in zip(order, slot.shown))
+    assert all(slot.tiles[pos] == kind for pos, kind in zip(order, slot.shown, strict=False))
 
 
 def test_before_melding_the_table_cannot_be_touched(board):

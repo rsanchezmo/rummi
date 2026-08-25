@@ -9,7 +9,8 @@ import time
 
 import numpy as np
 
-from rummi.bench.bench_step import CONFIGS, sample_legal
+from rummi.bench.bench_step import sample_legal
+from rummi.rules.config import CONFIG_BY_NAME
 from rummi.rules.config import RummiConfig
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
@@ -34,11 +35,11 @@ def run(cfg: RummiConfig, batch_size: int, steps: int, renderer: Renderer | None
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--steps", type=int, default=200)
     args = p.parse_args()
-    cfg = CONFIGS[args.config]
+    cfg = CONFIG_BY_NAME[args.config]
 
     baseline = run(cfg, args.batch_size, args.steps, None)
     print(f"{'no renderer at all':<34} {baseline:>12,.0f} env-steps/s")

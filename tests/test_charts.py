@@ -18,7 +18,7 @@ pytest.importorskip("numpy")
 import sys
 
 sys.path.insert(0, str(ROOT / "tools"))
-import render_charts as rc  # noqa: E402
+import render_charts as rc
 
 VIEWBOX = re.compile(r'viewBox="0 0 ([\d.]+) ([\d.]+)"')
 RECT = re.compile(r'<rect x="([-\d.]+)" y="([-\d.]+)" width="([\d.]+)" height="([\d.]+)"')
@@ -46,7 +46,7 @@ def test_nothing_escapes_the_viewbox(charts, name):
         assert float(x) + float(rw) <= w + 0.5, f"{name}: a rect runs past the right edge"
         assert float(y) + float(rh) <= h + 0.5, f"{name}: a rect runs past the bottom"
 
-    for cx, cy, r in CIRCLE.findall(svg):
+    for cx, _cy, r in CIRCLE.findall(svg):
         assert float(cx) + float(r) <= w + 0.5, f"{name}: a marker runs past the right edge"
 
     for x, y, size, anchor, content in TEXT.findall(svg):
@@ -99,3 +99,28 @@ def test_series_colours_come_from_the_validated_palette(charts):
     for svg in charts.values():
         for hexcode in set(re.findall(r"#[0-9a-fA-F]{6}", svg)):
             assert hexcode.lower() in allowed, f"{hexcode} is not in the validated palette"
+
+
+def test_every_published_capture_names_the_current_protocol():
+    """A version bump without a re-capture leaves the published numbers claiming a
+    protocol they were not produced under, which is the one way these files can
+    lie. Regenerate with the commands in CLAUDE.md."""
+    from rummi.evaluate.protocol import PROTOCOL_VERSION
+
+    captures = sorted(DATA.glob("agents*.json"))
+    assert captures, "no agent captures found"
+    for path in captures:
+        payload = json.loads(path.read_text())
+        assert payload["protocol"] == PROTOCOL_VERSION, (
+            f"{path.name} was captured under {payload['protocol']}, "
+            f"protocol is now {PROTOCOL_VERSION}"
+        )
+
+
+def test_a_capture_exists_for_every_suite_the_readme_publishes():
+    """The seat-count table in README.md reads these three files."""
+    for name in ("agents.json", "agents-standard-3p.json", "agents-standard-4p.json"):
+        payload = json.loads((DATA / name).read_text())
+        assert payload["agents"], name
+        wins = [a["win_rate"] for a in payload["agents"]]
+        assert wins == sorted(wins), f"{name}: the ladder is out of order"

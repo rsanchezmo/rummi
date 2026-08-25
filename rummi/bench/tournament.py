@@ -13,13 +13,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import env_seeds, reset, reset_envs
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.state import BatchState
 
-CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def build(cfg: RummiConfig, name: str, seed: int = 0):
@@ -67,7 +66,7 @@ class Match:
     def report(self) -> str:
         rates = " ".join(
             f"{n}={w}/{self.games} ({100 * w / max(1, self.games):.0f}%)"
-            for n, w in zip(self.names, self.wins)
+            for n, w in zip(self.names, self.wins, strict=True)
         )
         mean_turns = sum(self.turns) / len(self.turns) if self.turns else float("nan")
         return (
@@ -115,7 +114,7 @@ def play_match(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--games", type=int, default=60)
     p.add_argument("--batch-size", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
@@ -126,7 +125,7 @@ def main() -> None:
         help="comma-separated seat policies, one match per argument",
     )
     args = p.parse_args()
-    cfg = CONFIGS[args.config]
+    cfg = CONFIG_BY_NAME[args.config]
     for spec in args.matches:
         names = spec.split(",")
         print(play_match(cfg, names, args.games, args.batch_size, args.seed).report())

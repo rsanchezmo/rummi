@@ -42,6 +42,10 @@ class OptimalAgent(PlanningAgent):
             self.no_play += 1
             return []
 
+        # `plays_anything` implies a played vector, but only at runtime.
+        if solution.played is None:
+            return []
+
         target = list(solution.sets)
         if not melded:
             # Pre-meld the table is untouchable, so the solved sets are additions.

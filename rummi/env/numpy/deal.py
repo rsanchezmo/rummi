@@ -52,7 +52,7 @@ def reset_envs(
     if len(seeds) != len(which):
         raise ValueError("one seed per env being reset")
 
-    for env, seed in zip(np.atleast_1d(which), seeds):
+    for env, seed in zip(np.atleast_1d(which), seeds, strict=True):
         order = np.random.default_rng(seed).permutation(base)
         state.deck_order[env] = order
 

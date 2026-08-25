@@ -7,14 +7,13 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import env_seeds, reset, reset_envs
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots
 from rummi.env.numpy.state import BatchState
 
-CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 @dataclass
@@ -138,7 +137,7 @@ def fuzz(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--games", type=int, default=200)
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--seed", type=int, default=0)
@@ -147,7 +146,7 @@ def main() -> None:
     args = p.parse_args()
 
     stats = fuzz(
-        CONFIGS[args.config],
+        CONFIG_BY_NAME[args.config],
         games=args.games,
         batch_size=args.batch_size,
         seed=args.seed,

@@ -17,7 +17,6 @@ from rummi.env.numpy.deal import reset
 from rummi.rules.encoding import EMPTY, kind_of
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.sets import evaluate_slots
 from rummi.agents import OptimalAgent
 from rummi.agents.base import act_on_state
 from rummi.solver.ilp import solve_turn

@@ -12,7 +12,7 @@ import os
 import sys
 from typing import TextIO
 
-from rummi.rules.encoding import color_letter, tables
+from rummi.rules.encoding import tables
 from rummi.render.view_model import GameView, SlotShape
 
 TILE_WIDTH = 4

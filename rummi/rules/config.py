@@ -7,7 +7,7 @@ oracles and fast RL smoke tests tractable.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
 
@@ -34,15 +34,17 @@ class RummiConfig:
     min_set: int = 3
     strict_initial_meld: bool = True
 
-    # --- capacities (None => derived, see __post_init__) ---------------------
-    max_sets: int | None = None
-    max_set_len: int | None = None
-    max_micro_per_turn: int | None = None
+    # --- capacities (-1 => derived, see __post_init__) ------------------------
+    # Not `int | None`: after construction these are always ints, and typing them
+    # optional made every arithmetic use of a capacity a type error.
+    max_sets: int = -1
+    max_set_len: int = -1
+    max_micro_per_turn: int = -1
     max_turns: int = 500
 
     # --- scoring / reward ----------------------------------------------------
     reward_mode: RewardMode = RewardMode.WIN_LOSS
-    joker_penalty: int | None = None
+    joker_penalty: int = -1
     tiles_placed_bonus: float = 0.0
     rack_value_delta: float = 0.0
     micro_step_cost: float = 0.0
@@ -59,12 +61,12 @@ class RummiConfig:
         if self.min_set > self.n_numbers:
             raise ValueError("min_set > n_numbers makes runs impossible")
 
-        if self.max_set_len is None:
+        if self.max_set_len < 0:
             object.__setattr__(self, "max_set_len", max(self.n_numbers, self.n_colors))
-        if self.max_sets is None:
+        if self.max_sets < 0:
             # Enough slots that no legal table can ever be unrepresentable.
             object.__setattr__(self, "max_sets", max(1, self.n_tiles // self.min_set))
-        if self.max_micro_per_turn is None:
+        if self.max_micro_per_turn < 0:
             # Worst-case complete rearrangement: dissolve every slot, re-assign every
             # table tile, and play out the whole rack.
             object.__setattr__(
@@ -72,7 +74,7 @@ class RummiConfig:
                 "max_micro_per_turn",
                 self.max_sets + self.n_tiles + self.rack_size,
             )
-        if self.joker_penalty is None:
+        if self.joker_penalty < 0:
             # 30 for the standard 1-13 deck; scales down for reduced variants.
             object.__setattr__(self, "joker_penalty", 2 * self.n_numbers + 4)
 
@@ -154,6 +156,16 @@ TINY = RummiConfig(
 
 STANDARD = RummiConfig()
 
+# `replace` carries the *resolved* capacities over, so it is only safe for a field
+# no capacity is derived from. Seat count is one: none of max_sets, max_set_len,
+# max_micro_per_turn or joker_penalty reads n_players, and both of these are
+# asserted equal to a fresh construction in tests/test_config.py.
+STANDARD_3P = replace(STANDARD, n_players=3)
+"""Standard deck at three seats; a real game deals fourteen tiles whatever the count."""
+
+STANDARD_4P = replace(STANDARD, n_players=4)
+"""Standard deck at four seats -- 56 tiles dealt, leaving 50 in the pool."""
+
 TINY_GROUPS = RummiConfig(
     n_colors=3,
     n_numbers=4,
@@ -166,3 +178,17 @@ TINY_GROUPS = RummiConfig(
     max_turns=60,
 )
 """Small variant that *can* form groups (n_colors >= min_set), unlike :data:`TINY`."""
+
+CONFIG_BY_NAME: dict[str, RummiConfig] = {
+    "tiny": TINY,
+    "tiny_groups": TINY_GROUPS,
+    "standard": STANDARD,
+    "standard_3p": STANDARD_3P,
+    "standard_4p": STANDARD_4P,
+}
+"""Every preset by name, for the ``--config`` flag of the CLI tools.
+
+Deliberately *not* used by the golden or conformance tests: those are contracts
+over specific configs, and a preset added here must not silently demand a
+fixture that does not exist.
+"""

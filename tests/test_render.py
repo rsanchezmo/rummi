@@ -1,7 +1,6 @@
 """Renderers: correctness of the shared view model, dirty tracking, and degradation."""
 
 import io
-import os
 from pathlib import Path
 
 import numpy as np
@@ -126,7 +125,6 @@ def test_live_terminal_only_rewrites_changed_lines(monkeypatch):
 def test_the_same_state_draws_the_same_pixels():
     """Frames are painted whole rather than patched, so a repeat draw has to be
     identical -- that is what makes the generated figures byte-stable."""
-    import pygame
 
     from rummi.render.pygame_view import PygameView
 

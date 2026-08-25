@@ -21,14 +21,62 @@ python -m rummi.bench.bench_backends --compile             # compare backends
 ```
 
 ```python
-from rummi.env.vector_env import RummiVectorEnv
+import gymnasium as gym
+import rummi.env                                    # registers the ids below
 
-env = RummiVectorEnv(num_envs=256, seed=0)          # Gymnasium VectorEnv
+env = gym.make_vec("Rummi-2p-v0", num_envs=256)     # or Rummi-3p-v0, Rummi-4p-v0
 obs, info = env.reset()
 obs, rewards, terminated, truncated, info = env.step(actions)
 # info["action_mask"] is (num_envs, 2400) and never all-zero
 # info["current_player"] says whose view obs is — one policy plays every seat
 ```
+
+Seat count is in the id because it changes the observation and action spaces.
+Only a vector entry point is registered, so `gym.make` fails by design: a batch
+of one is not a single-agent env. `RummiVectorEnv` is importable directly from
+`rummi.env.vector_env` when you want to pass a `cfg` of your own.
+
+That env is **self-play**: one policy plays every seat. To hold one seat and let
+the bundled agents play the rest:
+
+```python
+from rummi.env.fixed_opponent import FixedOpponentEnv
+from rummi.rules.config import STANDARD_4P
+
+env = FixedOpponentEnv(num_envs=256, cfg=STANDARD_4P, opponent="greedy")
+obs, info = env.reset()      # obs is always a position your seat can act in
+```
+
+One `step` is your micro-action plus however many the other seats need to hand
+control back, so reward covers their replies rather than arriving on a step you
+could not act on. `opponent="optimal"` costs a CP-SAT solve per opponent turn per
+env and cannot batch — that one is for evaluation, not training.
+
+The env runs on any of the three backends — `backend="numpy" | "torch" |
+"torch-mps" | "jax"` — and the observation comes back in that backend's own array
+type, so a device rollout never round-trips through the host:
+
+| backend | B=1024 | B=4096 | vs numpy |
+|---|---:|---:|---:|
+| `numpy` (reference) | 43k | 43k | 1.0x |
+| torch CPU | 26k | 37k | 0.9x |
+| torch MPS | 105k | 156k | 3.6x |
+| JAX CPU | 187k | 187k | 4.3x |
+
+`RummiVectorEnv.step`, so mask, transition, observation encoding and next-step
+autoreset are all in the figure — this is what a training loop gets, not what the
+simulator does in isolation. Constant `DRAW` actions in every arm, so it measures
+the env rather than the cost of sampling from a `(B, 2400)` mask. Data in
+`docs/data/env_throughput.json`; reproduce with
+`python -m rummi.bench.bench_env --json docs/data/env_throughput.json`.
+
+Rendering is NumPy-only (it reads a `BatchState`), so a device backend refuses a
+render mode at construction rather than failing on the first frame.
+
+Want tensors instead of arrays? Use Gymnasium's own wrappers rather than a mode
+of this env — `gymnasium.wrappers.vector.NumpyToTorch`, and `JaxToTorch` /
+`JaxToNumpy` once a device backend is wired in. They convert through
+`from_dlpack`, so a same-device hand-off is a view, not a copy.
 
 One `step` is one primitive table operation, so a player's turn spans several
 steps. Observations are always the acting seat's view, which is what lets a
@@ -59,18 +107,18 @@ to anything that does not search.
 ## The opponents
 
 Three strengths, all playable out of the box and all usable as opponents in your
-own training loop. Scored here on the `standard-greedy` suite over 120 mirrored
+own training loop. Scored here on the `standard-greedy` suite over 120
 games; `score` is official Rummikub scoring from the agent's side.
 
 ![Agent win rate and stalemate rate, weakest to strongest](docs/charts/agents.svg)
 
 | agent | win rate | score | turns | rack left | stalemates |
 |---|---:|---:|---:|---:|---:|
-| `random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
-| `weighted-random` | 0.0% | −442.3 | 90.6 | 448.1 | 100% |
-| `greedy` | 50.0% | +0.0 | 124.7 | 47.5 | 98.3% |
-| `rearrange` | 85.0% | +31.9 | 129.3 | 24.6 | 80.0% |
-| `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0% |
+| `random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
+| `weighted-random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
+| `greedy` | 50.0% | +0.0 | 124.7 | 48.2 | 98.3% |
+| `rearrange` | 85.0% | +31.9 | 129.3 | 21.7 | 80.0% |
+| `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0.0% |
 
 **Read the random row as a warning, not a floor.** On the standard config random
 play is *byte-identical to passing every turn* — same scores, same turn counts. It
@@ -126,6 +174,25 @@ that bookkeeping for free. [`CONTRIBUTING.md`](CONTRIBUTING.md) has the rest. Pr
 rather than costing reward: the mask exactly describes what the rules permit, so
 an illegal action is a bug, not a strategy.
 
+### Every registered env has a score
+
+`Rummi-3p-v0` and `Rummi-4p-v0` are scored too, on the `standard-3p` (165 games)
+and `standard-4p` (220 games) suites, so an agent trained at any seat count has a
+baseline to beat.
+
+| agent | win 2p | win 3p | win 4p | score 2p | score 3p | score 4p |
+|---|---:|---:|---:|---:|---:|---:|
+| `greedy` | 50.0% | 33.3% | 25.0% | +0.0 | +0.0 | +0.0 |
+| `rearrange` | 85.0% | 64.8% | 54.1% | +31.9 | +49.9 | +60.1 |
+| `optimal` | 100.0% | 100.0% | 99.5% | +44.6 | +94.0 | +139.4 |
+
+Two things the seat count does to the ladder. `greedy` lands on exactly
+`1 / n_players` in every column — it is each suite's own opponent, and that the
+number is *exact* rather than close is the rotation check working, not a
+coincidence. And `optimal` stops being perfect at four seats: with three
+opponents taking turns between yours, playing every turn perfectly is no longer
+quite enough, which finally makes the top rung something a submission can aim at.
+
 ## Scoring yourself
 
 `rummi.evaluate` plays your agent against the bundled ones under a frozen,
@@ -143,8 +210,8 @@ minute per hundred games — fine for a score, too slow to iterate against. Use
 `tiny` while developing.
 
 Every deal is played **twice, with the seats swapped**. That cancels both the
-first-player advantage and the luck of the deal, so an agent mirrored against
-itself scores exactly 50.0% and +0.0 — not 50% within error bars. Each game's
+turn-order advantage and the luck of the deal, so an agent mirrored against
+itself scores exactly `1 / n_players` and +0.0 — not that within error bars. Each game's
 seed is derived from its index alone, so batching cannot change which deals run.
 
 ## How a turn is expressed

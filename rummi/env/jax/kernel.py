@@ -11,7 +11,7 @@ compile-time constant.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache
 from typing import NamedTuple
 
 import jax
@@ -43,7 +43,7 @@ class Lookup(NamedTuple):
     """Face value with the joker at ``joker_penalty``: what a tile sheds when played."""
 
 
-@lru_cache(maxsize=None)
+@cache
 def lookup(cfg: RummiConfig) -> Lookup:
     t = tables(cfg)
     offload = t.value.astype(np.int32).copy()

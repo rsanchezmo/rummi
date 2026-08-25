@@ -15,13 +15,12 @@ from pathlib import Path
 
 import numpy as np
 
-from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RewardMode, RummiConfig
+from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.render.driver import RenderMode, RenderOn, Renderer
 
-CONFIGS = {"standard": STANDARD, "tiny": TINY, "tiny_groups": TINY_GROUPS}
 
 
 def config_to_json(cfg: RummiConfig) -> dict:
@@ -53,7 +52,7 @@ class Recorder:
     def close(self) -> None:
         self.handle.close()
 
-    def __enter__(self) -> "Recorder":
+    def __enter__(self) -> Recorder:  # noqa: PYI034 -- Self needs 3.11, floor is 3.10
         return self
 
     def __exit__(self, *exc) -> None:
@@ -122,7 +121,7 @@ def main() -> None:
     p.add_argument("--play", action="store_true", help="run a fresh game instead of replaying")
     p.add_argument("--replay", type=Path, help="path to a recorded .jsonl game")
     p.add_argument("--out", type=Path, help="record the played game to this path")
-    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
+    p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")
     p.add_argument("--policy", default="greedy", help="any agent name from rummi.agents")
     p.add_argument("--render-mode", choices=[m.value for m in RenderMode], default="ansi")
     p.add_argument("--fps", type=float, default=12.0)
@@ -146,7 +145,7 @@ def main() -> None:
         print(f"\nreplayed {int(final.turn_count[0])} turns: {outcome}")
         return
 
-    cfg = CONFIGS[args.config]
+    cfg = CONFIG_BY_NAME[args.config]
     renderer = Renderer(cfg, args.render_mode, fps=args.fps, every=args.every, on=args.render_on)
     recorder = Recorder(args.out, cfg, args.seed) if args.out else None
     try:

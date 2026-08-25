@@ -9,12 +9,17 @@ from __future__ import annotations
 
 import time
 from enum import Enum
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from rummi.rules.config import RummiConfig
 from rummi.env.numpy.state import BatchState
 from rummi.render.view_model import GameView, view
+
+if TYPE_CHECKING:  # both are behind optional extras, so only the types import
+    from rummi.render.pygame_view import PygameView
+    from rummi.render.text import TerminalView
 
 
 class RenderOn(str, Enum):
@@ -59,8 +64,8 @@ class Renderer:
         self._calls = 0
         self._last_drawn = 0.0
         self._last_turn = -1
-        self._terminal = None
-        self._window = None
+        self._terminal: TerminalView | None = None
+        self._window: PygameView | None = None
 
     # --- lazily built so an unused mode costs nothing -------------------------
     @property

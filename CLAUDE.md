@@ -15,7 +15,13 @@ pytest                                                   # 224 tests, ~50s
 python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
+ruff check rummi tests tools && mypy rummi                # what CI's lint job runs
+python -m rummi.bench.bench_env                           # env throughput per backend
 ```
+
+`mypy rummi` is clean, but `pyproject.toml` exempts `rummi/render/pygame_view.py`
+and `rummi/env/torch/sim.py`. That is a ratchet with a reason written next to it,
+not a blanket pass -- read it before adding a third.
 
 Git identity is set **repo-locally** to the personal address, and the remote is
 the `github-personal` SSH alias. Don't "fix" either to the global config.
@@ -45,6 +51,17 @@ changed — that is either a bug, or a decision that needs `PROTOCOL_VERSION` an
 the published scores revisited. Regenerate only when you intended the rules to
 change, and say so in the commit.
 
+## Reward shaping is outside the fixtures
+
+`tiles_placed_bonus`, `rack_value_delta` and `micro_step_cost` are `0.0` in every
+preset, so **every golden fixture leaves all nine branches that implement them
+untouched** -- three terms in each of three backends. They are specified in
+`SPEC.md` section 7 and covered by `test_each_shaping_term_matches_the_reference_and_actually_fires`,
+which turns on one term at a time and asserts the total actually moved. A
+conformance test that could pass with the term doing nothing is worth nothing.
+
+Those tests need **greedy**, not random, for the reason in the next section.
+
 ## Random play cannot test this game
 
 In 10M fuzz steps, uniform-random play assembled a legal 30-point opening meld
@@ -70,6 +87,70 @@ better. This has already caused one false "the engine is broken" diagnosis.
   partitions into valid sets is the whole difficulty of Rummikub. The action
   space exists to keep that out of `step`; CP-SAT solves it once per turn in
   `rummi/solver/`, never per step.
+
+## What belongs in a Gymnasium id
+
+`rummi/env/__init__.py` registers `Rummi-2p-v0`, `Rummi-3p-v0`, `Rummi-4p-v0`.
+The rule for adding another: **an id is for something that changes the
+observation or action space.** Seat count does, so it is in the id. Opponent
+choice does not, so it is a constructor argument -- crossing seats with the five
+bundled agents would be fifteen ids that differ in nothing a policy can see.
+
+Only `vector_entry_point` is registered. `gym.make` failing is the intended
+behaviour: there is no single-env implementation, and wrapping a batch of one
+would hide that.
+
+`RummiVectorEnv(backend=...)` drives any of the three through `rummi/env/api.py`,
+and the observation stays in that backend's array type. Two things are host-side
+on purpose: the `info` telemetry (`current_player`, `winner` -- `(N,)` vectors a
+caller reads on the host anyway, ~1% even on MPS) and the `(N,)` done flags
+next-step autoreset needs. I measured the autoreset read at **+1.0%** on MPS at
+B=4096, so device-side autoreset would buy nothing; do not build it on a hunch.
+
+`FixedOpponentEnv` and rendering are NumPy-only and refuse other backends at
+construction -- the first because `agents.base` reads a `BatchState`, the second
+because the renderer does.
+
+**Do not add a tensor-returning mode to this env.** Gymnasium already ships
+`wrappers.vector.NumpyToTorch`, `JaxToTorch` and `JaxToNumpy`, which convert
+through `from_dlpack` -- a same-device hand-off is a view, not a copy. Non-numpy
+vector envs are sanctioned; the pattern is that the env is native in its
+backend's array type and the official wrapper converts at the boundary. They are
+lazily imported behind `array_api_compat`, which is why they do not show up in
+`dir(gymnasium.wrappers)`.
+
+`FixedOpponentEnv` is a **subclass, not a wrapper**, and that is not a style
+choice. An opponent's whole turn must run inside one `step`, but the base env
+re-deals a finished episode on the *following* step -- driving it from outside
+would start a fresh deal partway through and the learner would never see the
+terminal observation. Owning the autoreset boundary is the whole difference,
+which is why `step` is decomposed into `_check_actions` / `_autoreset` /
+`_advance` for it to recombine.
+
+## Why the mask, when DRAW is always legal
+
+A fair question, because the mask is the most expensive thing in a step: on the
+standard config `legal_actions` costs **2.8x** the rest of the env put together
+(42.3k env-steps/s with it, 117.5k without, same actions in both arms).
+
+It stays because **35 of 2400 actions are legal at a typical step -- 1.47%**. An
+agent choosing without the mask picks an illegal action ~98.5% of the time, and
+`DRAW` is not a benign fallback: per SPEC.md section 4 it *reverts the turn*,
+draws and passes. So "illegal falls back to DRAW" is an env where a learner
+reverts and passes almost every action, which is byte-identical to the
+random-play trap two sections down -- and it destroys a half-built turn rather
+than merely wasting a step. Worse for learning, the fallback teaches the policy
+`DRAW`'s value for every illegal action, so it can never learn that an action is
+illegal *now* and legal next turn.
+
+It is also why the benchmark **disqualifies** an illegal action instead of
+substituting one silently: a fallback with no cost is something to farm.
+
+`RummiVectorEnv(action_mask=False, validate_actions=False)` is there for the
+callers that genuinely do not need it -- a throughput benchmark, or an agent that
+plans a whole turn and only wants the mask once per turn. It is refused unless
+validation is dropped too, and `FixedOpponentEnv` refuses it outright, since its
+opponents choose from it.
 
 ## One way to write an agent
 
@@ -108,12 +189,30 @@ nothing.
 ## Evaluation protocol is frozen
 
 `rummi/evaluate/protocol.py` pins configs, opponents, game counts and per-game
-seeds. Every deal is played twice with seats swapped, which is why an agent
-mirrored against itself scores *exactly* 50.0% and +0.0 — if that stops being
-exact, the mirroring is broken, not noisy.
+seeds. Every deal is played once per seat, the agent under test rotating through
+all of them, which is why an agent mirrored against itself scores *exactly*
+`1 / n_players` and +0.0 — if that stops being exact, the rotation is broken, not
+noisy. At two seats this is the old swap; past two it is the only thing that
+cancels turn order.
+
+There is one suite per registered Gymnasium id, which is the point of `2.0`: an
+id you can train on but not score against is a dead end for a submission.
 
 Editing a suite invalidates every score published against `PROTOCOL_VERSION`.
-Bump the version if you must change one.
+Bump the version if you must change one -- and then **re-capture**, or the
+committed numbers claim a protocol they were not produced under
+(`test_every_published_capture_names_the_current_protocol` catches that):
+
+```bash
+python tools/capture_agents.py --suite standard-greedy --games 60 --out docs/data/agents.json
+python tools/capture_agents.py --suite standard-3p --games 55 --out docs/data/agents-standard-3p.json
+python tools/capture_agents.py --suite standard-4p --games 55 --out docs/data/agents-standard-4p.json
+python tools/render_charts.py
+```
+
+`docs/charts/agents.svg` plots win and stalemate rate only, so a change to
+`mean_final_rack` alone leaves it byte-identical -- the figure not moving is not
+evidence the data did not.
 
 ## The render stack
 

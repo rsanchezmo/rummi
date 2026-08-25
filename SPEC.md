@@ -164,7 +164,69 @@ empty and `consecutive_draws >= P` ends the game on lowest rack value. Reaching
 `SCORE_NORMALIZED` divides by `rack_size * max(n_numbers, joker_penalty)`.
 Truncation pays nothing — it is an artificial cutoff, not a result.
 
-## 8. Conformance status
+**Shaping** is three optional per-step terms, all `0.0` by default and all
+credited to the seat that acted. They are added to the terminal reward above
+rather than replacing it, and unlike it they are *not* zero-sum.
+
+| term | when | amount |
+|---|---|---|
+| `micro_step_cost` | every `PLACE`, `PICK`, `DISSOLVE`, `ASSIGN` — not on a committing action | `-micro_step_cost` |
+| `tiles_placed_bonus` | `END_TURN` | `tiles_placed_bonus * placed_rack.sum()` |
+| `rack_value_delta` | `END_TURN` | `rack_value_delta * face_value(placed_rack)`, jokers at zero |
+
+Shaping accrues as it is earned, so a truncated episode keeps whatever it already
+paid — only the *terminal* reward is withheld. Every bundled config and every
+evaluation suite leaves all three at `0.0`, so they are outside
+`PROTOCOL_VERSION`: turning one on makes a run incomparable to a published score
+by intent, not by accident.
+
+## 8. Observation
+
+What an agent sees, and the only thing it sees. Every field has a leading batch
+dimension `B`.
+
+| field | shape | dtype | meaning |
+|---|---|---|---|
+| `rack` | `(B, K)` | int16 | the **acting** seat's rack, by kind |
+| `table_sets` | `(B, S, L)` | int16 | the table as kind ids, `EMPTY` (`-1`) padded |
+| `slot_features` | `(B, S, 10)` | int32 | per-slot summary, columns below |
+| `workbench` | `(B, K)` | int16 | tiles lifted this turn and not yet assigned |
+| `placed_this_turn` | `(B, K)` | int16 | tiles moved from the rack this turn |
+| `unseen` | `(B, K)` | int16 | `copies - rack - table - workbench` |
+| `rack_sizes` | `(B, P)` | int16 | tile count per seat, seat-rotated |
+| `melded` | `(B, P)` | int8 | whether each seat has opened, seat-rotated |
+| `scalars` | `(B, 4)` | int32 | `[pool_size, meld_progress, meld_remaining, micro_count]` |
+
+`slot_features` columns, in order: `n`, `run_valid`, `group_valid`,
+`is_extendable`, `color`, `lo`, `hi`, `n_jokers`, `value`, `is_new` — the first
+eight and `value` from section 3's kernel, `is_new` from `slot_new`.
+
+`meld_progress` is the value credited towards the opening meld (section 7);
+`meld_remaining` is `0` once the seat has opened, else
+`max(0, initial_meld - meld_progress)`.
+
+Two properties are load-bearing, and a port that breaks either is wrong even if
+every shape matches.
+
+**Seat-relative.** Per-seat fields (`rack_sizes`, `melded`) are rotated so index
+`0` is the acting seat and index `i` is seat `(current + i) mod P`. `rack` is the
+acting seat's outright. This is what lets one policy play every seat without
+learning `P` conventions, and it is why a bundled agent can be dropped into any
+seat of a match.
+
+**Information-correct.** `unseen` merges the pool with the opponents' racks into
+one vector, because those are exactly the tiles whose location the acting seat
+cannot know. It is derived by subtraction — total copies less what the actor can
+locate — so it cannot drift from the state. Individual opponent racks are never
+exposed; only their sizes, via `rack_sizes`.
+
+That merge is the integrity property the benchmark rests on: an agent handed the
+raw state could read a specific opponent's hand, and every published score would
+be meaningless. The CP-SAT agent plays from this observation alone, which is what
+makes "the observation is sufficient to play optimally" a tested claim rather
+than a hope.
+
+## 9. Conformance status
 
 | backend | state | peak env-steps/s | vs NumPy | at batch |
 |---|---|---:|---:|---:|
@@ -201,7 +263,7 @@ Read the shape rather than the top row:
 * JAX is CPU-only here — no production Metal backend — so it cannot be compared
   against MPS on equal hardware. Re-measure on CUDA.
 
-## 9. Port notes
+## 10. Port notes
 
 - The NumPy reference mutates buffers to avoid per-step allocation. Arithmetic is
   index-and-mask only, so the JAX port is the same expressions written

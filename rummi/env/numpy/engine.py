@@ -15,7 +15,7 @@ import numpy as np
 from rummi.rules.actions import decode_batch
 from rummi.rules.config import RewardMode, RummiConfig
 from rummi.rules.encoding import EMPTY
-from rummi.env.numpy.state import NO_WINNER, BatchState, counts_of
+from rummi.env.numpy.state import BatchState, counts_of
 
 
 @dataclass(frozen=True, slots=True)

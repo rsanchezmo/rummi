@@ -9,7 +9,6 @@ from rummi.env.numpy.deal import reset
 from rummi.rules.encoding import EMPTY, kind_of
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.state import NO_WINNER
 
 from tests.conftest import drain_pool, play, rebalance_pool, state_with
 
@@ -66,7 +65,7 @@ def test_pick_takes_one_tile_and_recanonicalises():
 
 def test_end_turn_commits_and_passes_play():
     s = state_with(C, rack=RUN_36)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.melded[0, 0])
     assert s.current[0] == 1
     assert s.turn_count[0] == 1
@@ -107,7 +106,7 @@ def test_draw_on_an_empty_pool_is_a_pass():
 
 def test_emptying_the_rack_wins():
     s = state_with(C, rack=RUN_36, melded=True)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.done[0]) and not bool(s.truncated[0])
     assert int(s.winner[0]) == 0
     s.check_invariants()
@@ -136,6 +135,23 @@ def test_running_out_of_turns_truncates_without_a_winner():
     assert bool(s.done[0]) and bool(s.truncated[0])
     assert bool(result.truncated[0]) and not bool(result.terminated[0])
     assert (result.rewards == 0).all(), "an artificial cutoff should not pay out"
+
+
+def test_truncation_withholds_the_terminal_reward_but_keeps_shaping():
+    """Shaping is paid as it is earned, so an artificial cutoff cannot claw it
+    back -- only the result-dependent payout is withheld. SPEC.md section 7 says
+    so, which is why it is pinned here."""
+    cfg = RummiConfig(n_players=2, max_turns=1, micro_step_cost=0.25)
+    s = state_with(cfg, rack=[kind_of(cfg, 0, 1)])
+
+    mask = legal_actions(s)
+    place = step(s, np.array([encode_place(cfg, kind_of(cfg, 0, 1))]), mask)
+    assert place.rewards[0, 0] == pytest.approx(-0.25), "the micro-action should cost"
+    assert not bool(s.done[0])
+
+    result = step(s, np.array([cfg.draw_action]), legal_actions(s))
+    assert bool(result.truncated[0]) and not bool(result.terminated[0])
+    assert (result.rewards == 0).all(), "DRAW commits a turn, so no shaping and no payout"
 
 
 def test_win_loss_reward_is_zero_sum():
@@ -175,7 +191,7 @@ def test_illegal_action_is_rejected_loudly():
 
 def test_done_envs_ignore_further_actions():
     s = state_with(C, rack=RUN_36, melded=True)
-    play(s, meld_plan(C, RUN_36) + [C.end_turn_action])
+    play(s, [*meld_plan(C, RUN_36), C.end_turn_action])
     assert bool(s.done[0])
     frozen = s.clone()
     step(s, np.array([C.draw_action]), legal_actions(s))

@@ -8,10 +8,11 @@ comparable.
 
 Two choices are worth explaining.
 
-**Mirrored matches.** Every game is played twice from the same deal, with the
-agents swapped between seats. That cancels both the first-player advantage and
-the luck of the deal, so a 50% win rate against a mirror of yourself is exactly
-50% rather than something that needs error bars.
+**Seat rotation.** Every deal is played once per seat, with the agent under test
+occupying a different one each time and reference agents filling the rest. That
+cancels both the turn-order advantage and the luck of the deal: an agent mirrored
+against itself scores exactly ``1 / n_players`` and exactly ``+0.0``, not
+something that needs error bars. At two seats this is the swap it generalises.
 
 **Illegal actions disqualify rather than penalise.** The mask is never all-zero
 and always exactly describes what the rules permit, so proposing a masked-out
@@ -25,15 +26,14 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from rummi.agents.base import Agent
-from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
+from rummi.agents.base import Agent, act_by_seat
+from rummi.rules.config import STANDARD, STANDARD_3P, STANDARD_4P, TINY_GROUPS, RummiConfig
 from rummi.env.numpy.deal import reset as deal_reset
 from rummi.env.numpy.deal import reset_envs
 from rummi.env.numpy.engine import step as engine_step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.observation import encode
 
-PROTOCOL_VERSION = "1.0"
+PROTOCOL_VERSION = "2.0"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +42,8 @@ class Suite:
     cfg: RummiConfig
     opponent: str
     games: int
-    """Distinct deals. Each is played mirrored, so twice this many games run."""
+    """Distinct deals. Each is played once per seat, so ``n_players`` times this
+    many games run."""
     seed_base: int
     """Fixed so game *i* of a suite is always the same deal, for everyone."""
     batch_size: int = 32
@@ -50,13 +51,19 @@ class Suite:
 
     @property
     def total_games(self) -> int:
-        return self.games * 2
+        return self.games * self.cfg.n_players
 
 
 SUITES: tuple[Suite, ...] = (
     Suite("tiny", TINY_GROUPS, opponent="greedy", games=100, seed_base=1_000, batch_size=32),
     Suite("standard-greedy", STANDARD, opponent="greedy", games=200, seed_base=2_000, batch_size=32),
     Suite("standard-optimal", STANDARD, opponent="optimal", games=100, seed_base=3_000, batch_size=16),
+    # One per registered Gymnasium id, so every env you can train on has a score
+    # to place a submission against. Fewer deals than the two-seat suites because
+    # rotation multiplies each by the seat count: 70 deals at three seats is 210
+    # games, 55 at four is 220, both comparable to standard-greedy's 400.
+    Suite("standard-3p", STANDARD_3P, opponent="greedy", games=70, seed_base=4_000, batch_size=32),
+    Suite("standard-4p", STANDARD_4P, opponent="greedy", games=55, seed_base=5_000, batch_size=32),
 )
 SUITE_BY_NAME = {s.name: s for s in SUITES}
 
@@ -123,15 +130,15 @@ def _play_batch(
     seats: list[Agent],
     seeds: list[np.random.SeedSequence],
     result: Result,
+    under_test: int,
 ) -> None:
     """Run one batch to completion. Env slot *i* is the game with seed *i*.
 
     Autoreset is deliberately not used: one env slot is one game with one known
     seed, which is what makes a score reproducible.
     """
-    cfg = suite.cfg
     n = len(seeds)
-    state = deal_reset(cfg, n, seed=0)
+    state = deal_reset(suite.cfg, n, seed=0)
     reset_envs(state, np.arange(n), seeds)
     for agent in seats:
         agent.reset(n)
@@ -140,25 +147,20 @@ def _play_batch(
         if state.done.all():
             break
         mask = legal_actions(state)
-        obs = encode(state)
-        actions = np.full(n, cfg.draw_action, dtype=np.int64)
-        for seat, agent in enumerate(seats):
-            active = (state.current == seat) & ~state.done
-            if not active.any():
-                continue
-            proposed = np.asarray(agent.act(obs, mask, active))
-            illegal = active & ~mask[np.arange(n), proposed]
-            result.illegal_attempts += int(illegal.sum())
-            # Substitute DRAW so the suite still completes and reports, rather
-            # than dying halfway with no diagnosis.
-            actions[active] = np.where(illegal[active], cfg.draw_action, proposed[active])
+        actions, illegal = act_by_seat(seats, state, mask)
+        result.illegal_attempts += illegal
         engine_step(state, actions, mask)
 
-    _score_batch(suite, state, result)
+    _score_batch(suite, state, result, under_test)
 
 
-def _score_batch(suite: Suite, state, result: Result) -> None:
-    cfg = suite.cfg
+def _score_batch(suite: Suite, state, result: Result, under_test: int) -> None:
+    """Score from ``under_test``'s side, whichever seat the rotation put it in.
+
+    Reading the seat rather than always seat 0 is what generalises the two-seat
+    swap: there is no perspective to invert afterwards, and every game contributes
+    the agent's own final rack instead of half of them being discarded.
+    """
     values = state.rack_values()
     for env in range(state.batch_size):
         if not state.done[env]:
@@ -167,19 +169,19 @@ def _score_batch(suite: Suite, state, result: Result) -> None:
         result.games += 1
         result.turns.append(int(state.turn_count[env]))
         winner = int(state.winner[env])
-        # Seat 0 is always the agent under test; mirroring is handled by the
-        # caller swapping who sits there.
-        result.final_racks.append(int(values[env, 0]))
+        result.final_racks.append(int(values[env, under_test]))
         if state.truncated[env]:
             result.truncations += 1
         if state.racks[env].sum(-1).min() != 0:
             result.stalemates += 1
-        if winner == 0:
+        if winner == under_test:
             result.wins += 1
-            result.scores.append(int(values[env, 1:].sum()))
+            # Official scoring: the winner collects every loser's rack.
+            others = [p for p in range(suite.cfg.n_players) if p != under_test]
+            result.scores.append(int(values[env, others].sum()))
         else:
             result.losses += 1
-            result.scores.append(-int(values[env, 0]))
+            result.scores.append(-int(values[env, under_test]))
 
 
 def evaluate(
@@ -197,8 +199,6 @@ def evaluate(
     from rummi.agents import build
 
     cfg = suite.cfg
-    if cfg.n_players != 2:
-        raise ValueError("the v1 protocol is two-seat only")
     make_agent = build_agent or (lambda c: build(agent_name, c))
     result = Result(suite=suite.name, agent=agent_name, opponent=suite.opponent)
 
@@ -207,37 +207,17 @@ def evaluate(
     while done < total:
         count = min(suite.batch_size, total - done)
         seeds = _game_seeds(suite, done, count)
-        # Mirrored: the same deals played twice with the seats swapped, so neither
-        # the deal nor the turn order can flatter either side.
-        for mirrored in (False, True):
-            under_test = make_agent(cfg)
-            reference = build(suite.opponent, cfg)
-            under_test.name = agent_name
-            seats = [reference, under_test] if mirrored else [under_test, reference]
-            if mirrored:
-                # Scoring always reads seat 0, so evaluate the mirror from the
-                # reference's side and invert it.
-                mirror = Result(suite=suite.name, agent=agent_name, opponent=suite.opponent)
-                _play_batch(suite, seats, seeds, mirror)
-                _absorb_mirrored(result, mirror)
-            else:
-                _play_batch(suite, seats, seeds, result)
+        # The same deals played once per seat, so neither the deal nor the turn
+        # order can flatter either side. A fresh agent per rotation: one carrying
+        # plans from the previous seat would consume them in the wrong game.
+        for seat in range(cfg.n_players):
+            agent = make_agent(cfg)
+            agent.name = agent_name
+            seats: list[Agent] = [build(suite.opponent, cfg) for _ in range(cfg.n_players)]
+            seats[seat] = agent
+            _play_batch(suite, seats, seeds, result, seat)
         done += count
     return result
-
-
-def _absorb_mirrored(target: Result, mirror: Result) -> None:
-    """Fold in a mirrored batch, flipping the perspective to the agent's side."""
-    target.games += mirror.games
-    target.wins += mirror.losses
-    target.losses += mirror.wins
-    target.stalemates += mirror.stalemates
-    target.truncations += mirror.truncations
-    target.illegal_attempts += mirror.illegal_attempts
-    target.turns.extend(mirror.turns)
-    target.scores.extend(-s for s in mirror.scores)
-    # final_racks was recorded for seat 0, which in a mirrored game is the
-    # reference agent, so those numbers are not the agent's and are dropped.
 
 
 def run_all(agent_name: str, build_agent=None, suites=None, games=None) -> list[Result]:

@@ -1,5 +1,5 @@
 {
-  "protocol": "1.0",
+  "protocol": "2.0",
   "suite": "standard-greedy",
   "opponent": "greedy",
   "games": 120,
@@ -9,7 +9,7 @@
       "win_rate": 0.0,
       "mean_score": -442.325,
       "mean_turns": 90.625,
-      "mean_final_rack": 448.05,
+      "mean_final_rack": 442.325,
       "stalemate_rate": 1.0,
       "games": 120,
       "disqualified": false
@@ -19,7 +19,7 @@
       "win_rate": 0.0,
       "mean_score": -442.325,
       "mean_turns": 90.625,
-      "mean_final_rack": 448.05,
+      "mean_final_rack": 442.325,
       "stalemate_rate": 1.0,
       "games": 120,
       "disqualified": false
@@ -29,7 +29,7 @@
       "win_rate": 0.5,
       "mean_score": 0.0,
       "mean_turns": 124.73333333333333,
-      "mean_final_rack": 47.46666666666667,
+      "mean_final_rack": 48.175,
       "stalemate_rate": 0.9833333333333333,
       "games": 120,
       "disqualified": false
@@ -39,7 +39,7 @@
       "win_rate": 0.85,
       "mean_score": 31.916666666666668,
       "mean_turns": 129.275,
-      "mean_final_rack": 24.566666666666666,
+      "mean_final_rack": 21.725,
       "stalemate_rate": 0.8,
       "games": 120,
       "disqualified": false
