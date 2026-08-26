@@ -27,6 +27,50 @@ from rummi.env.observation import encode
 TINY = SUITE_BY_NAME["tiny"]
 
 
+def test_delegating_with_always_play_is_exactly_its_inner_agent():
+    """The sanity check that makes the comparison meaningful: the two-action agent
+    at `always_play` must *be* `greedy`, action for action, or a difference in
+    score could come from the wrapper rather than from holding."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.delegating import DelegatingAgent, always_play, tiles_at_least
+
+    cfg = TINY_GROUPS
+    # `k=1` must agree too: a valid turn always plays at least one tile, so the
+    # threshold cannot bite at 1. If it ever does, `PlanSummary.tiles` is wrong.
+    for decide in (always_play, tiles_at_least(1)):
+        inner, agent = build("greedy", cfg), DelegatingAgent(cfg, inner="greedy", decide=decide)
+        inner.reset(6)
+        agent.reset(6)
+        a_state, b_state = reset(cfg, 6, seed=3), reset(cfg, 6, seed=3)
+        for _ in range(60):
+            a_mask, b_mask = legal_actions(a_state), legal_actions(b_state)
+            a_act = act_on_state(inner, a_state, a_mask)
+            b_act = act_on_state(agent, b_state, b_mask)
+            np.testing.assert_array_equal(a_act, b_act)
+            step(a_state, a_act, a_mask)
+            step(b_state, b_act, b_mask)
+        assert agent.held == 0
+        assert agent.played > 0, "the probe never reached a playable turn"
+
+
+def test_a_holding_threshold_holds_turns_and_keeps_playing_legally():
+    """Holding must cost tiles played, not legality: an empty plan is already
+    `DRAW`, which is legal at every step."""
+    from rummi.agents.delegating import DelegatingAgent, tiles_at_least
+
+    cfg = TINY_GROUPS
+    suite = Suite(TINY.name, cfg, opponent="greedy", games=8, seed_base=TINY.seed_base)
+    held = {}
+    for k in (1, 3):
+        agent = DelegatingAgent(cfg, inner="greedy", decide=tiles_at_least(k))
+        result = evaluate(f"delegate-{k}", suite, build_agent=lambda c, a=agent: a)
+        assert result.illegal_attempts == 0
+        assert not result.disqualified
+        held[k] = agent.held
+    assert held[1] == 0
+    assert held[3] > 0, "a threshold of 3 tiles never held a turn, so it proved nothing"
+
+
 def test_every_reference_agent_satisfies_the_protocol():
     for name in REGISTRY:
         agent = build(name, TINY_GROUPS)
