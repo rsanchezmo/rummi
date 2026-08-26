@@ -13,11 +13,18 @@ primitive policy scored -230. Those two being so close is the point: *which* set
 play is worth ~6 points, so what this trains is mostly when to keep playing, when
 to end the turn, and when not to start.
 
-**PPO over turn decisions.** Each batch is reused for `--epochs` passes over
-`--minibatches` minibatches with the ratio clipped, and the mask is stored so
-scoring an old action against the policy that took it stays meaningful. One pass
-and discard leaves most of the signal in the data; `--epochs 1` recovers the plain
-policy gradient this started as.
+**One averaged gradient step per batch, computed in chunks.** `--minibatches` splits
+the batch for memory only -- gradients accumulate across the chunks and a single step
+follows -- because taking a step per chunk scored **-394** where one averaged step
+scored **+27**. With a bootstrapped critic on a terminal reward the advantage is
+noisy, and four noisy small-batch steps are worse than one averaged one.
+
+`--epochs` reuses a batch, with the ratio clipped and the mask stored so scoring an
+old action against the policy that took it stays meaningful. It defaults to 1:
+reuse measured *worse* here, since reusing a noisy advantage amplifies its error.
+The batch wants to be **large** instead, which is what the chunking is for -- a
+whole game spans many decisions, so a short horizon can contain no terminal reward
+at all and leaves both heads with nothing to fit.
 
 The advantage is bootstrapped through the critic, per decision, for the reason
 recorded in `train_delegate.py`: handing every decision in an episode that
@@ -213,11 +220,30 @@ def main() -> None:
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument(
-        "--epochs", type=int, default=4,
-        help="passes over each batch. 1 is the plain policy gradient, which uses "
-             "every transition once and throws it away",
+        "--micro-step-cost", type=float, default=0.0,
+        help="SPEC section 7: charged on every PLACE/PICK/DISSOLVE/ASSIGN and *not* "
+             "on a committing action, so it is the one term that penalises dithering. "
+             "A hybrid policy stalls turns to the 155-micro budget rather than "
+             "ending them, and nothing else in the reward makes that expensive",
     )
-    p.add_argument("--minibatches", type=int, default=4)
+    p.add_argument(
+        "--rack-shaping", type=float, default=0.0,
+        help="potential-based reward on shrinking the rack. The macro space does not "
+             "need it -- turns end every 2-4 steps -- but a hybrid policy ends one "
+             "every ~32, so a whole game outruns any practical horizon and no "
+             "terminal reward reaches the batch at all",
+    )
+    p.add_argument(
+        "--epochs", type=int, default=1,
+        help="passes over each batch. Measured worse above 1: reusing a noisy "
+             "bootstrapped advantage amplifies its error rather than extracting more",
+    )
+    p.add_argument(
+        "--minibatches", type=int, default=4,
+        help="chunks the batch is computed in, for memory. Gradients accumulate "
+             "across them into ONE averaged step -- taking a step per chunk instead "
+             "scored -394 where one averaged step scored +27",
+    )
     p.add_argument("--clip", type=float, default=0.2, help="PPO ratio clip")
     p.add_argument("--entropy-coef", type=float, default=0.01)
     p.add_argument(
@@ -248,7 +274,9 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = dataclasses.replace(
-        CONFIG_BY_NAME[args.config], reward_mode=RewardMode.SCORE_NORMALIZED
+        CONFIG_BY_NAME[args.config],
+        reward_mode=RewardMode.SCORE_NORMALIZED,
+        micro_step_cost=args.micro_step_cost,
     )
     torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
@@ -358,7 +386,7 @@ def main() -> None:
         open_choice[:] = [None] * args.envs
     print(
         f"config={args.config} space={args.space} opponent={args.opponent} "
-        f"actions={macros} head={args.head} "
+        f"actions={macros} head={args.head} micro_cost={args.micro_step_cost} "
         f"params={sum(q.numel() for q in net.parameters()):,}",
         flush=True,
     )
@@ -372,9 +400,20 @@ def main() -> None:
         for _ in range(args.horizon):
             mask = np.asarray(info["action_mask"])
             actions = agent.act(obs, mask)
+            rack_before = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
             obs, reward, term, trunc, info = env.step(actions)
-            accrued += np.asarray(reward, dtype=np.float32)
+            reward = np.asarray(reward, dtype=np.float32)
             done = np.asarray(term) | np.asarray(trunc)
+            if args.rack_shaping:
+                # Phi = -rack_size, F = gamma*Phi(s') - Phi(s). Policy-invariant
+                # (Ng, Harada & Russell 1999), so it adds signal without moving the
+                # optimum -- and it self-corrects, because DRAW reverts the turn and
+                # hands the tiles back. Zero across an episode boundary, where the
+                # next observation is a fresh deal with a full rack.
+                rack_after = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
+                potential = rack_before - args.gamma * rack_after
+                reward = reward + args.rack_shaping * np.where(done, 0.0, potential)
+            accrued += reward
             for e in np.flatnonzero(done):
                 if open_choice[e] is not None:
                     prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
@@ -412,6 +451,9 @@ def main() -> None:
         entropy = torch.zeros(())
         for _ in range(1 if warming else args.epochs):
             order = torch.randperm(total, generator=generator)
+            active = value_opt if warming else opt
+            active.zero_grad(set_to_none=True)
+            chunks = max((total + size - 1) // size, 1)
             for start in range(0, total, size):
                 idx = order[start : start + size]
                 logits, value = net(x[idx])
@@ -444,11 +486,12 @@ def main() -> None:
                         ).sum(-1)
                         loss = loss + args.kl_coef * kl.mean()
 
-                active = value_opt if warming else opt
-                active.zero_grad(set_to_none=True)
-                loss.backward()
-                nn.utils.clip_grad_norm_(net.parameters(), 0.5)
-                active.step()
+                # Scaled so the accumulated gradient is the full-batch mean, then
+                # one step per pass: the chunking is a memory device, not a schedule.
+                (loss / chunks).backward()
+
+            nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+            active.step()
 
         n = max(tally.get("n", 1), 1)
         print(
