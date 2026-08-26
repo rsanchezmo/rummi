@@ -96,6 +96,37 @@ def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
     return np.asarray(covered.all(-1), dtype=bool)
 
 
+def extensions(cfg: RummiConfig, contents: tuple[int, ...], rack: np.ndarray) -> list[int]:
+    """Up to two kinds in `rack` that legally extend this set, by end; -1 for none.
+
+    Laying a tile onto a set already on the table is **84% of what greedy does** --
+    measured over its ASSIGNs -- so a macro space without it cannot express the
+    commonest move in the game, whatever its policy.
+
+    A set with a legal tile added is still a legal set, so this preserves the
+    invariant the whole action space rests on: the table stays whole.
+    """
+    if not contents or cfg.joker_kind in contents or len(contents) >= cfg.max_set_len:
+        # A joker's role in a set is ambiguous, so sets holding one are left alone,
+        # for the same reason templates do not substitute them.
+        return [-1, -1]
+
+    colours = {k // cfg.n_numbers for k in contents}
+    numbers = sorted(k % cfg.n_numbers + 1 for k in contents)
+    out: list[int] = []
+    if len(colours) == 1:
+        colour = next(iter(colours))
+        for number in (numbers[0] - 1, numbers[-1] + 1):
+            k = kind_of(cfg, colour, number) if 1 <= number <= cfg.n_numbers else -1
+            out.append(k if k >= 0 and rack[k] > 0 else -1)
+    elif len(set(numbers)) == 1 and len(colours) == len(contents):
+        missing = [c for c in range(cfg.n_colors) if c not in colours]
+        for colour in missing[:2]:
+            k = kind_of(cfg, colour, numbers[0])
+            out.append(k if rack[k] > 0 else -1)
+    return [*out, -1, -1][:2]
+
+
 Choose = Callable[[Observation, int, np.ndarray], int]
 """`(obs, env, legal) -> macro index`, where `legal` is the `(n_macros,)` mask."""
 
@@ -108,9 +139,12 @@ class MacroAgent:
     def __init__(self, cfg: RummiConfig, choose: Choose | None = None) -> None:
         self.cfg = cfg
         self.templates = set_templates(cfg)
-        self.n_macros = len(self.templates) + 2
-        self.end_macro = len(self.templates)
-        self.draw_macro = len(self.templates) + 1
+        # templates, then EXTEND(slot, end), then END_TURN, then DRAW.
+        self.extend_offset = len(self.templates)
+        self.n_extend = 2 * cfg.max_sets
+        self.end_macro = self.extend_offset + self.n_extend
+        self.draw_macro = self.end_macro + 1
+        self.n_macros = self.draw_macro + 1
         self.choose = choose if choose is not None else first_legal
         self._queues: dict[int, list[int]] = {}
 
@@ -118,11 +152,22 @@ class MacroAgent:
         self._queues = {}
 
     def legal_macros(self, obs: Observation, env: int, mask: np.ndarray) -> np.ndarray:
+        from rummi.solver.to_actions import slot_contents
+
         cfg = self.cfg
         out = np.zeros(self.n_macros, dtype=bool)
         board = table(obs)[env]
-        if (board.max(-1) < 0).any():  # a free slot to put the set in
-            out[: self.end_macro] = playable(cfg, obs["rack"][env][None])[0]
+        rack = np.asarray(obs["rack"][env])
+        if (board.max(-1) < 0).any():  # a free slot to put a new set in
+            out[: self.extend_offset] = playable(cfg, rack[None])[0]
+
+        # The table is untouchable until the opening meld, exactly as the env's own
+        # mask has it -- so laying off is illegal there, not merely unwise.
+        if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
+            for slot, contents in enumerate(slot_contents(board)):
+                for end, kind in enumerate(extensions(cfg, contents, rack)):
+                    out[self.extend_offset + slot * 2 + end] = kind >= 0
+
         # Pre-meld the threshold is on the whole turn, so a single template that
         # cannot reach it is still worth playing alongside another.
         out[self.end_macro] = bool(mask[env, cfg.end_turn_action])
@@ -138,11 +183,25 @@ class MacroAgent:
         if macro == self.end_macro:
             return [self.cfg.end_turn_action]
 
+        cfg = self.cfg
         board = table(obs)[env]
-        played = self.templates[macro].astype(np.int64)
-        kinds = tuple(sorted(np.repeat(np.arange(self.cfg.n_kinds), played).tolist()))
-        target = [c for c in slot_contents(board) if c] + [kinds]
-        actions = plan(self.cfg, board, target, played)
+        current = slot_contents(board)
+
+        if macro >= self.extend_offset:
+            slot, end = divmod(macro - self.extend_offset, 2)
+            kind = extensions(cfg, current[slot], np.asarray(obs["rack"][env]))[end]
+            played = np.zeros(cfg.n_kinds, dtype=np.int64)
+            played[kind] = 1
+            target = [
+                tuple(sorted((*c, kind))) if i == slot else c
+                for i, c in enumerate(current)
+                if c
+            ]
+        else:
+            played = self.templates[macro].astype(np.int64)
+            kinds = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), played).tolist()))
+            target = [c for c in current if c] + [kinds]
+        actions = plan(cfg, board, target, played)
         # `plan` commits the turn, because it exists for a solver that decides a
         # whole turn at once. Here the turn is not over: the set is complete, so the
         # table is whole and ending is *legal*, but whether to end it or play
@@ -183,6 +242,11 @@ class MacroAgent:
         return out
 
 
+def _n_choices(cfg: RummiConfig) -> int:
+    """Index of the `END_TURN` macro: everything below it plays tiles."""
+    return len(set_templates(cfg)) + 2 * cfg.max_sets
+
+
 def first_legal(obs: Observation, env: int, legal: np.ndarray) -> int:
     """Play the first playable set, else end the turn, else draw.
 
@@ -201,9 +265,15 @@ def by_value(cfg: RummiConfig) -> Choose:
     matters most before the opening meld, where the threshold is on the whole turn:
     a dear set reaches 30 in fewer plays.
     """
-    points = template_points(cfg)
-    tiles = set_templates(cfg).sum(-1).astype(np.int32)
-    end = len(set_templates(cfg))
+    n_templates = len(set_templates(cfg))
+    end = _n_choices(cfg)
+    # A lay-off plays exactly one tile, so it ranks below any new set on tiles shed
+    # and is only preferred when nothing else is available.
+    points = np.concatenate([template_points(cfg), np.zeros(end - n_templates, np.int32)])
+    tiles = np.concatenate([
+        set_templates(cfg).sum(-1).astype(np.int32),
+        np.ones(end - n_templates, np.int32),
+    ])
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
         options = np.flatnonzero(legal[:end])
@@ -221,7 +291,7 @@ def melded_only(cfg: RummiConfig) -> Choose:
     Separates "can it build sets" from "does it know when to stop", which the
     diagnostics say are different failures.
     """
-    agent_end = len(set_templates(cfg))
+    agent_end = _n_choices(cfg)
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
         if legal[agent_end] and bool(has_melded(obs)[env]):

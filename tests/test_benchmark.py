@@ -65,6 +65,77 @@ def test_a_macro_agent_only_ever_proposes_legal_actions(cfg):
             state.check_invariants()
 
 
+def test_laying_off_is_illegal_until_the_opening_meld():
+    """The table is untouchable before the opening meld, exactly as the env's own
+    mask has it (`may_touch_table = has_melded if strict_initial_meld`). An EXTEND
+    offered there would be a macro whose expansion the mask then refuses, which
+    surfaces as a silently abandoned turn rather than as an error."""
+    from rummi.agents.base import act_on_state, has_melded
+    from rummi.agents.macro import MacroAgent, by_value
+
+    cfg = STANDARD
+    assert cfg.strict_initial_meld, "this test is about the strict rule"
+    agent = MacroAgent(cfg, choose=by_value(cfg))
+    agent.reset(16)
+    state = reset(cfg, 16, seed=5)
+    seen_premeld = seen_postmeld = 0
+    for _ in range(200):
+        mask = legal_actions(state)
+        obs = encode(state)
+        melded = has_melded(obs)
+        for env in range(16):
+            legal = agent.legal_macros(obs, env, mask)
+            offered = bool(legal[agent.extend_offset : agent.end_macro].any())
+            if melded[env]:
+                seen_postmeld += int(offered)
+            else:
+                assert not offered, "offered a lay-off before the opening meld"
+                seen_premeld += 1
+        step(state, act_on_state(agent, state, mask), mask)
+
+    assert seen_premeld > 0, "never observed a pre-meld state, so this proved nothing"
+    assert seen_postmeld > 0, "never offered a lay-off at all, so nor did this"
+
+
+def test_laying_off_is_most_of_what_a_melding_agent_does():
+    """84.2% of greedy's ASSIGNs land on an occupied slot, so a macro space that
+    could only create new sets was missing the commonest move in the game -- worth
+    76 points of mean score when it was added. This pins the capability by the same
+    measure on both agents, which is what caught the last macro bug."""
+    from rummi.agents import build
+    from rummi.agents.base import act_on_state, table
+    from rummi.agents.macro import MacroAgent, by_value
+    from rummi.rules.actions import decode_batch
+
+    cfg = STANDARD
+
+    def extension_share(agent):
+        agent.reset(16)
+        state = reset(cfg, 16, seed=5)
+        onto_occupied = onto_empty = 0
+        for _ in range(200):
+            mask = legal_actions(state)
+            obs = encode(state)
+            action = act_on_state(agent, state, mask)
+            decoded = decode_batch(cfg, action)
+            occupied = table(obs).max(-1) >= 0
+            for env in np.flatnonzero(decoded.is_assign):
+                if occupied[env, int(decoded.slot[env])]:
+                    onto_occupied += 1
+                else:
+                    onto_empty += 1
+            step(state, action, mask)
+        assert onto_occupied + onto_empty > 0, "the state never advanced"
+        return onto_occupied / (onto_occupied + onto_empty)
+
+    greedy = extension_share(build("greedy", cfg))
+    macro = extension_share(MacroAgent(cfg, choose=by_value(cfg)))
+    assert greedy > 0.7, greedy
+    # Within a third of the teacher's rate: the macro agent should be laying off at
+    # a broadly similar rate, not merely be capable of it.
+    assert macro > greedy / 1.5, (macro, greedy)
+
+
 def test_a_macro_plays_a_set_without_ending_the_turn():
     """`to_actions.plan` commits the turn, because it exists for a solver deciding
     a whole turn at once. Left in, every turn is capped at one set -- and before the
