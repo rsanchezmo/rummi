@@ -7,10 +7,11 @@ and every action leaves the table whole, so the half-built invalid workbench tha
 defeated the primitive-action learner is unreachable rather than penalised.
 
 What that buys, measured before any learning: turns are bounded at 7 micro-actions
-against the primitive policy's 71, and a hand-written `by_value` ordering scores
-**-143** where the best cloned-then-PPO'd primitive policy scored -230. So the
-decision this trains is the one that matters: `first_legal` melds in 29.6% of steps
-and `by_value` in 78.5%, from nothing but *which* set to play.
+against the primitive policy's 71, and the hand-written orderings score **-141**
+(`by_value`) and **-147** (`first_legal`) where the best cloned-then-PPO'd
+primitive policy scored -230. Those two being so close is the point: *which* set to
+play is worth ~6 points, so what this trains is mostly when to keep playing, when
+to end the turn, and when not to start.
 
 Trained with the same bootstrapped actor-critic over decision transitions as
 `train_delegate.py`, for the reason recorded there: handing every decision in an
@@ -22,6 +23,7 @@ than per turn, so an episode yields several times more of them.
 from __future__ import annotations
 
 import argparse
+import copy
 import dataclasses
 import pathlib
 import time
@@ -59,6 +61,92 @@ class MacroNet(nn.Module):
         return self.pi(h), self.v(h).squeeze(-1)
 
 
+def gather(
+    net: MacroNet, cfg: RummiConfig, env, teacher, samples: int, beta: float, generator
+) -> dict:
+    """States, and the macro the teacher would pick in each.
+
+    `beta` is the chance the *teacher* drives; below 1 the student steers and the
+    labels land on states the student actually reaches. The poisoned half-built
+    table that made this worthless on the primitive action space cannot occur here,
+    because every macro leaves the table whole.
+    """
+    obs, info = env.reset()
+    xs: list[np.ndarray] = []
+    legals: list[np.ndarray] = []
+    ys: list[int] = []
+    agreed = 0
+
+    def choose(o, e: int, legal: np.ndarray) -> int:
+        label = teacher(o, e, legal)
+        x = np.concatenate(
+            [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
+        ).astype(np.float32) / feature_scale(cfg)
+        xs.append(x)
+        legals.append(legal.copy())
+        ys.append(label)
+        if float(torch.rand(1, generator=generator)) < beta:
+            return label
+        with torch.no_grad():
+            logits, _ = net(torch.as_tensor(x)[None])
+        logits = torch.where(
+            torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
+        )
+        return int(logits[0].argmax())
+
+    agent = MacroAgent(cfg, choose=choose)
+    agent.reset(env.num_envs)
+    while len(xs) < samples:
+        obs, _, _, _, info = env.step(agent.act(obs, np.asarray(info["action_mask"])))
+
+    # Agreement on whatever states these are: the number to watch when beta is 0.
+    with torch.no_grad():
+        x = torch.as_tensor(np.stack(xs))
+        legal = torch.as_tensor(np.stack(legals))
+        logits, _ = net(x)
+        logits = torch.where(legal, logits, torch.full_like(logits, MASKED))
+        agreed = int((logits.argmax(-1) == torch.as_tensor(np.asarray(ys))).sum())
+    return {
+        "x": x,
+        "legal": legal,
+        "y": torch.as_tensor(np.asarray(ys)),
+        "agreement": agreed / len(ys),
+    }
+
+
+def fit(net: MacroNet, data: dict, epochs: int, lr: float, generator) -> None:
+    """Cross-entropy on the masked logits, policy head only.
+
+    The critic is deliberately left alone: fitting it through the shared trunk
+    moves the policy, which `train_ppo.py` measured as catastrophic. `--value-warmup`
+    is where it gets fitted, on its own.
+    """
+    opt = torch.optim.Adam(net.parameters(), lr=lr)
+    n = len(data["y"])
+    for epoch in range(1, epochs + 1):
+        order = torch.randperm(n, generator=generator)
+        total = 0.0
+        for start in range(0, n, 4096):
+            idx = order[start : start + 4096]
+            logits, _ = net(data["x"][idx])
+            logits = torch.where(
+                data["legal"][idx], logits, torch.full_like(logits, MASKED)
+            )
+            loss = nn.functional.cross_entropy(logits, data["y"][idx])
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+            opt.step()
+            total += float(loss) * len(idx)
+        with torch.no_grad():
+            logits, _ = net(data["x"])
+            logits = torch.where(data["legal"], logits, torch.full_like(logits, MASKED))
+            acc = float((logits.argmax(-1) == data["y"]).float().mean())
+        if epoch % max(epochs // 5, 1) == 0 or epoch == epochs:
+            print(f"  clone epoch {epoch:>3}/{epochs}  nll {total / n:.4f}  "
+                  f"agrees {acc:.1%}", flush=True)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default="standard", choices=sorted(CONFIG_BY_NAME))
@@ -70,6 +158,28 @@ def main() -> None:
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--entropy-coef", type=float, default=0.01)
+    p.add_argument(
+        "--clone", default=None, choices=["by_value", "first_legal"],
+        help="imitate this heuristic before RL. by_value scores -143 on its own, "
+             "and RL from scratch here stalls before the opening meld",
+    )
+    p.add_argument("--clone-states", type=int, default=100_000)
+    p.add_argument("--clone-epochs", type=int, default=20)
+    p.add_argument(
+        "--clone-rounds", type=int, default=1,
+        help="1 is plain behaviour cloning; more aggregates DAgger rounds with the "
+             "student steering, which is cheap because the teacher is deterministic",
+    )
+    p.add_argument(
+        "--kl-coef", type=float, default=0.0,
+        help="anchor RL to the cloned policy. Unanchored, it walks straight back "
+             "off what cloning bought -- measured, on the primitive action space",
+    )
+    p.add_argument(
+        "--value-warmup", type=int, default=0,
+        help="updates fitting the critic alone before the policy may move. Cloning "
+             "trains the policy head only, so the critic starts at init",
+    )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eval-games", type=int, default=0)
     p.add_argument("--out", type=pathlib.Path, default=None)
@@ -89,6 +199,45 @@ def main() -> None:
         num_envs=args.envs, cfg=cfg, seed=args.seed, opponent=args.opponent
     )
     obs, info = env.reset()
+
+    teachers = {"by_value": by_value(cfg), "first_legal": first_legal}
+    if args.clone:
+        per_round = max(args.clone_states // args.clone_rounds, 1)
+        pool: dict | None = None
+        for r in range(args.clone_rounds):
+            # beta 1 -> 0: pure teacher first, pure student last. Aggregated, not
+            # replaced, or each round forgets what the last one fixed.
+            beta = 1.0 if args.clone_rounds == 1 else max(0.0, 1.0 - r / (args.clone_rounds - 1))
+            fresh = gather(
+                net, cfg, env, teachers[args.clone], per_round, beta, generator
+            )
+            print(
+                f"  round {r}  beta {beta:.2f}  {len(fresh['y']):,} states  "
+                f"agreement {fresh['agreement']:>6.1%}",
+                flush=True,
+            )
+            pool = fresh if pool is None else {
+                "x": torch.cat([pool["x"], fresh["x"]]),
+                "legal": torch.cat([pool["legal"], fresh["legal"]]),
+                "y": torch.cat([pool["y"], fresh["y"]]),
+                "agreement": fresh["agreement"],
+            }
+            assert pool is not None
+            fit(net, pool, args.clone_epochs, args.lr, generator)
+        obs, info = env.reset()
+        agent_reset_needed = True
+    else:
+        agent_reset_needed = False
+
+    reference = None
+    if args.kl_coef:
+        reference = copy.deepcopy(net).eval()
+        for parameter in reference.parameters():
+            parameter.requires_grad_(False)
+        print(f"anchoring to the cloned policy, kl_coef={args.kl_coef}", flush=True)
+
+    # The critic is at init after cloning, so its advantages are noise until fitted.
+    value_opt = torch.optim.Adam(net.v.parameters(), lr=args.lr)
 
     open_choice: list[tuple[np.ndarray, np.ndarray, int] | None] = [None] * args.envs
     accrued = np.zeros(args.envs, dtype=np.float32)
@@ -122,6 +271,8 @@ def main() -> None:
 
     agent = MacroAgent(cfg, choose=choose)
     agent.reset(args.envs)
+    if agent_reset_needed:
+        open_choice[:] = [None] * args.envs
     print(
         f"config={args.config} opponent={args.opponent} macros={n_macros} "
         f"params={sum(q.numel() for q in net.parameters()):,}",
@@ -161,6 +312,7 @@ def main() -> None:
         nxt = torch.as_tensor(np.stack([s[4] for s in steps]))
         terminal = torch.as_tensor(np.asarray([s[5] for s in steps], dtype=np.float32))
 
+        warming = update <= args.value_warmup
         logits, value = net(x)
         logits = torch.where(legal, logits, torch.full_like(logits, MASKED))
         with torch.no_grad():
@@ -171,17 +323,32 @@ def main() -> None:
         advantage = target - value.detach()
         advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         entropy = -(logp_all.exp() * logp_all).sum(-1).mean()
-        loss = -(logp * advantage).mean() + 0.5 * (value - target).pow(2).mean()
-        loss = loss - args.entropy_coef * entropy
+        if warming:
+            # The value head *alone*: fitting the critic through the shared trunk
+            # moves the policy, which is the opposite of a warmup.
+            loss = (value - target).pow(2).mean()
+        else:
+            loss = -(logp * advantage).mean() + 0.5 * (value - target).pow(2).mean()
+            loss = loss - args.entropy_coef * entropy
+            if reference is not None:
+                with torch.no_grad():
+                    ref_logits, _ = reference(x)
+                    ref_logits = torch.where(
+                        legal, ref_logits, torch.full_like(ref_logits, MASKED)
+                    )
+                kl = (logp_all.exp() * (logp_all - torch.log_softmax(ref_logits, -1))).sum(-1)
+                loss = loss + args.kl_coef * kl.mean()
 
-        opt.zero_grad(set_to_none=True)
+        active = value_opt if warming else opt
+        active.zero_grad(set_to_none=True)
         loss.backward()
         nn.utils.clip_grad_norm_(net.parameters(), 0.5)
-        opt.step()
+        active.step()
 
         n = max(tally.get("n", 1), 1)
         print(
-            f"update {update:>4}  episodes {finished:>4}  decisions {len(steps):>6,}  "
+            f"update {update:>4}{' warm' if warming else ''}  episodes {finished:>4}  "
+            f"decisions {len(steps):>6,}  "
             f"end {tally.get('end', 0) / n:>5.1%}  draw {tally.get('draw', 0) / n:>5.1%}  "
             f"terminal {r[terminal > 0].mean().item():>+7.3f}  H {entropy.item():>5.3f}  "
             f"{len(steps) / (time.perf_counter() - started):>5.0f} dec/s",

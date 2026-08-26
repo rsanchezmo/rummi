@@ -65,31 +65,50 @@ def test_a_macro_agent_only_ever_proposes_legal_actions(cfg):
             state.check_invariants()
 
 
-def test_choosing_which_set_to_play_is_what_the_macro_space_is_for():
-    """`first_legal` takes the cheapest set, so before the opening meld it plays
-    small and reverts; `by_value` takes the dearest. That one change is worth
-    melding 33% of steps against 57% at this probe size (29.6% against 78.5% over
-    32 envs and 400 steps) -- so a macro space whose policy could not tell the two
-    apart would not be exposing the decision it exists for.
-
-    The bound is deliberately loose: the gap grows with the sample, so pinning the
-    measured ratio here would make the test a tripwire for probe size."""
+def test_a_macro_plays_a_set_without_ending_the_turn():
+    """`to_actions.plan` commits the turn, because it exists for a solver deciding
+    a whole turn at once. Left in, every turn is capped at one set -- and before the
+    opening meld that means finding 30 points in a *single* set. It cost
+    `first_legal` 130 points of mean score and left the END_TURN macro unreachable
+    (chosen 0% of the time) until it was caught, so this pins all three halves of
+    the property: no expansion ends the turn, ending is a choice the agent actually
+    makes, and a turn can hold more than one set."""
     from rummi.agents.base import act_on_state
-    from rummi.agents.macro import MacroAgent, by_value, first_legal
-    from rummi.env.observation import encode
+    from rummi.agents.macro import MacroAgent, by_value, set_templates
 
-    melded = {}
-    for label, choose in (("first_legal", first_legal), ("by_value", by_value(STANDARD))):
-        agent = MacroAgent(STANDARD, choose=choose)
-        agent.reset(16)
-        state = reset(STANDARD, 16, seed=5)
-        seen = 0.0
-        for _ in range(200):
-            mask = legal_actions(state)
-            seen += float(encode(state)["melded"][:, 0].mean()) / 200
-            step(state, act_on_state(agent, state, mask), mask)
-        melded[label] = seen
-    assert melded["by_value"] > 1.4 * melded["first_legal"], melded
+    cfg = STANDARD
+    n_templates = len(set_templates(cfg))
+    chose_end = 0
+    sets_in_turn: list[int] = []
+    running = np.zeros(16, dtype=int)
+
+    def choose(obs, env, legal):
+        nonlocal chose_end
+        macro = by_value(cfg)(obs, env, legal)
+        if macro < n_templates:
+            running[env] += 1
+        else:
+            chose_end += int(macro == n_templates)
+            sets_in_turn.append(int(running[env]))
+            running[env] = 0
+        return macro
+
+    agent = MacroAgent(cfg, choose=choose)
+    agent.reset(16)
+    state = reset(cfg, 16, seed=5)
+    for _ in range(300):
+        mask = legal_actions(state)
+        step(state, act_on_state(agent, state, mask), mask)
+
+    # No expansion of a set may commit the turn.
+    obs = encode(state)
+    for env in range(16):
+        legal = agent.legal_macros(obs, env, legal_actions(state))
+        for macro in np.flatnonzero(legal[:n_templates])[:3]:
+            assert cfg.end_turn_action not in agent.expand(obs, env, int(macro))
+
+    assert chose_end > 0, "END_TURN was never chosen, so the macro is unreachable"
+    assert max(sets_in_turn) > 1, f"no turn played more than one set: {set(sets_in_turn)}"
 
 
 def test_delegating_with_always_play_is_exactly_its_inner_agent():

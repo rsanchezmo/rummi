@@ -10,8 +10,9 @@ table in 0.7% of its steps against greedy's 14.4%.
 
 Every action here leaves the table **whole**, so those states are unreachable
 rather than merely discouraged. Decisions happen whenever the workbench is empty,
-which is once per set played rather than once per turn, so multi-set turns stay
-expressible and `END_TURN` is a real choice.
+which is once per set played rather than once per turn: `END_TURN` is a choice
+alongside playing another set, and a turn may hold several. `expand` drops the
+`END_TURN` that `to_actions.plan` appends for exactly that reason.
 
 **No rules change.** The 2400-action space, `SPEC.md`, the golden fixtures and
 `PROTOCOL_VERSION` are all untouched: an agent may offer itself macro actions and
@@ -141,7 +142,15 @@ class MacroAgent:
         played = self.templates[macro].astype(np.int64)
         kinds = tuple(sorted(np.repeat(np.arange(self.cfg.n_kinds), played).tolist()))
         target = [c for c in slot_contents(board) if c] + [kinds]
-        return plan(self.cfg, board, target, played)
+        actions = plan(self.cfg, board, target, played)
+        # `plan` commits the turn, because it exists for a solver that decides a
+        # whole turn at once. Here the turn is not over: the set is complete, so the
+        # table is whole and ending is *legal*, but whether to end it or play
+        # another set is the next decision. Leaving this in caps every turn at one
+        # set, which before the opening meld means finding 30 points in a single one.
+        if actions and actions[-1] == self.cfg.end_turn_action:
+            actions.pop()
+        return actions
 
     def act(
         self, obs: Observation, mask: np.ndarray, active: np.ndarray | None = None
@@ -177,8 +186,10 @@ class MacroAgent:
 def first_legal(obs: Observation, env: int, legal: np.ndarray) -> int:
     """Play the first playable set, else end the turn, else draw.
 
-    A deterministic stand-in for a learned policy, and a floor to beat: it never
-    chooses *which* set, which is the decision the whole action space exists for.
+    A deterministic stand-in for a learned policy, and the floor to beat. It never
+    chooses *which* set, and measured against `by_value` that is worth surprisingly
+    little -- -147.4 against -141.5 -- because a turn may play several sets, so a
+    cheap first pick is recoverable.
     """
     return int(np.flatnonzero(legal)[0])
 
@@ -186,9 +197,9 @@ def first_legal(obs: Observation, env: int, legal: np.ndarray) -> int:
 def by_value(cfg: RummiConfig) -> Choose:
     """Highest-scoring set first before the opening meld, most tiles after.
 
-    The floor that `first_legal` should be measured against, and the reason it is
-    worth having: playing the cheapest legal set before melding is how a policy
-    reverts every turn without ever reaching the threshold.
+    Worth about 6 points of mean score over `first_legal`, measured. The ordering
+    matters most before the opening meld, where the threshold is on the whole turn:
+    a dear set reaches 30 in fewer plays.
     """
     points = template_points(cfg)
     tiles = set_templates(cfg).sum(-1).astype(np.int32)
