@@ -65,6 +65,44 @@ def test_a_macro_agent_only_ever_proposes_legal_actions(cfg):
             state.check_invariants()
 
 
+def test_the_hybrid_space_contains_the_macro_agent_exactly():
+    """The hybrid space is a strict superset, and that has to be exact: if
+    `macro_first` did not reproduce the macro agent action for action, a difference
+    in training could come from the wrapper rather than from the added primitives.
+
+    It also pins the rule that makes the two blocks safe to mix -- a macro's
+    expansion balances the board against tiles played from the rack, so it is
+    offered only when nothing is held mid-turn."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.hybrid import HybridAgent, macro_first
+    from rummi.agents.macro import MacroAgent, by_value
+
+    cfg = STANDARD
+    hybrid = HybridAgent(cfg, choose=macro_first(cfg))
+    macro = MacroAgent(cfg, choose=by_value(cfg))
+    hybrid.reset(12)
+    macro.reset(12)
+    left, right = reset(cfg, 12, seed=5), reset(cfg, 12, seed=5)
+    dirty_seen = 0
+    for _ in range(200):
+        l_mask, r_mask = legal_actions(left), legal_actions(right)
+        # Once each: `act` pops the agent's queued plan, so calling it twice would
+        # advance the macro agent an extra step per iteration.
+        l_act = act_on_state(hybrid, left, l_mask)
+        r_act = act_on_state(macro, right, r_mask)
+        np.testing.assert_array_equal(l_act, r_act)
+
+        obs = encode(left)
+        for env in range(12):
+            offered = hybrid.legal(obs, env, l_mask)[hybrid.macro_offset :].any()
+            if np.asarray(obs["workbench"])[env].sum() > 0:
+                dirty_seen += 1
+                assert not offered, "offered a macro with tiles held mid-turn"
+        step(left, l_act, l_mask)
+        step(right, r_act, r_mask)
+    assert dirty_seen > 0, "never saw a mid-turn state, so the rule was not exercised"
+
+
 def test_a_tile_may_only_leave_a_set_that_survives_losing_it():
     """`removals` is the whole of what `rearrange` does, and getting it wrong would
     put an invalid set on the table. A run gives up either end while it stays
