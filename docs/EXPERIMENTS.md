@@ -144,10 +144,45 @@ the rack.
 | `standard-4p` | 4 | `greedy` | 37.5% | 25.0% | +26.13 |
 
 It generalises across seat counts, is crushed by `optimal`, and is **worse than
-`greedy` on `tiny`** — where the table holds 4 slots against 35, and both
-slot-consuming macros gate on a free slot while `greedy`'s `ASSIGN` never needs a
-spare. That last row is un-diagnosed, and it is why a claim from one suite should not
-be stated as a claim about the agent.
+`greedy` on `tiny`** — which is why a claim from one suite should not be stated as a
+claim about the agent.
+
+## The `tiny` regression, diagnosed — and the joker gap it exposed
+
+The first hypothesis for that row — slot scarcity, 4 table slots against 35 with
+both slot-consuming macros gating on a free one — is **refuted, measured**: over
+48,224 decisions of `macro/by_value` on `tiny_groups` and 30,506 on `standard`
+(`python tools/diagnose_stuck.py`), the free-slot gate never fired once. No
+tile-feasible macro was ever blocked only by slots, on either config.
+
+What the same sweep found instead, at the decisions where only `DRAW` was legal:
+
+| | `tiny_groups` | `standard` |
+|---|---|---|
+| stuck (only `DRAW` available) | 75.0% of decisions | 67.2% |
+| stuck, but `greedy` would act | **7.4%** of stuck states | **28.5%** |
+| — append onto a joker-holding set | 6.9% | 27.7% |
+| — lay off the rack's own joker | 0.5% | 0.9% |
+| — plain append / new set (consistency check) | 0.0% | 0.0% |
+| `EXTEND` + `STEAL` share of choices | 4.1% | 23.5% |
+
+Two findings, one per config:
+
+- **The macro space cannot touch a joker once it lands.** `extensions` and
+  `removals` refuse joker-holding sets because the joker's role in them is
+  ambiguous, and a rack joker can be spent only inside a new template. On
+  `standard` that accounts for **every** stuck state where `greedy` still plays —
+  28.5% of them — making it the largest unexpressed capability since `STEAL`.
+  `greedy`'s own `_appendable` shows the shape of a fix: it validates a grown set
+  through `evaluate_slots` instead of by arithmetic, which resolves the ambiguity
+  the same way the env itself does.
+- **`tiny`'s regression is geometry, not slots.** With 3 colors a group is complete
+  at birth — nothing to extend, nothing to steal — and the 13-tile single-copy deck
+  makes runs rare, so `EXTEND`+`STEAL` fall from 23.5% of choices to 4.1%. The two
+  capabilities the arc above credits with ~119 points are simply absent from the
+  config, and what remains is close to the "new sets + jokers" rung, which that
+  same arc measured at **-18 against `greedy`**. The residual deficit candidate is
+  the joker gap above (7.4% of stuck states), not slots.
 
 ## Method notes that earned their place
 

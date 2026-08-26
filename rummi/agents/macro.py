@@ -1,4 +1,4 @@
-"""One decision per *set*, not per tile: play a complete set, end the turn, or draw.
+"""One decision per *move*, not per tile: play a set, lay off, steal, end, or draw.
 
 This exists because of what the primitive action space does to a learner, measured
 on the standard config: `PLACE` moves a tile rack -> workbench and `END_TURN`
@@ -26,10 +26,12 @@ achievable *turns* is the NP-hard partition problem, but enumerating the sets th
 exist at all is a fixed list -- 264 runs and 65 groups on the standard config --
 and asking which of them the rack can cover is one matrix comparison.
 
-Jokers are not substituted: a template is playable only when the rack holds its
-exact tiles. Standing in a joker for a missing tile means the set that lands on the
-table differs from the template, which the expansion would have to represent, so
-it is a later extension rather than a silent approximation.
+A joker stands in for at most **one** missing tile of a template. Two would be
+legal Rummikub and are refused, because with two gaps the pairing of jokers to gaps
+stops being determined and `expand` would have to choose. Sets already on the table
+holding a joker are refused by `EXTEND` and `STEAL` for the same ambiguity -- the
+joker's role in them is not represented -- which `tools/diagnose_stuck.py` measures
+as the largest move greedy can express and this space cannot.
 """
 
 from __future__ import annotations
