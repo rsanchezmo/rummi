@@ -32,6 +32,14 @@ recorded in `train_delegate.py`: handing every decision in an episode that
 episode's outcome is unbiased but teaches only a global bias, and situational play
 needs per-decision credit. Decisions are per *set* here rather than per turn, so an
 episode yields several times more of them.
+
+**`--opponent` is a pool, and `self` is one of its members.** Against a single
+fixed opponent the terminal reward saturates once the policy beats it, and the
+gradient thins out; `--opponent greedy,rearrange` mixes the batch, and `self` seats
+a frozen copy of the learner refreshed every `--snapshot-every` updates. Frozen and
+*lagging* on purpose: an opponent that is the learner itself is a target moving in
+step with the policy chasing it. `--init-from` warm-starts from a run against a
+weaker opponent, which is the other half of the same curriculum.
 """
 
 from __future__ import annotations
@@ -39,6 +47,7 @@ from __future__ import annotations
 import argparse
 import copy
 import dataclasses
+import json
 import pathlib
 import time
 
@@ -46,6 +55,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from rummi.agents.base import Agent
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 from rummi.agents.learned.torch_net import MASKED
 from rummi.agents.hybrid import (
@@ -56,6 +66,7 @@ from rummi.agents.hybrid import (
 )
 from rummi.agents.hybrid import n_actions as n_hybrid_actions
 from rummi.agents.macro import (
+    Choose,
     MacroAgent,
     action_features,
     by_value,
@@ -65,6 +76,14 @@ from rummi.agents.macro import (
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
+
+OPPONENTS = ("greedy", "rearrange", "optimal", "self")
+"""What `--opponent` accepts, comma separated. `self` is a frozen snapshot of the
+learner; the rest are bundled agents."""
+
+HIDDEN, HEAD = 256, "flat"
+"""Defaults for the architecture flags, which parse to None so that a flag passed
+alongside `--init-from` can be told apart from one left alone."""
 
 
 class MacroNet(nn.Module):
@@ -200,6 +219,47 @@ def fit(net: MacroNet, data: dict, epochs: int, lr: float, generator) -> None:
                   f"agrees {acc:.1%}", flush=True)
 
 
+def restore(
+    path: pathlib.Path, config: str, space: str, macros: int,
+    hidden: int | None, head: str | None,
+) -> tuple[dict, int, str]:
+    """A checkpoint from `--out`, with the architecture *it* was saved with.
+
+    The architecture comes from the file, never from the CLI: `--hidden` and
+    `--head` describe tensors that already exist in it, so a flag that disagrees is
+    a mistake to report rather than something to reconcile silently. The head's
+    width is checked against today's layout for the same reason `eval_macro.py`
+    checks it -- a hybrid-space or older-layout checkpoint indexes different actions
+    with the same ids, and `load_state_dict` would accept the ones that happen to
+    match in size.
+    """
+    checkpoint = torch.load(path, weights_only=True)
+    saved_hidden, saved_head = int(checkpoint["hidden"]), str(checkpoint["head"])
+    saved_space = str(checkpoint.get("space", "macro"))
+    for flag, given, saved in (
+        ("--config", config, str(checkpoint["cfg"])),
+        ("--space", space, saved_space),
+        ("--hidden", hidden, saved_hidden),
+        ("--head", head, saved_head),
+    ):
+        if given is not None and given != saved:
+            raise SystemExit(
+                f"{path}: {flag}={given} contradicts the checkpoint's {saved!r}; "
+                f"the architecture comes from the checkpoint, so pass {flag}={saved} "
+                "or leave it off"
+            )
+
+    key = "action_bias" if saved_head == "pointer" else "pi.weight"
+    width = int(checkpoint["state"][key].shape[0])
+    if width != macros:
+        raise SystemExit(
+            f"{path}: {width} actions against {macros} in the current {space} layout "
+            f"for '{config}' -- a checkpoint from a different action space, which "
+            "would load into the wrong rows"
+        )
+    return checkpoint, saved_hidden, saved_head
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default="standard", choices=sorted(CONFIG_BY_NAME))
@@ -208,15 +268,33 @@ def main() -> None:
         help="hybrid adds the 2400 primitives alongside the macros, so any legal "
              "turn is expressible while a safe macro stays on offer",
     )
-    p.add_argument("--opponent", default="greedy", choices=["greedy", "rearrange", "optimal"])
+    p.add_argument(
+        "--opponent", default="greedy",
+        help=f"one of {', '.join(OPPONENTS)}, or a comma-separated pool of them "
+             "('greedy,self'), which each env draws from by round-robin over its "
+             "index. self is a frozen snapshot of the learner",
+    )
+    p.add_argument(
+        "--snapshot-every", type=int, default=25,
+        help="updates between refreshes of the 'self' opponent's frozen weights",
+    )
     p.add_argument("--envs", type=int, default=64)
     p.add_argument("--horizon", type=int, default=256)
     p.add_argument("--updates", type=int, default=200)
-    p.add_argument("--hidden", type=int, default=256)
     p.add_argument(
-        "--head", default="flat", choices=["flat", "pointer"],
+        "--hidden", type=int, default=None, help=f"trunk width (default {HIDDEN})"
+    )
+    p.add_argument(
+        "--head", default=None, choices=["flat", "pointer"],
         help="pointer scores a macro against what it does, so what is learned about "
-             "one set transfers to similar ones; flat gives each its own row",
+             "one set transfers to similar ones; flat (the default) gives each its "
+             "own row",
+    )
+    p.add_argument(
+        "--init-from", type=pathlib.Path, default=None,
+        help="warm-start from a checkpoint saved by --out. Takes its architecture: "
+             "--hidden and --head describe tensors already in the file, so passing "
+             "one that disagrees is an error",
     )
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
@@ -272,7 +350,18 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--eval-games", type=int, default=0)
     p.add_argument("--out", type=pathlib.Path, default=None)
+    p.add_argument(
+        "--log-json", type=pathlib.Path, default=None,
+        help="per-update metrics. Its rates are per *decision*, not the per-step "
+             "end_turn/melded that tools/plot_training.py expects, so its panels do "
+             "not read this file",
+    )
     args = p.parse_args()
+
+    opponents = [name.strip() for name in args.opponent.split(",")]
+    unknown = sorted({name for name in opponents if name not in OPPONENTS})
+    if unknown:
+        p.error(f"unknown opponent(s) {', '.join(unknown)}; choose from {', '.join(OPPONENTS)}")
 
     cfg = dataclasses.replace(
         CONFIG_BY_NAME[args.config],
@@ -284,14 +373,66 @@ def main() -> None:
     scale = feature_scale(cfg)
     hybrid = args.space == "hybrid"
     macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
+    if args.init_from:
+        checkpoint, hidden, head = restore(
+            args.init_from, args.config, args.space, macros, args.hidden, args.head
+        )
+    else:
+        checkpoint = None
+        hidden = HIDDEN if args.hidden is None else args.hidden
+        head = HEAD if args.head is None else args.head
     net = MacroNet(
-        cfg, macros, args.hidden, head=args.head,
+        cfg, macros, hidden, head=head,
         describe=hybrid_action_features(cfg) if hybrid else None,
     )
+    if checkpoint is not None:
+        net.load_state_dict(checkpoint["state"])
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
 
+    def features(o, e: int) -> np.ndarray:
+        row = np.concatenate(
+            [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
+        ).astype(np.float32)
+        return row / scale
+
+    def argmax_choose(model: MacroNet) -> Choose:
+        """Deterministic: a snapshot opponent and a reported score are both meant to
+        be reproducible."""
+        def choose(o, e: int, legal: np.ndarray) -> int:
+            with torch.no_grad():
+                logits, _ = model(torch.as_tensor(features(o, e))[None])
+            logits = torch.where(
+                torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
+            )
+            return int(logits[0].argmax())
+
+        return choose
+
+    snapshot: MacroNet | None = None
+    if "self" in opponents:
+        # A copy of the weights, not a reference to them, refreshed every
+        # --snapshot-every updates. An opponent that lags the learner is a
+        # curriculum; one that *is* the learner is a target moving in step with
+        # whatever is chasing it.
+        snapshot = copy.deepcopy(net).eval()
+        for parameter in snapshot.parameters():
+            parameter.requires_grad_(False)
+
+    def refresh_snapshot() -> None:
+        """In place, so the agents already seated in the env keep working."""
+        if snapshot is not None:
+            snapshot.load_state_dict(net.state_dict())
+
+    def opponent_member(name: str) -> str | Agent:
+        if name != "self":
+            return name
+        assert snapshot is not None
+        choose = argmax_choose(snapshot)
+        return HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
+
     env = FixedOpponentEnv(
-        num_envs=args.envs, cfg=cfg, seed=args.seed, opponent=args.opponent
+        num_envs=args.envs, cfg=cfg, seed=args.seed,
+        opponent=[opponent_member(name) for name in opponents],
     )
     obs, info = env.reset()
 
@@ -326,6 +467,9 @@ def main() -> None:
             fit(net, pool, args.clone_epochs, args.lr, generator)
         obs, info = env.reset()
         agent_reset_needed = True
+        # The self-play opponent starts where the learner does, so it is the cloned
+        # policy it faces at update 1, not the random init the snapshot was taken of.
+        refresh_snapshot()
     else:
         agent_reset_needed = False
 
@@ -350,12 +494,7 @@ def main() -> None:
         tuple[np.ndarray, np.ndarray, int, float, float, np.ndarray, float]
     ] = []
     tally: dict[str, int] = {}
-
-    def features(o, e: int) -> np.ndarray:
-        row = np.concatenate(
-            [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
-        ).astype(np.float32)
-        return row / scale
+    history: list[dict] = []
 
     def choose(o, e: int, legal: np.ndarray) -> int:
         x = features(o, e)
@@ -387,8 +526,10 @@ def main() -> None:
         open_choice[:] = [None] * args.envs
     print(
         f"config={args.config} space={args.space} opponent={args.opponent} "
-        f"actions={macros} head={args.head} micro_cost={args.micro_step_cost} "
-        f"params={sum(q.numel() for q in net.parameters()):,}",
+        f"actions={macros} head={head} micro_cost={args.micro_step_cost} "
+        f"params={sum(q.numel() for q in net.parameters()):,}"
+        + (f" snapshot_every={args.snapshot_every}" if snapshot is not None else "")
+        + (f" init_from={args.init_from}" if args.init_from else ""),
         flush=True,
     )
     started = time.perf_counter()
@@ -495,13 +636,32 @@ def main() -> None:
             active.step()
 
         n = max(tally.get("n", 1), 1)
+        end_rate = tally.get("end", 0) / n
+        draw_rate = tally.get("draw", 0) / n
+        terminal_mean = r[terminal > 0].mean().item()
+        refreshed = snapshot is not None and update % args.snapshot_every == 0
+        if refreshed:
+            refresh_snapshot()
         print(
-            f"update {update:>4}{' warm' if warming else ''}  episodes {finished:>4}  "
-            f"decisions {len(steps):>6,}  "
-            f"end {tally.get('end', 0) / n:>5.1%}  draw {tally.get('draw', 0) / n:>5.1%}  "
-            f"terminal {r[terminal > 0].mean().item():>+7.3f}  H {entropy.item():>5.3f}  "
+            f"update {update:>4}{' warm' if warming else ''}{' snap' if refreshed else ''}  "
+            f"episodes {finished:>4}  decisions {len(steps):>6,}  "
+            f"end {end_rate:>5.1%}  draw {draw_rate:>5.1%}  "
+            f"terminal {terminal_mean:>+7.3f}  H {entropy.item():>5.3f}  "
             f"{len(steps) / (time.perf_counter() - started):>5.0f} dec/s",
             flush=True,
+        )
+        history.append(
+            {
+                "update": update,
+                "episodes": finished,
+                "decisions": len(steps),
+                "end_rate": end_rate,
+                "draw_rate": draw_rate,
+                "terminal": terminal_mean,
+                "entropy": entropy.item(),
+                "warmup": bool(warming),
+                "snapshot_refreshed": bool(refreshed),
+            }
         )
         started = time.perf_counter()
 
@@ -511,30 +671,24 @@ def main() -> None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         torch.save(
             {
-                "cfg": args.config, "hidden": args.hidden, "head": args.head,
+                "cfg": args.config, "space": args.space, "hidden": hidden, "head": head,
                 "state": net.state_dict(),
             },
             args.out,
         )
         print(f"wrote {args.out}")
 
+    scores: list[dict] = []
     if args.eval_games:
-        def greedy_choose(o, e: int, legal: np.ndarray) -> int:
-            with torch.no_grad():
-                logits, _ = net(torch.as_tensor(features(o, e))[None])
-            logits = torch.where(
-                torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
-            )
-            return int(logits[0].argmax())
-
         suite = SUITE_BY_NAME[
             "standard-greedy" if args.config == "standard" else "tiny"
         ]
+        learned = argmax_choose(net)
         baselines = (
-            (("learned", greedy_choose), ("macro_first", macro_first(cfg)))
+            (("learned", learned), ("macro_first", macro_first(cfg)))
             if hybrid
             else (
-                ("learned", greedy_choose),
+                ("learned", learned),
                 ("by_value", by_value(cfg)),
                 ("first_legal", first_legal),
             )
@@ -547,6 +701,37 @@ def main() -> None:
                 f"  {label:12s} win {result.win_rate:>6.1%}  score {result.mean_score:>+8.2f}  "
                 f"illegal {result.illegal_attempts}  n={result.games}"
             )
+            scores.append(
+                {
+                    "label": label, "suite": suite.name, "win_rate": result.win_rate,
+                    "mean_score": result.mean_score,
+                    "illegal_attempts": result.illegal_attempts, "games": result.games,
+                }
+            )
+
+    if args.log_json:
+        args.log_json.parent.mkdir(parents=True, exist_ok=True)
+        args.log_json.write_text(
+            json.dumps(
+                {
+                    "config": args.config,
+                    "space": args.space,
+                    "opponent": args.opponent,
+                    "snapshot_every": args.snapshot_every if snapshot is not None else None,
+                    "init_from": str(args.init_from) if args.init_from else None,
+                    "hidden": hidden,
+                    "head": head,
+                    "clone": args.clone,
+                    "seed": args.seed,
+                    "micro_step_cost": args.micro_step_cost,
+                    "rack_shaping": args.rack_shaping,
+                    "history": history,
+                    "eval": scores,
+                },
+                indent=2,
+            )
+        )
+        print(f"wrote {args.log_json}")
 
 
 if __name__ == "__main__":

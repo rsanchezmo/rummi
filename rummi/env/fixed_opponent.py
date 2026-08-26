@@ -19,28 +19,86 @@ covers the opponents' replies rather than arriving on a step it could not act on
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
 
 from rummi.agents import build
-from rummi.agents.base import Agent, act_by_seat
+from rummi.agents.base import Agent, Observation, act_by_seat
 from rummi.env.observation import encode
 from rummi.env.vector_env import RummiVectorEnv
+
+Opponent = str | Agent
+"""A name from :data:`rummi.agents.REGISTRY`, or an agent already built -- a
+learned one, say, whose weights the caller refreshes between training updates."""
+
+
+class _Pool:
+    """One seat, played by a different agent depending on which env it is.
+
+    :func:`~rummi.agents.base.act_by_seat` dispatches per *seat*, so a batch with
+    mixed opponents needs the per-env split to happen inside a seat: each member is
+    called with ``active`` narrowed to the envs assigned to it, which the ``Agent``
+    protocol already requires it to honour. A member with no env of its own this
+    step is not called at all, so a pool holding ``optimal`` pays for its solves
+    only on its own share of the batch.
+    """
+
+    name = "pool"
+
+    def __init__(
+        self, members: Sequence[Agent], assignment: np.ndarray, draw_action: int
+    ) -> None:
+        self.members = tuple(members)
+        self.assignment = assignment
+        self.draw_action = draw_action
+
+    def reset(self, n_envs: int) -> None:
+        for member in self.members:
+            member.reset(n_envs)
+
+    def act(
+        self, obs: Observation, mask: np.ndarray, active: np.ndarray | None = None
+    ) -> np.ndarray:
+        out = np.full(mask.shape[0], self.draw_action, dtype=np.int64)
+        for index, member in enumerate(self.members):
+            mine = self.assignment == index
+            if active is not None:
+                mine = mine & active
+            if not mine.any():
+                continue
+            out = np.where(mine, np.asarray(member.act(obs, mask, mine)), out)
+        return out
+
+
+def _as_pool(opponent: Opponent | Sequence[Opponent]) -> tuple[Opponent, ...]:
+    """The opponents as a tuple, whether one was passed or several."""
+    if isinstance(opponent, str) or not isinstance(opponent, Sequence):
+        return (opponent,)
+    if not opponent:
+        raise ValueError("the opponent pool is empty; pass a name, an agent, or a list of them")
+    return tuple(opponent)
 
 
 class FixedOpponentEnv(RummiVectorEnv):
     """Seat ``learner_seat`` is yours; every other seat plays ``opponent``.
 
-    ``opponent`` is any name from :data:`rummi.agents.REGISTRY`. Note that
-    ``optimal`` costs a CP-SAT solve per opponent turn per env and cannot batch,
-    which makes it an evaluation opponent rather than a training one.
+    ``opponent`` is a name from :data:`rummi.agents.REGISTRY`, an already-built
+    :class:`~rummi.agents.base.Agent`, or a sequence mixing the two -- a pool, from
+    which each env draws one opponent by round-robin over its index. That is an
+    even, fixed split: a member's share of the batch does not drift, and an env
+    slot's opponent is the same across re-deals, so a metric read per env index
+    means something. Nothing is sampled, so nothing here needs a seed of its own.
+
+    Note that ``optimal`` costs a CP-SAT solve per opponent turn per env and cannot
+    batch, which makes it an evaluation opponent rather than a training one.
     """
 
     def __init__(
         self,
         *args,
-        opponent: str = "greedy",
+        opponent: Opponent | Sequence[Opponent] = "greedy",
         learner_seat: int = 0,
         **kwargs,
     ) -> None:
@@ -59,13 +117,30 @@ class FixedOpponentEnv(RummiVectorEnv):
             )
         self.opponent = opponent
         self.learner_seat = learner_seat
-        # One instance per seat: two seats sharing a PlanningAgent would collide
-        # on its per-env plan keys and consume each other's turns.
+        self.opponent_pool = _as_pool(opponent)
+        self._pool_index = np.arange(self.num_envs) % len(self.opponent_pool)
         self._seats: list[Agent | None] = [
-            None if seat == learner_seat else build(opponent, self.cfg)
+            None if seat == learner_seat else self._seat_agent()
             for seat in range(self.cfg.n_players)
         ]
         self._illegal = 0
+
+    def _seat_agent(self) -> Agent:
+        """The agent for one seat, built fresh so no two seats share per-env memory.
+
+        Two seats sharing a ``PlanningAgent`` would collide on its per-env plan keys
+        and consume each other's turns, which is why a *name* is built again for
+        every seat. An instance the caller handed in cannot be, so it plays every
+        opponent seat: safe because per-env memory is keyed by env and re-planned at
+        each turn boundary, and one env is only ever on one seat at a time.
+        """
+        members = [
+            build(member, self.cfg) if isinstance(member, str) else member
+            for member in self.opponent_pool
+        ]
+        if len(members) == 1:
+            return members[0]
+        return _Pool(members, self._pool_index, self.cfg.draw_action)
 
     def reset(self, *, seed: int | None = None, options: dict[str, Any] | None = None):
         obs, info = super().reset(seed=seed, options=options)
