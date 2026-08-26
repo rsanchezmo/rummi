@@ -1,0 +1,36 @@
+{
+ "protocol": "2.0",
+ "suite": "standard-greedy",
+ "opponent": "greedy",
+ "players": 2,
+ "games": 120,
+ "agents": [
+  {
+   "name": "macro/first_legal",
+   "win_rate": 0.7416666666666667,
+   "mean_score": 21.866666666666667,
+   "mean_turns": 128.30833333333334,
+   "mean_final_rack": 26.875,
+   "stalemate_rate": 0.9,
+   "games": 120
+  },
+  {
+   "name": "macro/by_value",
+   "win_rate": 0.8083333333333333,
+   "mean_score": 24.283333333333335,
+   "mean_turns": 127.225,
+   "mean_final_rack": 20.8,
+   "stalemate_rate": 0.7666666666666667,
+   "games": 120
+  },
+  {
+   "name": "hybrid/macro_first",
+   "win_rate": 0.8083333333333333,
+   "mean_score": 24.283333333333335,
+   "mean_turns": 127.225,
+   "mean_final_rack": 20.8,
+   "stalemate_rate": 0.7666666666666667,
+   "games": 120
+  }
+ ]
+}

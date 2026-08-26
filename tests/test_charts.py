@@ -104,10 +104,12 @@ def test_series_colours_come_from_the_validated_palette(charts):
 def test_every_published_capture_names_the_current_protocol():
     """A version bump without a re-capture leaves the published numbers claiming a
     protocol they were not produced under, which is the one way these files can
-    lie. Regenerate with the commands in CLAUDE.md."""
+    lie. Covers the experimental captures too -- they are scored through the same
+    frozen suites, so they go stale the same way. Regenerate with the commands in
+    CLAUDE.md."""
     from rummi.evaluate.protocol import PROTOCOL_VERSION
 
-    captures = sorted(DATA.glob("agents*.json"))
+    captures = sorted([*DATA.glob("agents*.json"), *DATA.glob("experiments*.json")])
     assert captures, "no agent captures found"
     for path in captures:
         payload = json.loads(path.read_text())

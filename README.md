@@ -200,6 +200,13 @@ turn-order advantage and the luck of the deal, so an agent mirrored against
 itself scores exactly `1 / n_players` and +0.0 — not that within error bars. Each game's
 seed is derived from its index alone, so batching cannot change which deals run.
 
+`docs/EXPERIMENTS.md` records every attempt at a learned agent strong enough to join
+the ladder, and the reason each one stopped. The scores are the least interesting
+column: most failed for something that took a day to find and a line to describe.
+Deterministic entries are captured to `docs/data/experiments.json` with
+`python tools/capture_experiments.py`; the training runs are one seed apiece and
+cannot be.
+
 ## How a turn is expressed
 
 One `step` is one primitive table operation; a turn is a sequence of them ending
