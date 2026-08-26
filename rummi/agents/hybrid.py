@@ -11,11 +11,23 @@ still play in 47.7% of the states where a macro agent draws, and 100% of those p
 dissolve a set -- but they score **+25** because every action leaves the table
 whole.
 
-So: offer both. Every state has a macro that cannot go wrong, and the primitives are
-there for the turns macros cannot express. The half-built workbench becomes
-*avoidable* rather than unavoidable, which is the difference that matters -- a
-better-scored primitive does not help (a bilinear head over primitives also scored
--442.3), because the problem was never how actions are scored.
+So: offer both -- the primitives for the turns macros cannot express, and a macro
+where one fits.
+
+**As written this does not work, and the reason is the rule below.** Measured under
+an untrained policy: the workbench is dirty in **94.5%** of decisions, `END_TURN` is
+legal in **0.5%** (against ~9% in the macro space), and **a macro is on offer in
+4.9%**. So the escape hatch is shut exactly when it is needed, training collapses to
+stalling (`end` 0.0%, terminal ~-1.03, entropy falling *into* the stalling policy),
+and no reward term helps: a bigger batch, `--rack-shaping` and `--micro-step-cost`
+were each tried and cannot make an illegal action attractive.
+
+**The fix is to let a macro consume the held tiles** -- judge `playable` against
+`rack + workbench` with the workbench required to be used, and teach
+`to_actions.plan` to account for tiles already held rather than only for what leaves
+the rack. Until then the primitive trap is fully intact, and the claim that the
+half-built workbench is "avoidable" is only true of a policy that never takes a
+primitive.
 
 **Macros require a clean state.** `to_actions.plan` balances the board against the
 tiles played from the rack, so tiles already sitting on the workbench are
