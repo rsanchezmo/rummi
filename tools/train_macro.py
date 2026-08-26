@@ -34,31 +34,60 @@ from torch import nn
 
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 from rummi.agents.learned.torch_net import MASKED
-from rummi.agents.macro import MacroAgent, by_value, first_legal, n_macros
+from rummi.agents.macro import (
+    MacroAgent,
+    action_features,
+    by_value,
+    first_legal,
+    n_macros,
+)
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 
 
 class MacroNet(nn.Module):
-    """Logits over the macro actions, and a value."""
+    """Logits over the macro actions, and a value.
 
-    def __init__(self, cfg: RummiConfig, n_macros: int, hidden: int = 256) -> None:
+    `flat` gives every macro its own row, so nothing learned about one set carries
+    to a similar one. `pointer` scores each macro against `macro.action_features`
+    -- what the action *does* -- so the scoring function is shared and a per-action
+    bias carries whatever is left over.
+    """
+
+    def __init__(
+        self, cfg: RummiConfig, macros: int, hidden: int = 256,
+        head: str = "flat", key_dim: int = 64,
+    ) -> None:
         super().__init__()
+        self.head = head
         self.trunk = nn.Sequential(
             nn.Linear(feature_dim(cfg), hidden), nn.ReLU(),
             nn.Linear(hidden, hidden), nn.ReLU(),
         )
-        self.pi = nn.Linear(hidden, n_macros)
+        if head == "pointer":
+            desc = torch.as_tensor(action_features(cfg))
+            self.register_buffer("desc", desc)
+            self.key = nn.Linear(desc.shape[1], key_dim, bias=False)
+            self.query = nn.Linear(hidden, key_dim)
+            self.action_bias = nn.Parameter(torch.zeros(macros))
+            # Small, for the same reason the flat head uses gain 0.01: a fresh
+            # policy should be near-uniform over the legal macros.
+            nn.init.orthogonal_(self.query.weight, 0.01)
+            nn.init.zeros_(self.query.bias)
+        else:
+            self.pi = nn.Linear(hidden, macros)
+            nn.init.orthogonal_(self.pi.weight, 0.01)
+            nn.init.zeros_(self.pi.bias)
         self.v = nn.Linear(hidden, 1)
-        # 0.01, as in `learned/architecture.py`: with a handful of the 331 macros
-        # legal at a time, a confident wrong start is slow to unlearn.
-        nn.init.orthogonal_(self.pi.weight, 0.01)
-        nn.init.zeros_(self.pi.bias)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         h = self.trunk(x)
-        return self.pi(h), self.v(h).squeeze(-1)
+        if self.head == "pointer":
+            logits = self.query(h) @ self.key(self.desc).T + self.action_bias
+        else:
+            logits = self.pi(h)
+        return logits, self.v(h).squeeze(-1)
 
 
 def gather(
@@ -155,6 +184,11 @@ def main() -> None:
     p.add_argument("--horizon", type=int, default=256)
     p.add_argument("--updates", type=int, default=200)
     p.add_argument("--hidden", type=int, default=256)
+    p.add_argument(
+        "--head", default="flat", choices=["flat", "pointer"],
+        help="pointer scores a macro against what it does, so what is learned about "
+             "one set transfers to similar ones; flat gives each its own row",
+    )
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--entropy-coef", type=float, default=0.01)
@@ -192,7 +226,7 @@ def main() -> None:
     generator = torch.Generator().manual_seed(args.seed)
     scale = feature_scale(cfg)
     macros = n_macros(cfg)
-    net = MacroNet(cfg, macros, args.hidden)
+    net = MacroNet(cfg, macros, args.hidden, head=args.head)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
 
     env = FixedOpponentEnv(
@@ -274,7 +308,7 @@ def main() -> None:
     if agent_reset_needed:
         open_choice[:] = [None] * args.envs
     print(
-        f"config={args.config} opponent={args.opponent} macros={macros} "
+        f"config={args.config} opponent={args.opponent} macros={macros} head={args.head} "
         f"params={sum(q.numel() for q in net.parameters()):,}",
         flush=True,
     )
@@ -360,7 +394,13 @@ def main() -> None:
 
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        torch.save({"cfg": args.config, "hidden": args.hidden, "state": net.state_dict()}, args.out)
+        torch.save(
+            {
+                "cfg": args.config, "hidden": args.hidden, "head": args.head,
+                "state": net.state_dict(),
+            },
+            args.out,
+        )
         print(f"wrote {args.out}")
 
     if args.eval_games:

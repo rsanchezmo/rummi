@@ -161,6 +161,60 @@ def removals(cfg: RummiConfig, contents: tuple[int, ...]) -> list[int]:
     return []
 
 
+_FEATURES: dict[RummiConfig, np.ndarray] = {}
+
+ACTION_FEATURE_DIM = 4
+"""Beyond the per-kind counts: points, size, tiles taken off the table, and which
+block the action belongs to is one-hot on top of that."""
+
+
+def action_features(cfg: RummiConfig) -> np.ndarray:
+    """`(n_macros, d)` description of what each macro *does*, as data.
+
+    A flat head has to learn action 147 from its index alone, so nothing it learns
+    about one set transfers to a similar one. Scoring an action against its own
+    description shares that instead -- the same argument as the bilinear head in
+    `learned/architecture.py`, and a much better fit here, because a macro has a
+    real description and an `ASSIGN` id does not.
+
+    `EXTEND` rows carry only their block and slot: which tile they add is
+    state-dependent, so it cannot live in a static table. Those 2*max_sets rows
+    lean on the per-action bias instead.
+    """
+    cached = _FEATURES.get(cfg)
+    if cached is not None:
+        return cached
+
+    templates = set_templates(cfg)
+    points = template_points(cfg)
+    n_kinds, n_sets = cfg.n_kinds, len(templates)
+    scale = float(cfg.n_numbers * cfg.max_set_len)
+    out = np.zeros((n_macros(cfg), n_kinds + ACTION_FEATURE_DIM + 4), dtype=np.float32)
+
+    def rows(offset: int, block: int, from_table: float) -> None:
+        for t in range(n_sets):
+            row = out[offset + t]
+            row[:n_kinds] = templates[t]
+            row[n_kinds] = points[t] / scale
+            row[n_kinds + 1] = templates[t].sum() / cfg.max_set_len
+            row[n_kinds + 2] = from_table
+            row[n_kinds + ACTION_FEATURE_DIM + block] = 1.0
+
+    rows(0, 0, 0.0)
+    rows(steal_offset(cfg), 2, 1.0)
+    for slot in range(cfg.max_sets):
+        for end in range(2):
+            row = out[extend_offset(cfg) + slot * 2 + end]
+            row[n_kinds + 1] = 1.0 / cfg.max_set_len  # a lay-off plays one tile
+            row[n_kinds + 3] = slot / cfg.max_sets
+            row[n_kinds + ACTION_FEATURE_DIM + 1] = 1.0
+    for macro in (_n_choices(cfg), _n_choices(cfg) + 1):
+        out[macro, n_kinds + ACTION_FEATURE_DIM + 3] = 1.0
+
+    _FEATURES[cfg] = out
+    return out
+
+
 Choose = Callable[[Observation, int, np.ndarray], int]
 """`(obs, env, legal) -> macro index`, where `legal` is the `(n_macros,)` mask."""
 
