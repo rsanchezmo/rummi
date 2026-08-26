@@ -109,7 +109,7 @@ def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
 
 
 def extensions(cfg: RummiConfig, contents: tuple[int, ...], rack: np.ndarray) -> list[int]:
-    """Up to two kinds in `rack` that legally extend this set, by end; -1 for none.
+    """Kinds in `rack` that legally extend this set; `-1` pads to a fixed two.
 
     Laying a tile onto a set already on the table is **84% of what greedy does** --
     measured over its ASSIGNs -- so a macro space without it cannot express the
@@ -202,12 +202,13 @@ def action_features(cfg: RummiConfig) -> np.ndarray:
 
     rows(0, 0, 0.0)
     rows(steal_offset(cfg), 2, 1.0)
-    for slot in range(cfg.max_sets):
-        for end in range(2):
-            row = out[extend_offset(cfg) + slot * 2 + end]
-            row[n_kinds + 1] = 1.0 / cfg.max_set_len  # a lay-off plays one tile
-            row[n_kinds + 3] = slot / cfg.max_sets
-            row[n_kinds + ACTION_FEATURE_DIM + 1] = 1.0
+    values = tables(cfg).value
+    for kind in range(n_kinds):
+        row = out[extend_offset(cfg) + kind]
+        row[kind] = 1.0  # exactly which tile this lays off
+        row[n_kinds] = values[kind] / scale
+        row[n_kinds + 1] = 1.0 / cfg.max_set_len  # a lay-off plays one tile
+        row[n_kinds + ACTION_FEATURE_DIM + 1] = 1.0
     for macro in (_n_choices(cfg), _n_choices(cfg) + 1):
         out[macro, n_kinds + ACTION_FEATURE_DIM + 3] = 1.0
 
@@ -229,7 +230,7 @@ class MacroAgent:
         self.templates = set_templates(cfg)
         # templates, then EXTEND(slot, end), then END_TURN, then DRAW.
         self.extend_offset = extend_offset(cfg)
-        self.n_extend = 2 * cfg.max_sets
+        self.n_extend = cfg.n_kinds
         self.steal_offset = steal_offset(cfg)
         self.end_macro = _n_choices(cfg)
         self.draw_macro = self.end_macro + 1
@@ -254,9 +255,10 @@ class MacroAgent:
         # mask has it -- so laying off is illegal there, not merely unwise.
         if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
             current = slot_contents(board)
-            for slot, contents in enumerate(current):
-                for end, kind in enumerate(extensions(cfg, contents, rack)):
-                    out[self.extend_offset + slot * 2 + end] = kind >= 0
+            for contents in current:
+                for kind in extensions(cfg, contents, rack):
+                    if kind >= 0:
+                        out[self.extend_offset + kind] = True
 
             # Stealing dissolves the donor and rebuilds it beside the new set, so it
             # needs one free slot on top of the donor's own.
@@ -309,8 +311,16 @@ class MacroAgent:
                 if c
             ] + [whole]
         elif macro >= self.extend_offset:
-            slot, end = divmod(macro - self.extend_offset, 2)
-            kind = extensions(cfg, current[slot], np.asarray(obs["rack"][env]))[end]
+            kind = macro - self.extend_offset
+            rack = np.asarray(obs["rack"][env])
+            # Indexed by tile rather than by slot, so the receiving set is whichever
+            # takes it. Choosing between two sets that both accept the same tile is
+            # given up deliberately: it makes the action describable to a policy --
+            # its tile is known -- where a slot index says nothing about what is
+            # played.
+            slot = next(
+                i for i, c in enumerate(current) if c and kind in extensions(cfg, c, rack)
+            )
             played = np.zeros(cfg.n_kinds, dtype=np.int64)
             played[kind] = 1
             target = [
@@ -380,7 +390,7 @@ def extend_offset(cfg: RummiConfig) -> int:
 def steal_offset(cfg: RummiConfig) -> int:
     """Where `STEAL(template)` starts: the same templates, but one of the tiles is
     taken off the table instead of out of the rack."""
-    return extend_offset(cfg) + 2 * cfg.max_sets
+    return extend_offset(cfg) + cfg.n_kinds
 
 
 def _n_choices(cfg: RummiConfig) -> int:
@@ -414,11 +424,13 @@ def by_value(cfg: RummiConfig) -> Choose:
     """
     end = _n_choices(cfg)
     n_extend = steal_offset(cfg) - extend_offset(cfg)
-    set_points = template_points(cfg)
+    set_points = template_points(cfg)  # a lay-off's own value is its tile's
     set_tiles = set_templates(cfg).sum(-1).astype(np.int32)
     # A lay-off plays exactly one tile, and a steal sheds one fewer than the same
     # set played outright, because one of its tiles comes off the table.
-    points = np.concatenate([set_points, np.zeros(n_extend, np.int32), set_points])
+    points = np.concatenate([
+        set_points, tables(cfg).value.astype(np.int32)[:n_extend], set_points
+    ])
     tiles = np.concatenate([
         set_tiles, np.ones(n_extend, np.int32), np.maximum(set_tiles - 1, 1)
     ])
