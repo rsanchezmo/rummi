@@ -139,6 +139,28 @@ def extensions(cfg: RummiConfig, contents: tuple[int, ...], rack: np.ndarray) ->
     return [*out, -1, -1][:2]
 
 
+def removals(cfg: RummiConfig, contents: tuple[int, ...]) -> list[int]:
+    """Kinds that can leave this set with what remains still a legal set.
+
+    The inverse of `extensions`, and the whole of what `rearrange` does: steal one
+    tile. A run gives up either end while it stays at least `min_set` long; a group
+    gives up any member while it does. Middle tiles of a run are refused -- removing
+    one splits the set in two, which needs a second free slot and is a different
+    move.
+    """
+    if not contents or cfg.joker_kind in contents or len(contents) - 1 < cfg.min_set:
+        return []
+
+    colours = {k // cfg.n_numbers for k in contents}
+    numbers = sorted(k % cfg.n_numbers + 1 for k in contents)
+    if len(colours) == 1:
+        colour = next(iter(colours))
+        return [kind_of(cfg, colour, numbers[0]), kind_of(cfg, colour, numbers[-1])]
+    if len(set(numbers)) == 1 and len(colours) == len(contents):
+        return list(contents)
+    return []
+
+
 Choose = Callable[[Observation, int, np.ndarray], int]
 """`(obs, env, legal) -> macro index`, where `legal` is the `(n_macros,)` mask."""
 
@@ -154,6 +176,7 @@ class MacroAgent:
         # templates, then EXTEND(slot, end), then END_TURN, then DRAW.
         self.extend_offset = extend_offset(cfg)
         self.n_extend = 2 * cfg.max_sets
+        self.steal_offset = steal_offset(cfg)
         self.end_macro = _n_choices(cfg)
         self.draw_macro = self.end_macro + 1
         self.n_macros = n_macros(cfg)
@@ -176,9 +199,24 @@ class MacroAgent:
         # The table is untouchable until the opening meld, exactly as the env's own
         # mask has it -- so laying off is illegal there, not merely unwise.
         if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
-            for slot, contents in enumerate(slot_contents(board)):
+            current = slot_contents(board)
+            for slot, contents in enumerate(current):
                 for end, kind in enumerate(extensions(cfg, contents, rack)):
                     out[self.extend_offset + slot * 2 + end] = kind >= 0
+
+            # Stealing dissolves the donor and rebuilds it beside the new set, so it
+            # needs one free slot on top of the donor's own.
+            if (board.max(-1) < 0).any():
+                stealable = np.zeros(cfg.n_kinds, dtype=bool)
+                for contents in current:
+                    for kind in removals(cfg, contents):
+                        stealable[kind] = True
+                gap = np.maximum(self.templates - rack, 0)
+                short = gap.sum(-1)
+                # `argmax` is the missing kind only where exactly one is missing.
+                out[self.steal_offset : self.end_macro] = (short == 1) & stealable[
+                    gap.argmax(-1)
+                ]
 
         # Pre-meld the threshold is on the whole turn, so a single template that
         # cannot reach it is still worth playing alongside another.
@@ -199,7 +237,24 @@ class MacroAgent:
         board = table(obs)[env]
         current = slot_contents(board)
 
-        if macro >= self.extend_offset:
+        if macro >= self.steal_offset:
+            rack = np.asarray(obs["rack"][env])
+            template = self.templates[macro - self.steal_offset].astype(np.int64)
+            gap = np.maximum(template - rack, 0)
+            kind = int(gap.argmax())
+            donor = next(
+                slot for slot, c in enumerate(current) if c and kind in removals(cfg, c)
+            )
+            left = list(current[donor])
+            left.remove(kind)
+            whole = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), template).tolist()))
+            played = np.minimum(template, rack).astype(np.int64)
+            target = [
+                tuple(sorted(left)) if slot == donor else c
+                for slot, c in enumerate(current)
+                if c
+            ] + [whole]
+        elif macro >= self.extend_offset:
             slot, end = divmod(macro - self.extend_offset, 2)
             kind = extensions(cfg, current[slot], np.asarray(obs["rack"][env]))[end]
             played = np.zeros(cfg.n_kinds, dtype=np.int64)
@@ -268,9 +323,15 @@ def extend_offset(cfg: RummiConfig) -> int:
     return len(set_templates(cfg))
 
 
+def steal_offset(cfg: RummiConfig) -> int:
+    """Where `STEAL(template)` starts: the same templates, but one of the tiles is
+    taken off the table instead of out of the rack."""
+    return extend_offset(cfg) + 2 * cfg.max_sets
+
+
 def _n_choices(cfg: RummiConfig) -> int:
     """Index of the `END_TURN` macro: everything below it plays tiles."""
-    return extend_offset(cfg) + 2 * cfg.max_sets
+    return steal_offset(cfg) + len(set_templates(cfg))
 
 
 def n_macros(cfg: RummiConfig) -> int:
@@ -297,15 +358,17 @@ def by_value(cfg: RummiConfig) -> Choose:
     matters most before the opening meld, where the threshold is on the whole turn:
     a dear set reaches 30 in fewer plays.
     """
-    n_templates = len(set_templates(cfg))
     end = _n_choices(cfg)
-    # A lay-off plays exactly one tile, so it ranks below any new set on tiles shed
-    # and is only preferred when nothing else is available.
-    points = np.concatenate([template_points(cfg), np.zeros(end - n_templates, np.int32)])
+    n_extend = steal_offset(cfg) - extend_offset(cfg)
+    set_points = template_points(cfg)
+    set_tiles = set_templates(cfg).sum(-1).astype(np.int32)
+    # A lay-off plays exactly one tile, and a steal sheds one fewer than the same
+    # set played outright, because one of its tiles comes off the table.
+    points = np.concatenate([set_points, np.zeros(n_extend, np.int32), set_points])
     tiles = np.concatenate([
-        set_templates(cfg).sum(-1).astype(np.int32),
-        np.ones(end - n_templates, np.int32),
+        set_tiles, np.ones(n_extend, np.int32), np.maximum(set_tiles - 1, 1)
     ])
+    assert len(points) == end and len(tiles) == end
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
         options = np.flatnonzero(legal[:end])

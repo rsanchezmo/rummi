@@ -65,11 +65,73 @@ def test_a_macro_agent_only_ever_proposes_legal_actions(cfg):
             state.check_invariants()
 
 
-def test_laying_off_is_illegal_until_the_opening_meld():
+def test_a_tile_may_only_leave_a_set_that_survives_losing_it():
+    """`removals` is the whole of what `rearrange` does, and getting it wrong would
+    put an invalid set on the table. A run gives up either end while it stays
+    `min_set` long; a group any member; a set holding a joker nothing, because the
+    joker's role is ambiguous. Middle tiles of a run are refused -- taking one splits
+    the set, which needs a second free slot and is a different move."""
+    from rummi.agents.macro import removals
+    from rummi.rules.encoding import kind_of
+
+    cfg = STANDARD
+    run5 = tuple(kind_of(cfg, 0, n) for n in range(1, 6))
+    run3 = tuple(kind_of(cfg, 0, n) for n in range(1, 4))
+    group4 = tuple(kind_of(cfg, c, 7) for c in range(4))
+
+    assert removals(cfg, run5) == [run5[0], run5[-1]]
+    assert removals(cfg, run3) == [], "a run of min_set has nothing to spare"
+    assert sorted(removals(cfg, group4)) == sorted(group4)
+    assert removals(cfg, group4[:3]) == [], "a group of min_set has nothing to spare"
+    assert removals(cfg, (run3[0], run3[1], cfg.joker_kind)) == []
+    assert removals(cfg, ()) == []
+
+
+def test_every_macro_capability_is_actually_reached():
+    """Each block of the action space has to be *used*, not merely offered. The
+    END_TURN macro was unreachable for a whole commit while looking fine, so every
+    block added since is pinned by being chosen at least once in real play."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value
+
+    cfg = STANDARD
+    agent = MacroAgent(cfg)
+    used = {"set": 0, "extend": 0, "steal": 0, "end": 0, "draw": 0}
+    base = by_value(cfg)
+
+    def choose(obs, env, legal):
+        macro = base(obs, env, legal)
+        if macro < agent.extend_offset:
+            used["set"] += 1
+        elif macro < agent.steal_offset:
+            used["extend"] += 1
+        elif macro < agent.end_macro:
+            used["steal"] += 1
+        elif macro == agent.end_macro:
+            used["end"] += 1
+        else:
+            used["draw"] += 1
+        return macro
+
+    agent.choose = choose
+    agent.reset(24)
+    state = reset(cfg, 24, seed=5)
+    for _ in range(250):
+        mask = legal_actions(state)
+        action = act_on_state(agent, state, mask)
+        assert mask[np.arange(24), action].all()
+        step(state, action, mask)
+        state.check_invariants()
+
+    assert all(count > 0 for count in used.values()), used
+
+
+def test_touching_the_table_is_illegal_until_the_opening_meld():
     """The table is untouchable before the opening meld, exactly as the env's own
-    mask has it (`may_touch_table = has_melded if strict_initial_meld`). An EXTEND
-    offered there would be a macro whose expansion the mask then refuses, which
-    surfaces as a silently abandoned turn rather than as an error."""
+    mask has it (`may_touch_table = has_melded if strict_initial_meld`). This covers
+    both macros that touch it, EXTEND and STEAL: one offered there would be a macro
+    whose expansion the mask then refuses, which surfaces as a silently abandoned
+    turn rather than as an error."""
     from rummi.agents.base import act_on_state, has_melded
     from rummi.agents.macro import MacroAgent, by_value
 
@@ -85,11 +147,12 @@ def test_laying_off_is_illegal_until_the_opening_meld():
         melded = has_melded(obs)
         for env in range(16):
             legal = agent.legal_macros(obs, env, mask)
+            # extend_offset..end_macro spans EXTEND and STEAL, the two that touch it.
             offered = bool(legal[agent.extend_offset : agent.end_macro].any())
             if melded[env]:
                 seen_postmeld += int(offered)
             else:
-                assert not offered, "offered a lay-off before the opening meld"
+                assert not offered, "offered a table move before the opening meld"
                 seen_premeld += 1
         step(state, act_on_state(agent, state, mask), mask)
 
