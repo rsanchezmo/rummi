@@ -29,15 +29,16 @@ is exact by rotation, not measured, which is what makes it a usable reference.
 |---|---|---|---|
 | `random` | -442.32 | 0.0% | Never assembles a legal meld. |
 | best learned, primitive actions | -230 | 0.0% | A day of PPO, cloning, DAgger, two architectures. |
-| `macro/first_legal` | +21.87 | 74.2% | Plays the lowest-indexed legal set. |
 | `greedy` | +0.00 | 50.0% | Reference. Self-match is exact. |
-| **`macro/by_value`** | **+24.28** | **80.8%** | **Best agent produced. Hand-written, not learned.** |
-| `hybrid/macro_first` | +24.28 | 80.8% | Identical to the above by construction; a test asserts it. |
+| `macro/first_legal` | +26.79 | 80.0% | Plays the lowest-indexed legal macro. |
+| **`macro/by_value`** | **+29.60** | **85.4%** | **Best agent produced. Hand-written, not learned.** |
+| `hybrid/macro_first` | +29.60 | 85.4% | Identical to the above by construction; a test asserts it. |
 | `rearrange` | +31.92 | 85.0% | Steals exactly one tile. |
 | `optimal` | +44.57 | 100% | CP-SAT. Never stalemates. |
 
-`macro/by_value` scores **+25.23 at n=240**, which is the figure to quote against the
-published ladder.
+The experimental rows are the n=240 capture in `docs/data/experiments.json`, taken
+after the joker capability below; `by_value` now matches `rearrange`'s win rate and
+sits 2.3 points under its score.
 
 ## Capability, not policy
 
@@ -49,9 +50,10 @@ this table.
 | new sets only | -141.5 | 0.8% |
 | + lay-offs onto existing sets | -65.4 | 11.7% |
 | + joker substitution | -18.4 | 34.2% |
-| + steal one tile off the table | **+24.3** | **80.8%** |
+| + steal one tile off the table | +24.3 | 80.8% |
+| + lay off onto joker sets, and the rack's joker | **+29.6** | **85.4%** |
 
-Four capabilities were worth ~255 points. Two trained networks were worth ~8. The
+Five capabilities were worth ~260 points. Two trained networks were worth ~8. The
 diagnostic that found the largest: **84.2% of `greedy`'s `ASSIGN`s land on an
 already-occupied slot**, so a space that could only create new sets was missing the
 commonest move in the game, and no policy inside it could have recovered that.
@@ -142,17 +144,18 @@ the rack.
 
 `macro/by_value` across the whole frozen protocol, once each:
 
-| suite | seats | opponent | win | even | score |
-|---|---|---|---|---|---|
-| `tiny` | 2 | `greedy` | **43.3%** | 50.0% | -1.12 |
-| `standard-greedy` | 2 | `greedy` | 80.8% | 50.0% | +24.28 |
-| `standard-optimal` | 2 | `optimal` | 1.2% | 50.0% | -35.83 |
-| `standard-3p` | 3 | `greedy` | 58.3% | 33.3% | +37.37 |
-| `standard-4p` | 4 | `greedy` | 37.5% | 25.0% | +26.13 |
+| suite | seats | opponent | before jokers | after jokers |
+|---|---|---|---|---|
+| `tiny` | 2 | `greedy` | **43.3%** / -1.12 | 51.5% / +0.14 |
+| `standard-greedy` | 2 | `greedy` | 80.8% / +24.28 | 85.4% / +29.60 |
+| `standard-optimal` | 2 | `optimal` | 1.2% / -35.83 | 4.0% / -30.29 |
+| `standard-3p` | 3 | `greedy` | 58.3% / +37.37 | 73.8% / +61.00 |
+| `standard-4p` | 4 | `greedy` | 37.5% / +26.13 | 52.3% / +53.29 |
 
-It generalises across seat counts, is crushed by `optimal`, and is **worse than
-`greedy` on `tiny`** — which is why a claim from one suite should not be stated as a
-claim about the agent.
+Before the joker capability it was **worse than `greedy` on `tiny`** — which is why
+a claim from one suite should not be stated as a claim about the agent. After it,
+every suite moved: the `tiny` deficit closed to level, the multi-seat scores jumped
+by 24-27 points, and only `optimal` still wins — the repartition ceiling above.
 
 A learned net reaches only two of these five suites: the 3p/4p observations are
 wider than `standard`'s (572/574 features against 570) and `tiny`'s macro table is
@@ -160,7 +163,7 @@ its own (41 actions), so a `standard`-trained checkpoint cannot be scored on the
 rest — `tools/eval_macro.py` checks and skips with the reason printed. Where the
 best replication seed can be scored, it has the heuristic's shape:
 
-| suite | learned, seed 0 | `by_value` |
+| suite (pre-joker space, both columns) | learned, seed 0 | `by_value` |
 |---|---|---|
 | `standard-greedy` | +25.06 / 78.8% (n=240) | +25.23 / 80.8% (n=240) |
 | `standard-optimal` | -32.91 / 3.0% (n=200) | -35.83 / 1.2% (n=200) |
@@ -201,6 +204,17 @@ Two findings, one per config:
   config, and what remains is close to the "new sets + jokers" rung, which that
   same arc measured at **-18 against `greedy`**. The residual deficit candidate is
   the joker gap above (7.4% of stuck states), not slots.
+
+**The gap is closed.** `EXTEND` now shares `greedy`'s own feasibility test —
+`greedy_agent.appendable`, which grows the slot row and validates it through the
+env's `evaluate_slots`, the only way a joker's role is answerable — so a set holding
+a joker takes tiles and the rack's joker lays off wherever there is room. Re-run at
+the same size (46,640 / 29,283 decisions), **"stuck but greedy would act" reads
+0.0% on both configs**: the macro space expresses every single-tile move greedy can
+make, and the diagnostic's columns stay in place as the drift alarm between the two.
+`STEAL` still refuses joker-holding sets — what such a set can spare is undetermined
+by arithmetic (`(R1,R2,R3,*)` can spare `R3`, a "middle" tile, because the joker
+slides down) — and that residue is part of what `optimal` still wins with.
 
 ## Method notes that earned their place
 

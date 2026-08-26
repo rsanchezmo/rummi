@@ -3,34 +3,34 @@
  "suite": "standard-greedy",
  "opponent": "greedy",
  "players": 2,
- "games": 120,
+ "games": 240,
  "agents": [
   {
    "name": "macro/first_legal",
-   "win_rate": 0.7416666666666667,
-   "mean_score": 21.866666666666667,
-   "mean_turns": 128.30833333333334,
-   "mean_final_rack": 26.875,
-   "stalemate_rate": 0.9,
-   "games": 120
+   "win_rate": 0.8,
+   "mean_score": 26.7875,
+   "mean_turns": 127.75416666666666,
+   "mean_final_rack": 24.0,
+   "stalemate_rate": 0.8333333333333334,
+   "games": 240
   },
   {
    "name": "macro/by_value",
-   "win_rate": 0.8083333333333333,
-   "mean_score": 24.283333333333335,
-   "mean_turns": 127.225,
-   "mean_final_rack": 20.8,
-   "stalemate_rate": 0.7666666666666667,
-   "games": 120
+   "win_rate": 0.8541666666666666,
+   "mean_score": 29.604166666666668,
+   "mean_turns": 125.54583333333333,
+   "mean_final_rack": 17.525,
+   "stalemate_rate": 0.7125,
+   "games": 240
   },
   {
    "name": "hybrid/macro_first",
-   "win_rate": 0.8083333333333333,
-   "mean_score": 24.283333333333335,
-   "mean_turns": 127.225,
-   "mean_final_rack": 20.8,
-   "stalemate_rate": 0.7666666666666667,
-   "games": 120
+   "win_rate": 0.8541666666666666,
+   "mean_score": 29.604166666666668,
+   "mean_turns": 125.54583333333333,
+   "mean_final_rack": 17.525,
+   "stalemate_rate": 0.7125,
+   "games": 240
   }
  ]
 }

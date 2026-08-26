@@ -10,12 +10,11 @@ the two slot-consuming macros gate on a free slot) and the gate turned out never
 to fire on either config: the tile-feasible-but-slot-blocked columns are the
 refutation, kept so the number stays reproducible.
 
-What the same sweep did find is in the greedy columns: every stuck state where
-greedy still plays is an append the macro space cannot express -- a lay-off onto a
-joker-holding set (`extensions` refuses those because the joker's role is
-ambiguous) or laying the rack's own joker off. The plain-append column is the
-consistency check that the classification is exhaustive; it should be zero,
-because a plain single-tile append is exactly what `EXTEND` offers.
+What the same sweep did find is in the greedy columns, which classify the appends
+greedy would make: onto a joker-holding set, the rack's own joker, or a plain tile.
+They were how the joker gap was found and they are how it stays closed -- `EXTEND`
+now shares greedy's own feasibility test, so all three should read near zero and a
+column climbing again means the two have drifted apart.
 
 Greedy's own feasibility helpers are imported rather than reimplemented: the
 question is what *greedy* would do, and a reimplementation would measure a copy.
@@ -28,7 +27,7 @@ import argparse
 import numpy as np
 
 from rummi.agents.base import Observation, has_melded, table
-from rummi.agents.greedy_agent import _appendable, _best_new_set, plan_turn
+from rummi.agents.greedy_agent import _best_new_set, appendable, plan_turn
 from rummi.agents.macro import MacroAgent, by_value, playable, removals, set_templates
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.rules.config import CONFIG_BY_NAME
@@ -87,7 +86,7 @@ def diagnose(cfg_name: str, envs: int, steps: int, seed: int) -> dict[str, int]:
             acts = bool(plan_turn(cfg, rack, board, melded))
             counts["stuck_greedy_acts"] += acts
             if acts and melded:
-                allowed = _appendable(cfg, board, rack)
+                allowed = appendable(cfg, board, rack)
                 joker_slots = (board == cfg.joker_kind).any(-1)
                 plain = allowed[~joker_slots].copy()
                 joker_tile = bool(plain[:, cfg.joker_kind].any())

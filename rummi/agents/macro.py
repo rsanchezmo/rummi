@@ -28,10 +28,18 @@ and asking which of them the rack can cover is one matrix comparison.
 
 A joker stands in for at most **one** missing tile of a template. Two would be
 legal Rummikub and are refused, because with two gaps the pairing of jokers to gaps
-stops being determined and `expand` would have to choose. Sets already on the table
-holding a joker are refused by `EXTEND` and `STEAL` for the same ambiguity -- the
-joker's role in them is not represented -- which `tools/diagnose_stuck.py` measures
-as the largest move greedy can express and this space cannot.
+stops being determined and `expand` would have to choose.
+
+Once a joker is *on the table* nothing has to name its role: `EXTEND` asks
+`greedy_agent.appendable`, which grows the slot row and validates it through the
+env's own `evaluate_slots`, so a set holding a joker takes tiles and the rack's own
+joker lays off wherever there is room -- together every state where
+`tools/diagnose_stuck.py` found `greedy` playing and this space only drawing. `STEAL`
+still refuses joker-holding sets, because it decides what a set can spare from the
+real numbers alone and a joker leaves that undetermined: `(R1,R2,R3,*)` can spare
+`R3`, which the arithmetic calls a middle tile, because the joker slides down to
+cover it. Answering that through `evaluate_slots` too is a different move to
+describe -- a steal also has to name the donor -- so it is left as it is.
 """
 
 from __future__ import annotations
@@ -42,6 +50,7 @@ from itertools import combinations
 import numpy as np
 
 from rummi.agents.base import Observation, has_melded, table, turn_starting
+from rummi.agents.greedy_agent import appendable
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import kind_of, tables
 
@@ -110,41 +119,10 @@ def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
     return np.asarray((short == 0) | ((short == 1) & (jokers >= 1)), dtype=bool)
 
 
-def extensions(cfg: RummiConfig, contents: tuple[int, ...], rack: np.ndarray) -> list[int]:
-    """Kinds in `rack` that legally extend this set; `-1` pads to a fixed two.
-
-    Laying a tile onto a set already on the table is **84% of what greedy does** --
-    measured over its ASSIGNs -- so a macro space without it cannot express the
-    commonest move in the game, whatever its policy.
-
-    A set with a legal tile added is still a legal set, so this preserves the
-    invariant the whole action space rests on: the table stays whole.
-    """
-    if not contents or cfg.joker_kind in contents or len(contents) >= cfg.max_set_len:
-        # A joker's role in a set is ambiguous, so sets holding one are left alone,
-        # for the same reason templates do not substitute them.
-        return [-1, -1]
-
-    colours = {k // cfg.n_numbers for k in contents}
-    numbers = sorted(k % cfg.n_numbers + 1 for k in contents)
-    out: list[int] = []
-    if len(colours) == 1:
-        colour = next(iter(colours))
-        for number in (numbers[0] - 1, numbers[-1] + 1):
-            k = kind_of(cfg, colour, number) if 1 <= number <= cfg.n_numbers else -1
-            out.append(k if k >= 0 and rack[k] > 0 else -1)
-    elif len(set(numbers)) == 1 and len(colours) == len(contents):
-        missing = [c for c in range(cfg.n_colors) if c not in colours]
-        for colour in missing[:2]:
-            k = kind_of(cfg, colour, numbers[0])
-            out.append(k if rack[k] > 0 else -1)
-    return [*out, -1, -1][:2]
-
-
 def removals(cfg: RummiConfig, contents: tuple[int, ...]) -> list[int]:
     """Kinds that can leave this set with what remains still a legal set.
 
-    The inverse of `extensions`, and the whole of what `rearrange` does: steal one
+    The inverse of `appendable`, and the whole of what `rearrange` does: steal one
     tile. A run gives up either end while it stays at least `min_set` long; a group
     gives up any member while it does. Middle tiles of a run are refused -- removing
     one splits the set in two, which needs a second free slot and is a different
@@ -230,7 +208,7 @@ class MacroAgent:
     def __init__(self, cfg: RummiConfig, choose: Choose | None = None) -> None:
         self.cfg = cfg
         self.templates = set_templates(cfg)
-        # templates, then EXTEND(slot, end), then END_TURN, then DRAW.
+        # templates, then EXTEND(kind), then STEAL(template), then END_TURN, then DRAW.
         self.extend_offset = extend_offset(cfg)
         self.n_extend = cfg.n_kinds
         self.steal_offset = steal_offset(cfg)
@@ -256,17 +234,15 @@ class MacroAgent:
         # The table is untouchable until the opening meld, exactly as the env's own
         # mask has it -- so laying off is illegal there, not merely unwise.
         if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
-            current = slot_contents(board)
-            for contents in current:
-                for kind in extensions(cfg, contents, rack):
-                    if kind >= 0:
-                        out[self.extend_offset + kind] = True
+            # Indexed by tile, so a kind is legal when *any* slot takes it; `expand`
+            # reads the same matrix to pick which one.
+            out[self.extend_offset : self.steal_offset] = appendable(cfg, board, rack).any(0)
 
             # Stealing dissolves the donor and rebuilds it beside the new set, so it
             # needs one free slot on top of the donor's own.
             if (board.max(-1) < 0).any():
                 stealable = np.zeros(cfg.n_kinds, dtype=bool)
-                for contents in current:
+                for contents in slot_contents(board):
                     for kind in removals(cfg, contents):
                         stealable[kind] = True
                 gap = np.maximum(self.templates - rack, 0)
@@ -319,10 +295,9 @@ class MacroAgent:
             # takes it. Choosing between two sets that both accept the same tile is
             # given up deliberately: it makes the action describable to a policy --
             # its tile is known -- where a slot index says nothing about what is
-            # played.
-            slot = next(
-                i for i, c in enumerate(current) if c and kind in extensions(cfg, c, rack)
-            )
+            # played. Same matrix `legal_macros` gated on, so the two cannot disagree
+            # about which slot that is.
+            slot = int(np.flatnonzero(appendable(cfg, board, rack)[:, kind])[0])
             played = np.zeros(cfg.n_kinds, dtype=np.int64)
             played[kind] = 1
             target = [
@@ -385,7 +360,12 @@ class MacroAgent:
 
 
 def extend_offset(cfg: RummiConfig) -> int:
-    """Where `EXTEND(slot, end)` starts; below it, templates lay down new sets."""
+    """Where `EXTEND(kind)` starts; below it, templates lay down new sets.
+
+    One entry per kind, the joker included. Laying a tile onto a set already on the
+    table is **84% of what greedy does** -- measured over its ASSIGNs -- so this block
+    is the commonest move in the game and what a macro space without it cannot say.
+    """
     return len(set_templates(cfg))
 
 
@@ -426,13 +406,16 @@ def by_value(cfg: RummiConfig) -> Choose:
     """
     end = _n_choices(cfg)
     n_extend = steal_offset(cfg) - extend_offset(cfg)
-    set_points = template_points(cfg)  # a lay-off's own value is its tile's
+    set_points = template_points(cfg)
     set_tiles = set_templates(cfg).sum(-1).astype(np.int32)
+    # A lay-off is worth the value of the tile it sheds. `tables().value` scores the
+    # joker 0, because its face value is positional -- what it costs to keep is
+    # `joker_penalty`, which is what shedding it saves, exactly as greedy ranks it.
+    layoff_points = tables(cfg).value.astype(np.int32)[:n_extend].copy()
+    layoff_points[cfg.joker_kind] = cfg.joker_penalty
     # A lay-off plays exactly one tile, and a steal sheds one fewer than the same
     # set played outright, because one of its tiles comes off the table.
-    points = np.concatenate([
-        set_points, tables(cfg).value.astype(np.int32)[:n_extend], set_points
-    ])
+    points = np.concatenate([set_points, layoff_points, set_points])
     tiles = np.concatenate([
         set_tiles, np.ones(n_extend, np.int32), np.maximum(set_tiles - 1, 1)
     ])

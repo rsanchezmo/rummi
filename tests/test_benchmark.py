@@ -31,10 +31,15 @@ def test_the_set_templates_are_every_set_that_could_be_legal():
     """Counted rather than trusted: 264 runs and 65 groups on the standard config.
     A template list that silently lost a shape would cap what any macro policy can
     ever play, and nothing else would fail."""
-    from rummi.agents.macro import set_templates, template_points
+    from rummi.agents.macro import n_macros, set_templates, template_points
 
     templates = set_templates(STANDARD)
     assert templates.shape == (329, STANDARD.n_kinds)
+    # 329 new sets, one lay-off per kind, 329 steals, END_TURN and DRAW. The lay-off
+    # block already spans every kind including the joker, so what it may play is a
+    # question of feasibility and never of layout -- a head trained on one width has
+    # to stay comparable.
+    assert n_macros(STANDARD) == 713
     # Every template is a legal set: no duplicate kind, and within the length bounds.
     assert (templates <= 1).all()
     sizes = templates.sum(-1)
@@ -103,6 +108,50 @@ def test_the_hybrid_space_contains_the_macro_agent_exactly():
     assert dirty_seen > 0, "never saw a mid-turn state, so the rule was not exercised"
 
 
+def test_a_tile_may_only_be_appended_to_a_set_that_stays_valid():
+    """`EXTEND`'s feasibility test, shared with `greedy`'s own planner. It grows the
+    slot row and validates it through `evaluate_slots` rather than deciding by
+    colour/number arithmetic, and the joker is the entire reason: a set holding one
+    still takes tiles, because the run window accepts whichever reading keeps the set
+    legal, and the rack's own joker lays off onto anything with room. Arithmetic over
+    the real tiles can express neither, and that gap was **28.5%** of the states where
+    this space could only draw while `greedy` played."""
+    from rummi.agents.greedy_agent import appendable
+    from rummi.env.numpy.sets import pad_slot
+    from rummi.rules.encoding import kind_of
+
+    cfg = STANDARD
+    joker = cfg.joker_kind
+    full_rack = np.ones(cfg.n_kinds, dtype=np.int16)
+
+    def accepts(tiles, rack=full_rack) -> list[int]:
+        board = np.full((cfg.max_sets, cfg.max_set_len), -1, dtype=np.int16)
+        board[0] = pad_slot(cfg, tiles)
+        allowed = appendable(cfg, board, rack)
+        assert not allowed[1:].any(), "an empty slot is not a set to append to"
+        return sorted(int(k) for k in np.flatnonzero(allowed[0]))
+
+    red = [kind_of(cfg, 0, n) for n in range(1, cfg.n_numbers + 1)]
+    sevens = [kind_of(cfg, c, 7) for c in range(cfg.n_colors)]
+
+    # A run holding a joker takes both its real ends: the joker reads as R3 to take
+    # R4, and slides to R4 to take R3.
+    assert accepts([red[0], red[1], joker]) == sorted([red[2], red[3], joker])
+    # A group holding one takes every colour it is missing.
+    assert accepts([sevens[0], sevens[1], joker]) == sorted([sevens[2], sevens[3], joker])
+    assert accepts(red[:3]) == sorted([red[3], joker]), "a plain run takes the rack's joker"
+
+    only_joker = np.zeros(cfg.n_kinds, dtype=np.int16)
+    only_joker[joker] = 1
+    assert accepts(red[:3], only_joker) == [joker]
+    assert accepts([red[0], red[1], joker], only_joker) == [joker]
+    # Every append needs the tile in hand -- the mask would refuse it otherwise.
+    assert accepts(red[:3], np.zeros(cfg.n_kinds, dtype=np.int16)) == []
+    # A set at max_set_len has nowhere to put one, whatever the rack holds.
+    assert accepts(red) == []
+    assert accepts(sevens) == []
+
+
 def test_a_tile_may_only_leave_a_set_that_survives_losing_it():
     """`removals` is the whole of what `rearrange` does, and getting it wrong would
     put an invalid set on the table. A run gives up either end while it stays
@@ -162,6 +211,53 @@ def test_every_macro_capability_is_actually_reached():
         state.check_invariants()
 
     assert all(count > 0 for count in used.values()), used
+
+
+def test_a_joker_is_laid_off_in_real_play_and_the_table_stays_whole():
+    """Being offered a joker lay-off is not the claim; playing one is. `greedy` acted
+    in 28.5% of the states where this space could only draw, and *all* of it was
+    jokers -- appends onto a joker-holding set (27.7%) and the rack's own joker
+    (0.9%) -- so both have to be chosen in real play, and their expansions have to
+    leave the table whole at every turn boundary, which is the invariant the macro
+    space rests on."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.greedy_agent import appendable
+    from rummi.agents.macro import MacroAgent, by_value
+    from rummi.env.numpy.sets import evaluate_slots
+
+    cfg = STANDARD
+    agent = MacroAgent(cfg)
+    base = by_value(cfg)
+    onto_joker_set = laid_own_joker = 0
+
+    def choose(obs, env, legal):
+        nonlocal onto_joker_set, laid_own_joker
+        macro = base(obs, env, legal)
+        if agent.extend_offset <= macro < agent.steal_offset:
+            kind = macro - agent.extend_offset
+            board = table(obs)[env]
+            allowed = appendable(cfg, board, np.asarray(obs["rack"][env]))
+            # The receiving slot `expand` will pick, read from the same matrix.
+            slot = int(np.flatnonzero(allowed[:, kind])[0])
+            onto_joker_set += bool((board[slot] == cfg.joker_kind).any())
+            laid_own_joker += kind == cfg.joker_kind
+        return macro
+
+    agent.choose = choose
+    agent.reset(24)
+    state = reset(cfg, 24, seed=5)
+    for _ in range(300):
+        mask = legal_actions(state)
+        action = act_on_state(agent, state, mask)
+        assert mask[np.arange(24), action].all(), "proposed a masked-out action"
+        step(state, action, mask)
+        state.check_invariants()
+        verdict = evaluate_slots(cfg, state.table_sets)
+        whole = (verdict.is_valid | verdict.is_empty).all(-1)
+        assert whole[state.micro_count == 0].all(), "left a broken set at a turn boundary"
+
+    assert onto_joker_set > 0, "never appended onto a joker-holding set"
+    assert laid_own_joker > 0, "never laid off the rack's own joker"
 
 
 def test_touching_the_table_is_illegal_until_the_opening_meld():

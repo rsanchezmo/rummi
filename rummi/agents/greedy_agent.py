@@ -31,8 +31,17 @@ def _offload_values(cfg: RummiConfig) -> np.ndarray:
     return v
 
 
-def _appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.ndarray:
-    """``(S, K)`` may kind ``k`` be appended to slot ``s`` leaving it valid?"""
+def appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.ndarray:
+    """``(S, K)`` may kind ``k`` be appended to slot ``s`` leaving it valid?
+
+    The verdict comes from :func:`evaluate_slots` over the *grown* row rather than
+    from colour/number arithmetic over the tiles already there, and that is what makes
+    a joker answerable at all: the run window accepts whichever reading of it keeps
+    the set legal, so a set holding one still takes tiles and the rack's own joker
+    lays off onto anything with room. Arithmetic can express neither. `macro.EXTEND`
+    shares this for exactly that reason -- one feasibility test, so the space's
+    legality and its expansion cannot disagree.
+    """
     s, ell = table.shape
     k = cfg.n_kinds
     base = evaluate_slots(cfg, table)
@@ -49,7 +58,7 @@ def _appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.nda
 
 
 def _appendable_row(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray, slot: int) -> np.ndarray:
-    """`(K,)` -- :func:`_appendable` for one slot.
+    """`(K,)` -- :func:`appendable` for one slot.
 
     Appending a tile changes that slot's row and nothing else, so the planning loop
     refreshes one row instead of all `S`. On the standard config that is 53 grown
@@ -137,7 +146,7 @@ def plan_turn(
         offload = _offload_values(cfg)
         # Computed in full once, then refreshed a row at a time: an append touches
         # the slot it landed in, and the kind's column only if the rack ran out.
-        allowed = _appendable(cfg, table, rack)
+        allowed = appendable(cfg, table, rack)
         while True:
             if not allowed.any():
                 break
