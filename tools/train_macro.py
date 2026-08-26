@@ -1,9 +1,10 @@
-"""RL over set templates: which complete set to play, when to stop, when to draw.
+"""RL over macro actions: which move to make, when to stop, when to draw.
 
     python tools/train_macro.py --updates 200 --eval-games 60
 
-The action space is `rummi/agents/macro.py`'s -- 329 sets, `END_TURN`, `DRAW` --
-and every action leaves the table whole, so the half-built invalid workbench that
+The action space is `rummi/agents/macro.py`'s -- 329 set templates, `EXTEND` per
+kind, `STEAL` per template, `END_TURN`, `DRAW`; 713 actions on `standard` -- and
+every action leaves the table whole, so the half-built invalid workbench that
 defeated the primitive-action learner is unreachable rather than penalised.
 
 What that buys, measured before any learning: turns are bounded at 7 micro-actions

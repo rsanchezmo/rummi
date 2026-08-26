@@ -70,17 +70,24 @@ commonest move in the game, and no policy inside it could have recovered that.
 | macro space, flat head | +19.93 | 70.0% | Each of 730 macros is an independent output row; nothing learned about one set transfers. |
 | macro space, pointer head | +23.91 | 76.7% | Best head. Still below `by_value`. |
 | macro space, pointer, 300 updates | **+26.72** | 80.8% | **Beat `by_value` once. Did not replicate — see below.** |
-| macro space, same recipe, 713 layout | +22.48 | 75.8% | The replication attempt. Below the heuristic. |
+| macro space, same recipe, 3 seeds on 713 | +22.48 / +25.06 / +24.12 | 74–79% | Every seed below `by_value`'s +25.23. |
 | macro space, cloned from `by_value` | +22.59 | 80.0% | Cloning **hurts** here: it arrives confident, so RL settles near the teacher. |
 | macro space, `--epochs 4` | +7.53 | 50.8% | Reusing a noisy bootstrapped advantage amplifies its error. |
 | macro space, one step per minibatch | -393.95 | 0.0% | Four noisy small-batch steps are far worse than one averaged step. |
 | hybrid space, any recipe | ~-1.0 term. | 0.0% | Collapses to stalling. A macro is on offer in **4.9%** of decisions. |
 
-**The one apparent win did not replicate.** +26.72 was one seed on the 730-action
-layout; the same recipe on the current 713-action layout scored +22.48, below
-`by_value`. A learned policy matching the heuristic is established; beating it is
-not. Note also that a layout change re-baselines everything — scores are not
-comparable across it.
+**The one apparent win did not replicate, now measured across seeds.** +26.72 was
+one seed on the 730-action layout. On the current 713 layout the same recipe scored
+**+22.48, +25.06 and +24.12** (mean +23.9), every seed below `by_value`'s +25.23 and
+none above 78.8% win against its 80.8%. From scratch, the policy reliably lands in
+the heuristic's neighbourhood; beating it did not survive replication, and the run
+was stopped after the third seed because no remaining seed could flip that verdict.
+So the capability-over-policy ratio holds all the way up: **the next win is a
+capability** — the joker gap measured below, or the hybrid fix — not a policy
+tweak. Note also that a layout change re-baselines everything — scores are not
+comparable across it. The checkpoints behind these rows load with
+`tools/eval_macro.py`; `by_value` reproducing its published +25.23 / 80.8% inside
+every training eval is the check that the harness did not move under them.
 
 ## Settings measured as harmful
 
@@ -146,6 +153,17 @@ the rack.
 It generalises across seat counts, is crushed by `optimal`, and is **worse than
 `greedy` on `tiny`** — which is why a claim from one suite should not be stated as a
 claim about the agent.
+
+A learned net reaches only two of these five suites: the 3p/4p observations are
+wider than `standard`'s (572/574 features against 570) and `tiny`'s macro table is
+its own (41 actions), so a `standard`-trained checkpoint cannot be scored on the
+rest — `tools/eval_macro.py` checks and skips with the reason printed. Where the
+best replication seed can be scored, it has the heuristic's shape:
+
+| suite | learned, seed 0 | `by_value` |
+|---|---|---|
+| `standard-greedy` | +25.06 / 78.8% (n=240) | +25.23 / 80.8% (n=240) |
+| `standard-optimal` | -32.91 / 3.0% (n=200) | -35.83 / 1.2% (n=200) |
 
 ## The `tiny` regression, diagnosed — and the joker gap it exposed
 
