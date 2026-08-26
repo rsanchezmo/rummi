@@ -18,13 +18,78 @@ from rummi.evaluate.protocol import (
     Suite,
     evaluate,
 )
-from rummi.rules.config import STANDARD_3P, STANDARD_4P, TINY_GROUPS
+from rummi.rules.config import STANDARD, STANDARD_3P, STANDARD_4P, TINY_GROUPS
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.engine import step
 from rummi.env.observation import encode
 
 TINY = SUITE_BY_NAME["tiny"]
+
+
+def test_the_set_templates_are_every_set_that_could_be_legal():
+    """Counted rather than trusted: 264 runs and 65 groups on the standard config.
+    A template list that silently lost a shape would cap what any macro policy can
+    ever play, and nothing else would fail."""
+    from rummi.agents.macro import set_templates, template_points
+
+    templates = set_templates(STANDARD)
+    assert templates.shape == (329, STANDARD.n_kinds)
+    # Every template is a legal set: no duplicate kind, and within the length bounds.
+    assert (templates <= 1).all()
+    sizes = templates.sum(-1)
+    assert sizes.min() >= STANDARD.min_set
+    assert sizes.max() <= STANDARD.max_set_len
+    assert template_points(STANDARD).min() >= 3
+    # Cached, and the cache must not hand back a mutable view that a caller edits.
+    assert set_templates(STANDARD) is templates
+
+
+@pytest.mark.parametrize("cfg", [TINY_GROUPS, STANDARD_4P], ids=["tiny", "4p"])
+def test_a_macro_agent_only_ever_proposes_legal_actions(cfg):
+    """The whole point of the macro space: every action leaves the table whole, so
+    no expansion can strand tiles on the workbench. Tile conservation is the check
+    that would catch a bad expansion."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value, first_legal
+
+    for choose in (first_legal, by_value(cfg)):
+        agent = MacroAgent(cfg, choose=choose)
+        agent.reset(8)
+        state = reset(cfg, 8, seed=2)
+        for _ in range(120):
+            mask = legal_actions(state)
+            action = act_on_state(agent, state, mask)
+            assert mask[np.arange(8), action].all(), "proposed a masked-out action"
+            step(state, action, mask)
+            state.check_invariants()
+
+
+def test_choosing_which_set_to_play_is_what_the_macro_space_is_for():
+    """`first_legal` takes the cheapest set, so before the opening meld it plays
+    small and reverts; `by_value` takes the dearest. That one change is worth
+    melding 33% of steps against 57% at this probe size (29.6% against 78.5% over
+    32 envs and 400 steps) -- so a macro space whose policy could not tell the two
+    apart would not be exposing the decision it exists for.
+
+    The bound is deliberately loose: the gap grows with the sample, so pinning the
+    measured ratio here would make the test a tripwire for probe size."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value, first_legal
+    from rummi.env.observation import encode
+
+    melded = {}
+    for label, choose in (("first_legal", first_legal), ("by_value", by_value(STANDARD))):
+        agent = MacroAgent(STANDARD, choose=choose)
+        agent.reset(16)
+        state = reset(STANDARD, 16, seed=5)
+        seen = 0.0
+        for _ in range(200):
+            mask = legal_actions(state)
+            seen += float(encode(state)["melded"][:, 0].mean()) / 200
+            step(state, act_on_state(agent, state, mask), mask)
+        melded[label] = seen
+    assert melded["by_value"] > 1.4 * melded["first_legal"], melded
 
 
 def test_delegating_with_always_play_is_exactly_its_inner_agent():
