@@ -34,7 +34,7 @@ from torch import nn
 
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 from rummi.agents.learned.torch_net import MASKED
-from rummi.agents.macro import MacroAgent, by_value, first_legal, set_templates
+from rummi.agents.macro import MacroAgent, by_value, first_legal, n_macros
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
@@ -191,8 +191,8 @@ def main() -> None:
     torch.manual_seed(args.seed)
     generator = torch.Generator().manual_seed(args.seed)
     scale = feature_scale(cfg)
-    n_macros = len(set_templates(cfg)) + 2
-    net = MacroNet(cfg, n_macros, args.hidden)
+    macros = n_macros(cfg)
+    net = MacroNet(cfg, macros, args.hidden)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
 
     env = FixedOpponentEnv(
@@ -265,8 +265,8 @@ def main() -> None:
         accrued[e] = 0.0
         open_choice[e] = (x, legal.copy(), macro)
         tally["n"] = tally.get("n", 0) + 1
-        tally["end"] = tally.get("end", 0) + int(macro == n_macros - 2)
-        tally["draw"] = tally.get("draw", 0) + int(macro == n_macros - 1)
+        tally["end"] = tally.get("end", 0) + int(macro == macros - 2)
+        tally["draw"] = tally.get("draw", 0) + int(macro == macros - 1)
         return macro
 
     agent = MacroAgent(cfg, choose=choose)
@@ -274,7 +274,7 @@ def main() -> None:
     if agent_reset_needed:
         open_choice[:] = [None] * args.envs
     print(
-        f"config={args.config} opponent={args.opponent} macros={n_macros} "
+        f"config={args.config} opponent={args.opponent} macros={macros} "
         f"params={sum(q.numel() for q in net.parameters()):,}",
         flush=True,
     )

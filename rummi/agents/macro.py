@@ -41,7 +41,7 @@ import numpy as np
 
 from rummi.agents.base import Observation, has_melded, table, turn_starting
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import kind_of
+from rummi.rules.encoding import kind_of, tables
 
 _TEMPLATES: dict[RummiConfig, np.ndarray] = {}
 
@@ -75,25 +75,37 @@ def set_templates(cfg: RummiConfig) -> np.ndarray:
 
 
 def template_points(cfg: RummiConfig) -> np.ndarray:
-    """`(T,)` face value of each template, for the opening-meld threshold."""
-    numbers = np.array(
-        [
-            (k % cfg.n_numbers) + 1 if k != cfg.joker_kind else 0
-            for k in range(cfg.n_kinds)
-        ],
-        dtype=np.int32,
-    )
-    return (set_templates(cfg) * numbers).sum(-1).astype(np.int32)
+    """`(T,)` face value of each template, for the opening-meld threshold.
+
+    Values come from `rules.encoding`, which owns them, rather than being derived
+    from the kind index here -- that is the sort of definitional arithmetic the
+    three backends are kept from restating.
+    """
+    return (set_templates(cfg) * tables(cfg).value).sum(-1).astype(np.int32)
 
 
-def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
-    """`(B, T)` -- which templates a rack holds outright.
+def shortfall(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
+    """`(B, T)` tiles each template needs that the rack does not hold.
 
     One comparison over the whole template table rather than a search, which is
     what keeps this out of the NP-hard partitioning problem.
     """
-    covered = np.asarray(rack)[:, None, :] >= set_templates(cfg)[None]
-    return np.asarray(covered.all(-1), dtype=bool)
+    missing = set_templates(cfg)[None] - np.asarray(rack)[:, None, :]
+    # Templates never contain the joker, so its own column contributes nothing.
+    return np.maximum(missing, 0).sum(-1)
+
+
+def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
+    """`(B, T)` -- which templates the rack can lay down, jokers included.
+
+    A joker stands in for **one** missing tile. Two would be legal Rummikub and
+    are refused here, because with two gaps the pairing of jokers to gaps stops
+    being determined and `expand` would have to choose one.
+    """
+    rack = np.asarray(rack)
+    short = shortfall(cfg, rack)
+    jokers = rack[:, cfg.joker_kind][:, None]
+    return np.asarray((short == 0) | ((short == 1) & (jokers >= 1)), dtype=bool)
 
 
 def extensions(cfg: RummiConfig, contents: tuple[int, ...], rack: np.ndarray) -> list[int]:
@@ -140,11 +152,11 @@ class MacroAgent:
         self.cfg = cfg
         self.templates = set_templates(cfg)
         # templates, then EXTEND(slot, end), then END_TURN, then DRAW.
-        self.extend_offset = len(self.templates)
+        self.extend_offset = extend_offset(cfg)
         self.n_extend = 2 * cfg.max_sets
-        self.end_macro = self.extend_offset + self.n_extend
+        self.end_macro = _n_choices(cfg)
         self.draw_macro = self.end_macro + 1
-        self.n_macros = self.draw_macro + 1
+        self.n_macros = n_macros(cfg)
         self.choose = choose if choose is not None else first_legal
         self._queues: dict[int, list[int]] = {}
 
@@ -198,8 +210,17 @@ class MacroAgent:
                 if c
             ]
         else:
-            played = self.templates[macro].astype(np.int64)
-            kinds = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), played).tolist()))
+            rack = np.asarray(obs["rack"][env])
+            template = self.templates[macro].astype(np.int64)
+            # Whatever the rack cannot cover is stood in for by a joker, so the set
+            # that lands holds the joker and the rack loses it instead of the tile.
+            played = np.minimum(template, rack).astype(np.int64)
+            gap = np.maximum(template - rack, 0)
+            laid = template - gap
+            if gap.any():
+                played[cfg.joker_kind] += int(gap.sum())
+                laid[cfg.joker_kind] += int(gap.sum())
+            kinds = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), laid).tolist()))
             target = [c for c in current if c] + [kinds]
         actions = plan(cfg, board, target, played)
         # `plan` commits the turn, because it exists for a solver that decides a
@@ -242,9 +263,20 @@ class MacroAgent:
         return out
 
 
+def extend_offset(cfg: RummiConfig) -> int:
+    """Where `EXTEND(slot, end)` starts; below it, templates lay down new sets."""
+    return len(set_templates(cfg))
+
+
 def _n_choices(cfg: RummiConfig) -> int:
     """Index of the `END_TURN` macro: everything below it plays tiles."""
-    return len(set_templates(cfg)) + 2 * cfg.max_sets
+    return extend_offset(cfg) + 2 * cfg.max_sets
+
+
+def n_macros(cfg: RummiConfig) -> int:
+    """Size of the macro action space. Derive the layout from here, never restate
+    it: a caller that recomputed this built a head of the wrong width."""
+    return _n_choices(cfg) + 2
 
 
 def first_legal(obs: Observation, env: int, legal: np.ndarray) -> int:
