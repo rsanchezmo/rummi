@@ -14,26 +14,41 @@ whole.
 So: offer both -- the primitives for the turns macros cannot express, and a macro
 where one fits.
 
-**As written this does not work, and the reason is the rule below.** Measured under
-an untrained policy: the workbench is dirty in **94.5%** of decisions, `END_TURN` is
-legal in **0.5%** (against ~9% in the macro space), and **a macro is on offer in
-4.9%**. So the escape hatch is shut exactly when it is needed, training collapses to
-stalling (`end` 0.0%, terminal ~-1.03, entropy falling *into* the stalling policy),
-and no reward term helps: a bigger batch, `--rack-shaping` and `--micro-step-cost`
-were each tried and cannot make an illegal action attractive.
+**A macro consumes what is held.** Feasibility is judged against `rack + workbench`,
+and every tile on the workbench must be laid down by the macro itself. That second
+half is what makes offering one mid-turn safe at all: `to_actions.plan` balances the
+board against exactly what the hand plays, so a held tile the target does not want
+has nowhere to go, and the turn would stay uncommittable behind it. Per family:
 
-**The fix is to let a macro consume the held tiles** -- judge `playable` against
-`rack + workbench` with the workbench required to be used, and teach
-`to_actions.plan` to account for tiles already held rather than only for what leaves
-the rack. Until then the primitive trap is fully intact, and the claim that the
-half-built workbench is "avoidable" is only true of a policy that never takes a
-primitive.
+- a **template** lays its tiles, one joker standing in for at most one it cannot
+  cover, so it is offered when the workbench is within what it lays;
+- an **EXTEND** lays exactly one tile, so it is offered only when that tile *is* the
+  whole workbench;
+- a **STEAL** takes one tile off the table and lays the rest, so it is offered when
+  the workbench is within the template net of the stolen tile.
 
-**Macros require a clean state.** `to_actions.plan` balances the board against the
-tiles played from the rack, so tiles already sitting on the workbench are
-unaccounted for and it would refuse the plan. Once a primitive has dirtied the
-state, only primitives are on offer until the turn is whole again -- which is also
-the honest shape of the trade the agent is making.
+The rack supplies whatever the workbench does not, and `plan` emits a `PLACE` only
+for those: a held tile is already in hand and needs its `ASSIGN` alone.
+
+**What that buys, and what it does not.** Measured under a uniform-random policy over
+the legal hybrid actions: the workbench is dirty in **94.1%** of decisions and a macro
+is on offer in **14.7%**, against 4.9% under the clean-workbench rule this replaced.
+The rate is the shape of a macro, not a gap in the rule -- 90.1% with nothing held,
+44.5% holding one tile, 7.7% holding two, ~0% past four -- because **one macro plays
+one set**, so it can only absorb a workbench that fits inside one. Lift four
+unrelated tiles and only primitives and `DRAW` remain. Every macro that *is* offered
+clears the workbench, and 67.4% of the time leaves the table whole; the rest is a set
+an earlier `PICK` broke in the middle, which no single macro repairs. One hole is left
+open on purpose: an expansion longer than the turn's remaining micro budget is still
+offered, and is abandoned for `DRAW` at its first masked action like any stale plan,
+because measuring its length means expanding all 711 macros at every decision.
+
+**It is not yet enough to train.** `END_TURN` is legal in 0.7% of decisions, barely
+moved, because an empty workbench is only half of that condition and the opening-meld
+threshold is the other. 30 updates of PPO leave `end` at 0.0% and the terminal reward
+at ~-1.04, where the clean-workbench rule left them. The hatch is open wherever a set
+fits around the held tiles; finding it is now an exploration problem rather than an
+expressiveness one.
 """
 
 from __future__ import annotations
@@ -121,12 +136,12 @@ class HybridAgent:
     def legal(self, obs: Observation, env: int, mask: np.ndarray) -> np.ndarray:
         out = np.zeros(self.n_actions, dtype=bool)
         out[: self.macro_offset] = mask[env]
-        # A macro's expansion accounts for the board and the rack only, so it is
-        # offered exactly when nothing is held mid-turn.
-        if int(np.asarray(obs["workbench"])[env].sum()) == 0:
-            out[self.macro_offset :] = self.macro.legal_macros(obs, env, mask)[
-                : self.n_macro
-            ]
+        # The workbench goes to `legal_macros`, which offers a macro only if its
+        # expansion lays every held tile down. That is what keeps a way out of a
+        # half-built turn on offer instead of only before one starts.
+        out[self.macro_offset :] = self.macro.legal_macros(
+            obs, env, mask, held=np.asarray(obs["workbench"])[env]
+        )[: self.n_macro]
         return out
 
     def act(
@@ -148,7 +163,10 @@ class HybridAgent:
                     out[env] = action if mask[env, action] else cfg.draw_action
                     continue
                 queue = self._queues[env] = self.macro.expand(
-                    obs, env, action - self.macro_offset
+                    obs,
+                    env,
+                    action - self.macro_offset,
+                    held=np.asarray(obs["workbench"])[env],
                 )
             if not queue:
                 continue

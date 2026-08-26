@@ -118,28 +118,37 @@ template list expresses it. That is why `optimal` needs CP-SAT and why `rearrang
 stops at one tile. The ceiling here is `rearrange`'s +31.9; +44.6 needs a solver in
 the loop.
 
-## The hybrid space does not work yet
+## The hybrid space: the consumption fix is built, and it is not enough
 
 `rummi/agents/hybrid.py` offers the 2400 primitives alongside the macros so that any
-legal turn is expressible. It fails, and for a reason in its own design: macros
-require a clean workbench, because a macro's expansion balances the board against
-tiles played from the rack and `to_actions.plan` refuses a plan with tiles already
-held. Measured under an untrained policy:
+legal turn is expressible. As first built it failed by design: macros required a
+clean workbench, because `to_actions.plan` balanced the board against tiles played
+from the rack alone. The specified fix — **a macro consumes the held tiles** — is
+now implemented: feasibility is judged against `rack + workbench`, every held tile
+must be laid by the macro itself, and `plan(held=...)` emits no `PLACE` for a tile
+already in hand (the parameter defaults off, so `optimal` and the pure macro space
+are untouched). Every macro offered on a dirty workbench provably clears it; a test
+replays hundreds of such expansions against the env mask.
 
-| | hybrid | macro space |
+Measured under a uniform-random policy, before and after:
+
+| | clean-workbench rule | consumes held tiles |
 |---|---|---|
-| workbench dirty (tiles held mid-turn) | 94.5% | — |
-| `END_TURN` legal | 0.5% | ~9% |
-| any macro on offer | **4.9%** | 100% |
+| workbench dirty | 94.5% | 94.1% |
+| `END_TURN` legal | 0.5% | 0.6% |
+| any macro on offer | **4.9%** | **14.7%** |
 
-So the escape hatch is shut exactly when it is needed, and training collapses to
-stalling. A bigger batch, `--rack-shaping` and `--micro-step-cost` were each tried;
-none can make an illegal action attractive.
-
-**The fix:** let a macro consume the held tiles — judge `playable` against
-`rack + workbench` with the workbench required to be used, and teach
-`to_actions.plan` to account for tiles already held rather than only for what leaves
-the rack.
+**And training still collapses** — `end` stays at 0.0% over a training smoke,
+indistinguishable from the old gate. The mechanism is structural, not a bug in the
+rule: **one macro plays one set, so it can only absorb a workbench that fits inside
+one** — a macro is on offer at 44.5% of one-tile workbenches, 7.7% at two, ~0% past
+four, and a uniform policy lifts a tile per step straight out of range. The blocker
+has moved from expressiveness to exploration: the hatch is open wherever a set fits
+around the held tiles, but a near-uniform policy over 2400 primitives never finds
+it. Consistent with that, `--micro-step-cost 0.01` — useless when ending was
+*illegal* — is the first arm where the finish counter ever moved (6–7 finished
+episodes per update against ~1). If this space is picked up again, that is the
+thread to pull, not the consumption rule.
 
 ## Scope: one suite proves one thing
 

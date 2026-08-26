@@ -75,9 +75,10 @@ def test_the_hybrid_space_contains_the_macro_agent_exactly():
     `macro_first` did not reproduce the macro agent action for action, a difference
     in training could come from the wrapper rather than from the added primitives.
 
-    It also pins the rule that makes the two blocks safe to mix -- a macro's
-    expansion balances the board against tiles played from the rack, so it is
-    offered only when nothing is held mid-turn."""
+    Widening the macro block to dirty workbenches must not disturb it: every macro
+    `macro_first` picks finishes what it starts, so its own decisions all land on a
+    clean workbench and the extra offers are never taken. Both are counted, because
+    the equality is only worth something if those offers were really there."""
     from rummi.agents.base import act_on_state
     from rummi.agents.hybrid import HybridAgent, macro_first
     from rummi.agents.macro import MacroAgent, by_value
@@ -88,7 +89,7 @@ def test_the_hybrid_space_contains_the_macro_agent_exactly():
     hybrid.reset(12)
     macro.reset(12)
     left, right = reset(cfg, 12, seed=5), reset(cfg, 12, seed=5)
-    dirty_seen = 0
+    dirty_seen = offered_on_dirty = 0
     for _ in range(200):
         l_mask, r_mask = legal_actions(left), legal_actions(right)
         # Once each: `act` pops the agent's queued plan, so calling it twice would
@@ -99,13 +100,69 @@ def test_the_hybrid_space_contains_the_macro_agent_exactly():
 
         obs = encode(left)
         for env in range(12):
-            offered = hybrid.legal(obs, env, l_mask)[hybrid.macro_offset :].any()
-            if np.asarray(obs["workbench"])[env].sum() > 0:
-                dirty_seen += 1
-                assert not offered, "offered a macro with tiles held mid-turn"
+            if np.asarray(obs["workbench"])[env].sum() == 0:
+                continue
+            dirty_seen += 1
+            legal = hybrid.legal(obs, env, l_mask)
+            offered_on_dirty += int(legal[hybrid.macro_offset :].any())
         step(left, l_act, l_mask)
         step(right, r_act, r_mask)
     assert dirty_seen > 0, "never saw a mid-turn state, so the rule was not exercised"
+    assert offered_on_dirty > 0, "no macro was ever offered mid-turn, so nor was this"
+
+
+def test_a_macro_offered_with_tiles_held_consumes_the_whole_workbench():
+    """The rule that makes the two blocks safe to mix.
+
+    A macro is on offer with tiles held only if its expansion lays *every* one of
+    them down: `plan` balances the board against exactly what the hand plays, so a
+    held tile the target does not want has nowhere to go, and the turn stays
+    uncommittable behind it. Executing the expansion is the check -- it must pass
+    the env's own mask at every step and leave the workbench empty.
+
+    The earlier rule offered macros only on a clean workbench, which shut the exit
+    exactly where a policy needs it: under an untrained policy the workbench is
+    dirty at 94.5% of decisions."""
+    from rummi.agents.hybrid import HybridAgent
+
+    cfg = STANDARD
+    rng = np.random.default_rng(0)
+
+    def choose(obs, env, legal):
+        return int(rng.choice(np.flatnonzero(legal)))
+
+    agent = HybridAgent(cfg, choose=choose)
+    agent.reset(8)
+    state = reset(cfg, 8, seed=7)
+    checked = 0
+
+    for _ in range(200):
+        mask = legal_actions(state)
+        obs = encode(state)
+        for env in range(8):
+            held = np.asarray(obs["workbench"])[env]
+            if held.sum() == 0:
+                continue
+            offered = np.flatnonzero(agent.legal(obs, env, mask)[agent.macro_offset :])
+            # Two per state samples the families without sweeping 711 macros on
+            # every step of every env.
+            for macro in rng.permutation(offered)[:2]:
+                actions = agent.macro.expand(obs, env, int(macro), held=held)
+                if len(actions) > cfg.max_micro_per_turn - int(state.micro_count[env]):
+                    # Refused on the turn's micro budget, which is the env's rule
+                    # and not the one under test.
+                    continue
+                probe = state.select(env)
+                for action in actions:
+                    probe_mask = legal_actions(probe)
+                    assert probe_mask[0, action], f"macro {macro} emitted {action}, illegal"
+                    step(probe, np.array([action]), probe_mask)
+                assert probe.workbench.sum() == 0, f"macro {macro} left tiles held"
+                probe.check_invariants()
+                checked += 1
+        step(state, agent.act(obs, mask), mask)
+
+    assert checked > 200, f"only {checked} macros were expanded from a dirty workbench"
 
 
 def test_a_tile_may_only_be_appended_to_a_set_that_stays_valid():

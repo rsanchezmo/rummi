@@ -34,12 +34,21 @@ def plan(
     table: np.ndarray,
     target_sets,
     played: np.ndarray,
+    held: np.ndarray | None = None,
 ) -> list[int]:
     """Micro-actions taking ``table`` to ``target_sets`` while playing ``played``.
 
+    ``played`` counts tiles still in the rack, so each one costs a ``PLACE`` and
+    then an ``ASSIGN``. ``held`` counts tiles already on the workbench: they are
+    lifted already, so they are consumed by the target but never placed again.
+    Every ``PLACE`` precedes every ``ASSIGN``, which is why a held tile needs no
+    separate treatment beyond being left out of the placing.
+
     Raises if the request is inconsistent -- a target that does not account for
     every tile in play is a solver bug, and silently emitting a partial plan
-    would surface it much later as an illegal action.
+    would surface it much later as an illegal action. That check is also what
+    guarantees a held tile the target does not want is refused rather than
+    stranded on the workbench.
     """
     current = slot_contents(table)
     wanted = Counter(tuple(sorted(s)) for s in target_sets)
@@ -55,19 +64,21 @@ def plan(
     ]
     new_sets = list(wanted.elements())
 
-    # Whatever comes off the table plus whatever leaves the rack must be exactly
-    # what the new sets consume.
+    # Whatever comes off the table, plus whatever leaves the rack, plus whatever is
+    # already in hand must be exactly what the new sets consume.
     freed: Counter[int] = Counter()
     for slot in dissolve:
         freed.update(current[slot])
     freed.update(int(k) for k in counts_to_kinds(np.maximum(0, played)))
+    if held is not None:
+        freed.update(int(k) for k in counts_to_kinds(np.maximum(0, held)))
     needed: Counter[int] = Counter()
     for content in new_sets:
         needed.update(content)
     if freed != needed:
         raise ValueError(
-            f"plan does not balance: dissolved+played={dict(freed)} but new sets "
-            f"need {dict(needed)}"
+            f"plan does not balance: dissolved+played+held={dict(freed)} but new "
+            f"sets need {dict(needed)}"
         )
 
     empty = [slot for slot, content in enumerate(current) if not content]

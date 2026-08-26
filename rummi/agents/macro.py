@@ -119,6 +119,22 @@ def playable(cfg: RummiConfig, rack: np.ndarray) -> np.ndarray:
     return np.asarray((short == 0) | ((short == 1) & (jokers >= 1)), dtype=bool)
 
 
+def laid_tiles(cfg: RummiConfig, templates: np.ndarray, hand: np.ndarray) -> np.ndarray:
+    """What `templates` actually put on the table, drawing on `hand`.
+
+    A gap the hand cannot cover is stood in for by a joker, so the set that lands
+    is not the template and this -- not the template -- is what a plan has to
+    balance against. Broadcasts over a `(T, K)` table or a single `(K,)` row, which
+    is what keeps legality and expansion reading the same rule: `legal_macros`
+    tests the held tiles against every row, `expand` builds its target from one.
+    """
+    gap = np.maximum(templates - hand, 0)
+    laid = templates - gap
+    laid[..., cfg.joker_kind] += gap.sum(-1)
+    return laid
+
+
+
 def removals(cfg: RummiConfig, contents: tuple[int, ...]) -> list[int]:
     """Kinds that can leave this set with what remains still a legal set.
 
@@ -200,6 +216,18 @@ Choose = Callable[[Observation, int, np.ndarray], int]
 """`(obs, env, legal) -> macro index`, where `legal` is the `(n_macros,)` mask."""
 
 
+def _holding(held: np.ndarray | None) -> np.ndarray | None:
+    """`held` as int64 counts, or `None` when nothing is actually held.
+
+    An all-zero workbench is folded into `None` so the clean-workbench path stays
+    the one path: a macro consuming an empty multiset is every macro.
+    """
+    if held is None:
+        return None
+    holding = np.asarray(held).astype(np.int64)
+    return holding if holding.any() else None
+
+
 class MacroAgent:
     """Actions are `T` set templates, then `END_TURN`, then `DRAW`."""
 
@@ -221,22 +249,53 @@ class MacroAgent:
     def reset(self, n_envs: int) -> None:
         self._queues = {}
 
-    def legal_macros(self, obs: Observation, env: int, mask: np.ndarray) -> np.ndarray:
+    def legal_macros(
+        self,
+        obs: Observation,
+        env: int,
+        mask: np.ndarray,
+        held: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """`(n_macros,)` mask. `held` is the workbench, per kind.
+
+        A held tile is as available as one still in the rack, so feasibility is
+        judged against `rack + held`. It is also *committed*: a macro is offered
+        only when its expansion lays every held tile down, because `plan` balances
+        the board against exactly what the hand plays and a tile the target does
+        not want would be left stranded, with `END_TURN` unreachable behind it.
+
+        `MacroAgent` itself never passes this -- it decides only when nothing is
+        held -- so the default is the clean-workbench rule unchanged.
+        """
         from rummi.solver.to_actions import slot_contents
 
         cfg = self.cfg
         out = np.zeros(self.n_macros, dtype=bool)
         board = table(obs)[env]
-        rack = np.asarray(obs["rack"][env])
+        rack = np.asarray(obs["rack"][env]).astype(np.int64)
+        holding = _holding(held)
+        hand = rack if holding is None else rack + holding
         if (board.max(-1) < 0).any():  # a free slot to put a new set in
-            out[: self.extend_offset] = playable(cfg, rack[None])[0]
+            ok = playable(cfg, hand[None])[0]
+            if holding is not None:
+                laid = laid_tiles(cfg, self.templates.astype(np.int64), hand)
+                ok = ok & (holding[None] <= laid).all(-1)
+            out[: self.extend_offset] = ok
 
         # The table is untouchable until the opening meld, exactly as the env's own
         # mask has it -- so laying off is illegal there, not merely unwise.
         if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
             # Indexed by tile, so a kind is legal when *any* slot takes it; `expand`
-            # reads the same matrix to pick which one.
-            out[self.extend_offset : self.steal_offset] = appendable(cfg, board, rack).any(0)
+            # reads the same matrix to pick which one. A lay-off plays exactly one
+            # tile, so it can absorb the workbench only when the workbench *is*
+            # that one tile.
+            allowed = appendable(cfg, board, hand).any(0)
+            if holding is not None:
+                one_tile = np.zeros(cfg.n_kinds, dtype=bool)
+                if holding.sum() == 1:
+                    one_tile[int(holding.argmax())] = True
+                allowed = allowed & one_tile
+            out[self.extend_offset : self.steal_offset] = allowed
 
             # Stealing dissolves the donor and rebuilds it beside the new set, so it
             # needs one free slot on top of the donor's own.
@@ -245,12 +304,16 @@ class MacroAgent:
                 for contents in slot_contents(board):
                     for kind in removals(cfg, contents):
                         stealable[kind] = True
-                gap = np.maximum(self.templates - rack, 0)
+                gap = np.maximum(self.templates - hand, 0)
                 short = gap.sum(-1)
                 # `argmax` is the missing kind only where exactly one is missing.
-                out[self.steal_offset : self.end_macro] = (short == 1) & stealable[
-                    gap.argmax(-1)
-                ]
+                ok = (short == 1) & stealable[gap.argmax(-1)]
+                if holding is not None:
+                    # The stolen tile comes off the table, so what the hand lays is
+                    # the template minus it -- and that is `min(template, hand)`
+                    # exactly where one tile is missing.
+                    ok = ok & (holding[None] <= np.minimum(self.templates, hand)).all(-1)
+                out[self.steal_offset : self.end_macro] = ok
 
         # Pre-meld the threshold is on the whole turn, so a single template that
         # cannot reach it is still worth playing alongside another.
@@ -258,8 +321,20 @@ class MacroAgent:
         out[self.draw_macro] = True  # DRAW is never masked, by design
         return out
 
-    def expand(self, obs: Observation, env: int, macro: int) -> list[int]:
-        """Micro-actions for one macro. Empty means DRAW."""
+    def expand(
+        self,
+        obs: Observation,
+        env: int,
+        macro: int,
+        held: np.ndarray | None = None,
+    ) -> list[int]:
+        """Micro-actions for one macro. Empty means DRAW.
+
+        `held` is the workbench, per kind, and the macro must be one
+        `legal_macros` offered for it: the tiles it lays are drawn from
+        `rack + held`, and the held ones are already lifted, so they get their
+        `ASSIGN` and no `PLACE`.
+        """
         from rummi.solver.to_actions import plan, slot_contents
 
         if macro == self.draw_macro:
@@ -270,11 +345,15 @@ class MacroAgent:
         cfg = self.cfg
         board = table(obs)[env]
         current = slot_contents(board)
+        holding = _holding(held)
+        if holding is None:
+            holding = np.zeros(cfg.n_kinds, dtype=np.int64)
+        rack = np.asarray(obs["rack"][env]).astype(np.int64)
+        hand = rack + holding
 
         if macro >= self.steal_offset:
-            rack = np.asarray(obs["rack"][env])
             template = self.templates[macro - self.steal_offset].astype(np.int64)
-            gap = np.maximum(template - rack, 0)
+            gap = np.maximum(template - hand, 0)
             kind = int(gap.argmax())
             donor = next(
                 slot for slot, c in enumerate(current) if c and kind in removals(cfg, c)
@@ -282,7 +361,8 @@ class MacroAgent:
             left = list(current[donor])
             left.remove(kind)
             whole = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), template).tolist()))
-            played = np.minimum(template, rack).astype(np.int64)
+            # The stolen tile comes off the table, so the hand supplies the rest.
+            played = np.minimum(template, hand) - holding
             target = [
                 tuple(sorted(left)) if slot == donor else c
                 for slot, c in enumerate(current)
@@ -290,35 +370,30 @@ class MacroAgent:
             ] + [whole]
         elif macro >= self.extend_offset:
             kind = macro - self.extend_offset
-            rack = np.asarray(obs["rack"][env])
             # Indexed by tile rather than by slot, so the receiving set is whichever
             # takes it. Choosing between two sets that both accept the same tile is
             # given up deliberately: it makes the action describable to a policy --
             # its tile is known -- where a slot index says nothing about what is
             # played. Same matrix `legal_macros` gated on, so the two cannot disagree
             # about which slot that is.
-            slot = int(np.flatnonzero(appendable(cfg, board, rack)[:, kind])[0])
+            slot = int(np.flatnonzero(appendable(cfg, board, hand)[:, kind])[0])
             played = np.zeros(cfg.n_kinds, dtype=np.int64)
             played[kind] = 1
+            played -= holding
             target = [
                 tuple(sorted((*c, kind))) if i == slot else c
                 for i, c in enumerate(current)
                 if c
             ]
         else:
-            rack = np.asarray(obs["rack"][env])
             template = self.templates[macro].astype(np.int64)
-            # Whatever the rack cannot cover is stood in for by a joker, so the set
-            # that lands holds the joker and the rack loses it instead of the tile.
-            played = np.minimum(template, rack).astype(np.int64)
-            gap = np.maximum(template - rack, 0)
-            laid = template - gap
-            if gap.any():
-                played[cfg.joker_kind] += int(gap.sum())
-                laid[cfg.joker_kind] += int(gap.sum())
+            # Whatever the hand cannot cover is stood in for by a joker, so the set
+            # that lands holds the joker and the hand loses it instead of the tile.
+            laid = laid_tiles(cfg, template, hand)
+            played = laid - holding
             kinds = tuple(sorted(np.repeat(np.arange(cfg.n_kinds), laid).tolist()))
             target = [c for c in current if c] + [kinds]
-        actions = plan(cfg, board, target, played)
+        actions = plan(cfg, board, target, played, held=holding)
         # `plan` commits the turn, because it exists for a solver that decides a
         # whole turn at once. Here the turn is not over: the set is complete, so the
         # table is whole and ending is *legal*, but whether to end it or play
