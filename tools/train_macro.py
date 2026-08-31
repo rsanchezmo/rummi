@@ -36,10 +36,30 @@ episode yields several times more of them.
 **`--opponent` is a pool, and `self` is one of its members.** Against a single
 fixed opponent the terminal reward saturates once the policy beats it, and the
 gradient thins out; `--opponent greedy,rearrange` mixes the batch, and `self` seats
-a frozen copy of the learner refreshed every `--snapshot-every` updates. Frozen and
-*lagging* on purpose: an opponent that is the learner itself is a target moving in
-step with the policy chasing it. `--init-from` warm-starts from a run against a
-weaker opponent, which is the other half of the same curriculum.
+frozen copies of the learner. Frozen and *lagging* on purpose: an opponent that is
+the learner itself is a target moving in step with the policy chasing it.
+`--init-from` warm-starts from a run against a weaker opponent, which is the other
+half of the same curriculum.
+
+Three things make that member behave, all of them things a single recent copy gets
+wrong. `--snapshot-pool` holds several past selves at once and refreshes them in
+rotation, so the batch spans lags rather than one, and beating last week's self
+cannot make the policy forget what beat the week before. `--snapshot-gate` promotes
+only when the learner has improved against the pool since it last promoted into it,
+so a regression cannot install itself as the opponent. Against *that* and not
+against zero, because training pins the learner to one seat: the evaluation protocol
+scores a mirrored agent at exactly +0.0 only because it rotates every deal through
+every seat, and nothing here does. And the schedule counts policy
+updates, not wall-clock ones, because a `--value-warmup` update moves the critic
+alone.
+
+**Every rate is reported per opponent as well as pooled**, which the fixed
+round-robin seating is what makes possible. Pooled, a rising terminal reward cannot
+be told apart from an opponent that got worse -- and with `self` in the pool that is
+the failure mode, not a corner case. The advantage is normalised per opponent for
+the same reason: the observation says nothing about who is playing, so the critic
+cannot predict the value gap between facing `greedy` and facing a snapshot, and one
+shared normaliser reads that gap as advantage.
 """
 
 from __future__ import annotations
@@ -260,6 +280,38 @@ def restore(
     return checkpoint, saved_hidden, saved_head
 
 
+def _by_opponent(names, tally, closed, faced, rewards) -> list[dict]:
+    """What the batch says about each pool member, and nothing about the others.
+
+    The fixed round-robin seating is what makes this readable at all: pooled over a
+    mixed batch, a rising terminal reward cannot be told apart from an opponent that
+    got worse -- and with `self` in the pool that is the failure mode, not a corner
+    case.
+    """
+    rows = []
+    for member, name in enumerate(names):
+        mine = closed & (faced == member)
+        decisions = max(int(tally[member, 0]), 1)
+        rows.append(
+            {
+                "opponent": name,
+                "decisions": int(tally[member, 0]),
+                "end_rate": int(tally[member, 1]) / decisions,
+                "draw_rate": int(tally[member, 2]) / decisions,
+                "terminal": rewards[mine].mean().item() if bool(mine.any()) else None,
+            }
+        )
+    return rows
+
+
+def _opponent_line(row: dict) -> str:
+    """One pool member's slice of an update, for the per-opponent log line."""
+    head = f"{row['opponent']}: {row['decisions']:>5,} dec end {row['end_rate']:>5.1%}"
+    if row["terminal"] is None:
+        return f"{head} term (none closed)"
+    return f"{head} term {row['terminal']:>+7.3f}"
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default="standard", choices=sorted(CONFIG_BY_NAME))
@@ -276,7 +328,25 @@ def main() -> None:
     )
     p.add_argument(
         "--snapshot-every", type=int, default=25,
-        help="updates between refreshes of the 'self' opponent's frozen weights",
+        help="policy updates between refreshes of a 'self' snapshot. Warmup updates "
+             "do not count: the policy does not move during them",
+    )
+    p.add_argument(
+        "--snapshot-pool", type=int, default=4,
+        help="how many past selves the 'self' member holds. They are refreshed one "
+             "at a time in rotation, so the pool spans lags of --snapshot-every, "
+             "2x that, and so on -- which is what stops the policy chasing one "
+             "recent copy of itself in a circle and forgetting older play",
+    )
+    p.add_argument(
+        "--snapshot-gate", type=float, default=0.0,
+        help="promote a snapshot only when the learner's mean terminal reward "
+             "against the 'self' envs has improved by at least this much since the "
+             "last promotion, so a policy that got worse cannot install itself as "
+             "the opponent. The comparison is against that remembered score and not "
+             "against zero: the learner is pinned to one seat here, so a mirrored "
+             "match does not score +0.0 the way the rotated protocol makes it. Pass "
+             "a large negative number to promote on the clock alone",
     )
     p.add_argument("--envs", type=int, default=64)
     p.add_argument("--horizon", type=int, default=256)
@@ -408,32 +478,96 @@ def main() -> None:
 
         return choose
 
-    snapshot: MacroNet | None = None
-    if "self" in opponents:
-        # A copy of the weights, not a reference to them, refreshed every
-        # --snapshot-every updates. An opponent that lags the learner is a
-        # curriculum; one that *is* the learner is a target moving in step with
-        # whatever is chasing it.
-        snapshot = copy.deepcopy(net).eval()
-        for parameter in snapshot.parameters():
-            parameter.requires_grad_(False)
+    # Copies of the weights, not references to them. An opponent that lags the
+    # learner is a curriculum; one that *is* the learner is a target moving in step
+    # with whatever is chasing it. Several lags at once, because a single recent
+    # copy lets the policy cycle: it beats last week's self, forgets what beat the
+    # week before, and goes round.
+    def sample_choose(model: MacroNet) -> Choose:
+        """Samples, where `argmax_choose` takes the mode.
 
-    def refresh_snapshot() -> None:
-        """In place, so the agents already seated in the env keep working."""
-        if snapshot is not None:
-            snapshot.load_state_dict(net.state_dict())
+        A snapshot is a copy of the learner's *policy*, and the learner samples. The
+        mode of a mid-training policy is a different and much worse player: measured
+        on seed 2, the update-25 argmax never chose `END_TURN`, stacked macros to the
+        micro cap and lost every game -- a broken opponent rather than a lagging one,
+        and the learner then trains against a free win. Reproducibility comes from
+        the seeded generator, not from taking the mode.
+        """
+        def choose(o, e: int, legal: np.ndarray) -> int:
+            x = features(o, e)
+            with torch.no_grad():
+                logits, _ = model(torch.as_tensor(x)[None])
+            masked = torch.where(
+                torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
+            )
+            return int(torch.multinomial(torch.softmax(masked[0], -1), 1, generator=generator))
+
+        return choose
+
+    snapshots: list[MacroNet] = []
+    if "self" in opponents:
+        for _ in range(max(args.snapshot_pool, 1)):
+            past = copy.deepcopy(net).eval()
+            for parameter in past.parameters():
+                parameter.requires_grad_(False)
+            snapshots.append(past)
+    next_snapshot = 0
+    # What the learner scored against the pool as it stood when it was last
+    # promoted into. The gate is read against this rather than against zero: unlike
+    # the evaluation protocol, training does not rotate seats, so turn order does
+    # not cancel and an even match does not sit at +0.0.
+    promoted_at: float | None = None
+    measuring = False
+
+    def refresh_snapshot(all_of_them: bool = False) -> None:
+        """In place, so the agents already seated in the env keep working.
+
+        One at a time in rotation: refreshing the whole pool at once would collapse
+        it to a single lag, which is the thing it exists to avoid.
+        """
+        nonlocal next_snapshot
+        if not snapshots:
+            return
+        targets = snapshots if all_of_them else [snapshots[next_snapshot]]
+        for target in targets:
+            target.load_state_dict(net.state_dict())
+        next_snapshot = (next_snapshot + 1) % len(snapshots)
+
+    # The seating is a fixed round-robin over the env index, which is exactly what
+    # makes a metric read per env mean something. Derived before the env so the
+    # snapshot member can be built against it, and checked against it after.
+    member_of = np.arange(args.envs) % len(opponents)
+    self_member = opponents.index("self") if "self" in opponents else -1
+    # Which snapshot each of *its own* envs faces. Ranked within the member's share,
+    # not `env % pool`: with `greedy,self` the member only ever sees odd env indices,
+    # so a plain modulo would consult half the pool and leave the rest to go stale.
+    snapshot_of = np.zeros(args.envs, dtype=np.int64)
+    if snapshots:
+        ours = np.flatnonzero(member_of == self_member)
+        snapshot_of[ours] = np.arange(len(ours)) % len(snapshots)
 
     def opponent_member(name: str) -> str | Agent:
+        """`self` is **one** member of the pool whatever --snapshot-pool says.
+
+        Spreading the snapshots over their own pool slots would silently re-weight
+        the batch -- `greedy,self` with four snapshots would leave greedy a fifth of
+        the envs rather than half. So the member dispatches per env instead, and the
+        shares stay where the caller put them.
+        """
         if name != "self":
             return name
-        assert snapshot is not None
-        choose = argmax_choose(snapshot)
+        choosers = [sample_choose(past) for past in snapshots]
+
+        def choose(o, e: int, legal: np.ndarray) -> int:
+            return choosers[snapshot_of[e]](o, e, legal)
+
         return HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
 
     env = FixedOpponentEnv(
         num_envs=args.envs, cfg=cfg, seed=args.seed,
         opponent=[opponent_member(name) for name in opponents],
     )
+    assert np.array_equal(member_of, env.pool_index), "the seating is not what was assumed"
     obs, info = env.reset()
 
     teachers = (
@@ -467,9 +601,9 @@ def main() -> None:
             fit(net, pool, args.clone_epochs, args.lr, generator)
         obs, info = env.reset()
         agent_reset_needed = True
-        # The self-play opponent starts where the learner does, so it is the cloned
-        # policy it faces at update 1, not the random init the snapshot was taken of.
-        refresh_snapshot()
+        # The self-play opponents start where the learner does, so it is the cloned
+        # policy they face at update 1, not the random init they were taken of.
+        refresh_snapshot(all_of_them=True)
     else:
         agent_reset_needed = False
 
@@ -491,9 +625,12 @@ def main() -> None:
     open_choice: list[tuple[np.ndarray, np.ndarray, int, float] | None] = [None] * args.envs
     accrued = np.zeros(args.envs, dtype=np.float32)
     steps: list[
-        tuple[np.ndarray, np.ndarray, int, float, float, np.ndarray, float]
+        tuple[np.ndarray, np.ndarray, int, float, float, np.ndarray, float, int]
     ] = []
-    tally: dict[str, int] = {}
+    # [decisions, END_TURN, DRAW] per pool member. Pooled across a mixed batch these
+    # three cannot separate "the learner improved" from "its opponent got worse",
+    # which is the whole reason the seating is a fixed split.
+    tally = np.zeros((len(opponents), 3), dtype=np.int64)
     history: list[dict] = []
 
     def choose(o, e: int, legal: np.ndarray) -> int:
@@ -512,12 +649,12 @@ def main() -> None:
         behaviour = float(torch.log_softmax(masked[0], -1)[macro])
         if open_choice[e] is not None:
             prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
-            steps.append((prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]), x, 0.0))
+            steps.append(
+                (prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]), x, 0.0, e)
+            )
         accrued[e] = 0.0
         open_choice[e] = (x, legal.copy(), macro, behaviour)
-        tally["n"] = tally.get("n", 0) + 1
-        tally["end"] = tally.get("end", 0) + int(macro == end_action)
-        tally["draw"] = tally.get("draw", 0) + int(macro == draw_action)
+        tally[member_of[e]] += (1, int(macro == end_action), int(macro == draw_action))
         return macro
 
     agent = HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
@@ -528,7 +665,8 @@ def main() -> None:
         f"config={args.config} space={args.space} opponent={args.opponent} "
         f"actions={macros} head={head} micro_cost={args.micro_step_cost} "
         f"params={sum(q.numel() for q in net.parameters()):,}"
-        + (f" snapshot_every={args.snapshot_every}" if snapshot is not None else "")
+        + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
+           f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
         + (f" init_from={args.init_from}" if args.init_from else ""),
         flush=True,
     )
@@ -536,7 +674,7 @@ def main() -> None:
 
     for update in range(1, args.updates + 1):
         steps.clear()
-        tally.clear()
+        tally[:] = 0
         finished = 0
 
         for _ in range(args.horizon):
@@ -560,7 +698,8 @@ def main() -> None:
                 if open_choice[e] is not None:
                     prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
                     steps.append(
-                        (prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]), prev_x, 1.0)
+                        (prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]),
+                         prev_x, 1.0, e)
                     )
                     open_choice[e] = None
                 accrued[e] = 0.0
@@ -577,6 +716,7 @@ def main() -> None:
         r = torch.as_tensor(np.asarray([s[4] for s in steps], dtype=np.float32))
         nxt = torch.as_tensor(np.stack([s[5] for s in steps]))
         terminal = torch.as_tensor(np.asarray([s[6] for s in steps], dtype=np.float32))
+        faced = torch.as_tensor(member_of[np.asarray([s[7] for s in steps])])
 
         warming = update <= args.value_warmup
         # Targets and advantages come from the policy that acted, once, and are held
@@ -586,11 +726,25 @@ def main() -> None:
             _, next_value = net(nxt)
             target = r + args.gamma * (1.0 - terminal) * next_value
             advantage = target - value_old
-            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+            # Normalised per opponent, not over the pooled batch. The observation
+            # says nothing about who is sitting across the table -- opponents are
+            # merged into `unseen` by design -- so the critic cannot predict the
+            # value gap between facing greedy and facing a snapshot, and one shared
+            # normaliser reads that gap as advantage on whatever action was taken.
+            for member in range(len(opponents)):
+                mine = faced == member
+                count = int(mine.sum())
+                if count == 0:
+                    continue
+                block = advantage[mine]
+                spread = block.std() if count > 1 else torch.zeros(())
+                advantage[mine] = (block - block.mean()) / (spread + 1e-8)
 
         total = len(steps)
         size = max(total // args.minibatches, 1)
-        entropy = torch.zeros(())
+        # Accumulated over the chunks, not left holding the last one: the chunking is
+        # a memory device, and a quarter of the batch is not what H means.
+        entropy_sum, entropy_n = 0.0, 0
         for _ in range(1 if warming else args.epochs):
             order = torch.randperm(total, generator=generator)
             active = value_opt if warming else opt
@@ -603,6 +757,8 @@ def main() -> None:
                 logp_all = torch.log_softmax(logits, -1)
                 logp = logp_all.gather(1, a[idx][:, None])[:, 0]
                 entropy = -(logp_all.exp() * logp_all).sum(-1).mean()
+                entropy_sum += float(entropy.detach()) * len(idx)
+                entropy_n += len(idx)
                 value_loss = (value - target[idx]).pow(2).mean()
 
                 if warming:
@@ -635,21 +791,50 @@ def main() -> None:
             nn.utils.clip_grad_norm_(net.parameters(), 0.5)
             active.step()
 
-        n = max(tally.get("n", 1), 1)
-        end_rate = tally.get("end", 0) / n
-        draw_rate = tally.get("draw", 0) / n
-        terminal_mean = r[terminal > 0].mean().item()
-        refreshed = snapshot is not None and update % args.snapshot_every == 0
+        mean_entropy = entropy_sum / max(entropy_n, 1)
+        closed = terminal > 0
+        totals = tally.sum(0)
+        n = max(int(totals[0]), 1)
+        end_rate = int(totals[1]) / n
+        draw_rate = int(totals[2]) / n
+        terminal_mean = r[closed].mean().item() if bool(closed.any()) else float("nan")
+
+        by_opponent = _by_opponent(opponents, tally, closed, faced, r)
+
+        # The schedule counts *policy* updates: a warmup update fits the critic
+        # alone, so the policy a snapshot would copy has not moved. The first one
+        # refreshes too -- the pool is still the untrained init, and the policy moves
+        # furthest in exactly the phase a fixed period would leave it there for.
+        policy_updates = max(update - args.value_warmup, 0)
+        due = bool(snapshots) and (
+            policy_updates == 1 or (policy_updates > 0 and policy_updates % args.snapshot_every == 0)
+        )
+        beat_self = by_opponent[self_member]["terminal"] if self_member >= 0 else None
+        if measuring and beat_self is not None:
+            # The update right after a promotion, so this is what the pool the
+            # learner now faces is worth to it. Everything later is read against it.
+            promoted_at, measuring = beat_self, False
+        held = (
+            due
+            and beat_self is not None
+            and promoted_at is not None
+            and beat_self - promoted_at < args.snapshot_gate
+        )
+        refreshed = due and not held
         if refreshed:
             refresh_snapshot()
+            measuring = True
         print(
-            f"update {update:>4}{' warm' if warming else ''}{' snap' if refreshed else ''}  "
+            f"update {update:>4}{' warm' if warming else ''}{' snap' if refreshed else ''}"
+            f"{' held' if held else ''}  "
             f"episodes {finished:>4}  decisions {len(steps):>6,}  "
             f"end {end_rate:>5.1%}  draw {draw_rate:>5.1%}  "
-            f"terminal {terminal_mean:>+7.3f}  H {entropy.item():>5.3f}  "
+            f"terminal {terminal_mean:>+7.3f}  H {mean_entropy:>5.3f}  "
             f"{len(steps) / (time.perf_counter() - started):>5.0f} dec/s",
             flush=True,
         )
+        if len(opponents) > 1:
+            print("      " + "   ".join(_opponent_line(row) for row in by_opponent), flush=True)
         history.append(
             {
                 "update": update,
@@ -658,9 +843,12 @@ def main() -> None:
                 "end_rate": end_rate,
                 "draw_rate": draw_rate,
                 "terminal": terminal_mean,
-                "entropy": entropy.item(),
+                "entropy": mean_entropy,
                 "warmup": bool(warming),
                 "snapshot_refreshed": bool(refreshed),
+                "snapshot_held": bool(held),
+                "promoted_at": promoted_at,
+                "by_opponent": by_opponent,
             }
         )
         started = time.perf_counter()
@@ -717,7 +905,9 @@ def main() -> None:
                     "config": args.config,
                     "space": args.space,
                     "opponent": args.opponent,
-                    "snapshot_every": args.snapshot_every if snapshot is not None else None,
+                    "snapshot_every": args.snapshot_every if snapshots else None,
+                    "snapshot_pool": len(snapshots) or None,
+                    "snapshot_gate": args.snapshot_gate if snapshots else None,
                     "init_from": str(args.init_from) if args.init_from else None,
                     "hidden": hidden,
                     "head": head,
