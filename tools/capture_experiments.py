@@ -34,17 +34,30 @@ AGENTS = {
     "hybrid/macro_first": lambda cfg: HybridAgent(cfg, choose=macro_first(cfg)),
 }
 
+REPARTITION = {
+    # The same chooser, so the row is the value of the extra macro and nothing else.
+    # Behind a flag because it is the only agent here that solves: every solve is
+    # milliseconds against a matrix comparison, so a capture with it runs far longer.
+    "macro/by_value+repartition": lambda cfg: MacroAgent(
+        cfg, choose=by_value(cfg), repartition=True
+    ),
+}
+
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--suite", default="standard-greedy", choices=sorted(SUITE_BY_NAME))
     p.add_argument("--games", type=int, default=60)
     p.add_argument("--out", type=Path, default=Path("docs/data/experiments.json"))
+    p.add_argument(
+        "--repartition", action="store_true",
+        help="also score the macro agent with the solver-backed REPARTITION macro",
+    )
     args = p.parse_args()
 
     suite = SUITE_BY_NAME[args.suite]
     agents = []
-    for name, build in AGENTS.items():
+    for name, build in {**AGENTS, **(REPARTITION if args.repartition else {})}.items():
         agent = build(suite.cfg)
         result = evaluate(name, suite, build_agent=lambda c, a=agent: a, games=args.games)
         assert not result.disqualified, f"{name} was disqualified"

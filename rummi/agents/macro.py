@@ -40,6 +40,13 @@ real numbers alone and a joker leaves that undetermined: `(R1,R2,R3,*)` can spar
 `R3`, which the arithmetic calls a middle tile, because the joker slides down to
 cover it. Answering that through `evaluate_slots` too is a different move to
 describe -- a steal also has to name the donor -- so it is left as it is.
+
+What no template can say is a multi-set repartition, and that is what is left:
+where `by_value` can only draw, `optimal` still plays in **47.7%** of the states.
+`repartition=True` adds one macro for exactly those, backed by a CP-SAT solve.
+It is opt-in because the solve costs milliseconds where every other macro costs a
+matrix comparison, and it is offered only where nothing else plays -- so it is the
+gap-closer and not a second policy.
 """
 
 from __future__ import annotations
@@ -158,14 +165,14 @@ def removals(cfg: RummiConfig, contents: tuple[int, ...]) -> list[int]:
     return []
 
 
-_FEATURES: dict[RummiConfig, np.ndarray] = {}
+_FEATURES: dict[tuple[RummiConfig, bool], np.ndarray] = {}
 
 ACTION_FEATURE_DIM = 4
 """Beyond the per-kind counts: points, size, tiles taken off the table, and which
 block the action belongs to is one-hot on top of that."""
 
 
-def action_features(cfg: RummiConfig) -> np.ndarray:
+def action_features(cfg: RummiConfig, repartition: bool = False) -> np.ndarray:
     """`(n_macros, d)` description of what each macro *does*, as data.
 
     A flat head has to learn action 147 from its index alone, so nothing it learns
@@ -176,9 +183,12 @@ def action_features(cfg: RummiConfig) -> np.ndarray:
 
     `EXTEND` rows carry only their block and slot: which tile they add is
     state-dependent, so it cannot live in a static table. Those 2*max_sets rows
-    lean on the per-action bias instead.
+    lean on the per-action bias instead, and so does `REPARTITION`, whose whole
+    content is a solve. Its block is a fifth column rather than a share of an
+    existing one, which is also what keeps the default width -- and every
+    checkpoint trained against it -- byte-identical.
     """
-    cached = _FEATURES.get(cfg)
+    cached = _FEATURES.get((cfg, repartition))
     if cached is not None:
         return cached
 
@@ -186,7 +196,10 @@ def action_features(cfg: RummiConfig) -> np.ndarray:
     points = template_points(cfg)
     n_kinds, n_sets = cfg.n_kinds, len(templates)
     scale = float(cfg.n_numbers * cfg.max_set_len)
-    out = np.zeros((n_macros(cfg), n_kinds + ACTION_FEATURE_DIM + 4), dtype=np.float32)
+    blocks = 5 if repartition else 4
+    out = np.zeros(
+        (n_macros(cfg, repartition), n_kinds + ACTION_FEATURE_DIM + blocks), dtype=np.float32
+    )
 
     def rows(offset: int, block: int, from_table: float) -> None:
         for t in range(n_sets):
@@ -206,10 +219,15 @@ def action_features(cfg: RummiConfig) -> np.ndarray:
         row[n_kinds] = values[kind] / scale
         row[n_kinds + 1] = 1.0 / cfg.max_set_len  # a lay-off plays one tile
         row[n_kinds + ACTION_FEATURE_DIM + 1] = 1.0
-    for macro in (_n_choices(cfg), _n_choices(cfg) + 1):
+    end = _n_choices(cfg, repartition)
+    for macro in (end, end + 1):
         out[macro, n_kinds + ACTION_FEATURE_DIM + 3] = 1.0
+    if repartition:
+        row = out[repartition_offset(cfg)]
+        row[n_kinds + 2] = 1.0  # every tile on the table is in play
+        row[n_kinds + ACTION_FEATURE_DIM + 4] = 1.0
 
-    _FEATURES[cfg] = out
+    _FEATURES[(cfg, repartition)] = out
     return out
 
 
@@ -243,21 +261,30 @@ class MacroAgent:
     where the caller has one it is honoured, and where it does not the replay is
     taken on trust."""
 
-    def __init__(self, cfg: RummiConfig, choose: Choose | None = None) -> None:
+    def __init__(
+        self,
+        cfg: RummiConfig,
+        choose: Choose | None = None,
+        repartition: bool = False,
+    ) -> None:
         self.cfg = cfg
         self.templates = set_templates(cfg)
-        # templates, then EXTEND(kind), then STEAL(template), then END_TURN, then DRAW.
+        # templates, then EXTEND(kind), then STEAL(template), then REPARTITION if it
+        # is enabled, then END_TURN, then DRAW.
         self.extend_offset = extend_offset(cfg)
         self.n_extend = cfg.n_kinds
         self.steal_offset = steal_offset(cfg)
-        self.end_macro = _n_choices(cfg)
+        self.repartition_macro = repartition_offset(cfg) if repartition else None
+        self.end_macro = _n_choices(cfg, repartition)
         self.draw_macro = self.end_macro + 1
-        self.n_macros = n_macros(cfg)
+        self.n_macros = n_macros(cfg, repartition)
         self.choose = choose if choose is not None else first_legal
         self._queues: dict[int, list[int]] = {}
+        self._solved: dict[int, list[int]] = {}
 
     def reset(self, n_envs: int) -> None:
         self._queues = {}
+        self._solved = {}
 
     def legal_macros(
         self,
@@ -295,9 +322,10 @@ class MacroAgent:
                 ok = ok & (holding[None] <= laid).all(-1)
             out[: self.extend_offset] = ok
 
+        melded = bool(has_melded(obs)[env])
         # The table is untouchable until the opening meld, exactly as the env's own
         # mask has it -- so laying off is illegal there, not merely unwise.
-        if bool(has_melded(obs)[env]) or not cfg.strict_initial_meld:
+        if melded or not cfg.strict_initial_meld:
             # Indexed by tile, so a kind is legal when *any* slot takes it; `expand`
             # reads the same matrix to pick which one. A lay-off plays exactly one
             # tile, so it can absorb the workbench only when the workbench *is*
@@ -326,7 +354,29 @@ class MacroAgent:
                     # the template minus it -- and that is `min(template, hand)`
                     # exactly where one tile is missing.
                     ok = ok & (holding[None] <= np.minimum(self.templates, hand)).all(-1)
-                out[self.steal_offset : self.end_macro] = ok
+                out[self.steal_offset : self.steal_offset + len(ok)] = ok
+
+        if self.repartition_macro is not None:
+            # A kept expansion belongs to the decision that asked for it, and this
+            # call is the next decision.
+            self._solved.pop(env, None)
+            # Anything a template plays the solver would find too, so asking it
+            # anywhere else buys nothing and costs milliseconds. What is left is the
+            # state this macro exists for: nothing else plays and `optimal` still
+            # does, in 47.7% of them. An empty table is excluded along with them --
+            # there is nothing to repartition, and a set the rack can build on its
+            # own is a template.
+            stuck = not out[: self.repartition_macro].any()
+            # The solve draws on the rack, so a tile already lifted onto the
+            # workbench would have no place in the table it targets and would be
+            # stranded there. That is read from the observation rather than from
+            # `held`, which a caller is free to omit.
+            clean = not np.asarray(obs["workbench"])[env].any()
+            if stuck and melded and clean and rack.any() and board.max() >= 0:
+                actions = self._repartition(obs, env)
+                if actions:
+                    self._solved[env] = actions
+                    out[self.repartition_macro] = True
 
         # Pre-meld the threshold is on the whole turn, so a single template that
         # cannot reach it is still worth playing alongside another.
@@ -335,6 +385,39 @@ class MacroAgent:
         )
         out[self.draw_macro] = True  # DRAW is never masked, by design
         return out
+
+    def _repartition(self, obs: Observation, env: int) -> list[int]:
+        """The whole-table rearrangement CP-SAT finds, as micro-actions, or empty.
+
+        The solve is what decides legality, so its plan is kept for `expand` rather
+        than recomputed there: a second solve of the same state may answer
+        differently under its time limit, and a `REPARTITION` that expanded to
+        nothing would fall through to `DRAW`, which reverts the turn.
+
+        Post-meld the solver owns the whole table, so `solution.sets` *is* the
+        target -- unlike `optimal`, which has to add the untouched table pre-meld.
+        """
+        from rummi.solver.ilp import solve_turn
+        from rummi.solver.to_actions import plan
+
+        cfg = self.cfg
+        board = table(obs)[env]
+        solution = solve_turn(
+            cfg, np.asarray(obs["rack"][env]).astype(np.int64), board, True
+        )
+        if not solution.plays_anything or solution.played is None:
+            return []
+        actions = plan(cfg, board, list(solution.sets), solution.played)
+        # Rebuilding a whole table is the longest expansion in this space, and
+        # overrunning the turn's micro budget leaves the env offering only DRAW --
+        # which reverts everything the expansion just did. The trailing `END_TURN`
+        # counts against the budget even though it is dropped below, because the
+        # turn still has to spend one to commit.
+        spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
+        if len(actions) > cfg.max_micro_per_turn - spent:
+            return []
+        actions.pop()  # dropped for the reason `expand` drops it from every macro
+        return actions
 
     def expand(
         self,
@@ -356,6 +439,11 @@ class MacroAgent:
             return []
         if macro == self.end_macro:
             return [self.cfg.end_turn_action]
+        if macro == self.repartition_macro:
+            # Replayed, not re-solved: the solve `legal_macros` ran is what made this
+            # legal, and only that one is known to play something.
+            solved = self._solved.pop(env, None)
+            return solved if solved is not None else self._repartition(obs, env)
 
         cfg = self.cfg
         board = table(obs)[env]
@@ -478,15 +566,26 @@ def steal_offset(cfg: RummiConfig) -> int:
     return extend_offset(cfg) + cfg.n_kinds
 
 
-def _n_choices(cfg: RummiConfig) -> int:
-    """Index of the `END_TURN` macro: everything below it plays tiles."""
+def repartition_offset(cfg: RummiConfig) -> int:
+    """Where `REPARTITION` sits when it is enabled: CP-SAT rebuilds the whole table.
+
+    Last of the tile-playing macros and therefore the last thing a `first_legal`
+    fallback reaches before ending the turn, which is the only place it is offered
+    anyway -- and it must stay below `END_TURN`, or that fallback would end a turn
+    the solver can still play.
+    """
     return steal_offset(cfg) + len(set_templates(cfg))
 
 
-def n_macros(cfg: RummiConfig) -> int:
+def _n_choices(cfg: RummiConfig, repartition: bool = False) -> int:
+    """Index of the `END_TURN` macro: everything below it plays tiles."""
+    return repartition_offset(cfg) + int(repartition)
+
+
+def n_macros(cfg: RummiConfig, repartition: bool = False) -> int:
     """Size of the macro action space. Derive the layout from here, never restate
     it: a caller that recomputed this built a head of the wrong width."""
-    return _n_choices(cfg) + 2
+    return _n_choices(cfg, repartition) + 2
 
 
 def first_legal(obs: Observation, env: int, legal: np.ndarray) -> int:
@@ -507,7 +606,10 @@ def by_value(cfg: RummiConfig) -> Choose:
     matters most before the opening meld, where the threshold is on the whole turn:
     a dear set reaches 30 in fewer plays.
     """
-    end = _n_choices(cfg)
+    # Everything a template describes. `REPARTITION` sits above it and is left to
+    # the fallback, which is the whole of its policy: it is offered only where
+    # nothing ranked here is legal.
+    ranked = repartition_offset(cfg)
     n_extend = steal_offset(cfg) - extend_offset(cfg)
     set_points = template_points(cfg)
     set_tiles = set_templates(cfg).sum(-1).astype(np.int32)
@@ -522,10 +624,10 @@ def by_value(cfg: RummiConfig) -> Choose:
     tiles = np.concatenate([
         set_tiles, np.ones(n_extend, np.int32), np.maximum(set_tiles - 1, 1)
     ])
-    assert len(points) == end and len(tiles) == end
+    assert len(points) == ranked and len(tiles) == ranked
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
-        options = np.flatnonzero(legal[:end])
+        options = np.flatnonzero(legal[:ranked])
         if options.size:
             rank = points if not bool(has_melded(obs)[env]) else tiles
             return int(options[np.argmax(rank[options])])
@@ -534,13 +636,13 @@ def by_value(cfg: RummiConfig) -> Choose:
     return choose
 
 
-def melded_only(cfg: RummiConfig) -> Choose:
+def melded_only(cfg: RummiConfig, repartition: bool = False) -> Choose:
     """`first_legal`, but it ends the turn as soon as ending is legal.
 
     Separates "can it build sets" from "does it know when to stop", which the
     diagnostics say are different failures.
     """
-    agent_end = _n_choices(cfg)
+    agent_end = _n_choices(cfg, repartition)
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
         if legal[agent_end] and bool(has_melded(obs)[env]):

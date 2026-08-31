@@ -436,6 +436,168 @@ def test_a_macro_plays_a_set_without_ending_the_turn():
     assert max(sets_in_turn) > 1, f"no turn played more than one set: {set(sets_in_turn)}"
 
 
+def test_the_repartition_macro_is_off_by_default_and_adds_only_itself():
+    """The flag has to be free to leave off: `train_macro.py`, every saved checkpoint
+    and every score already published against this space read the 713-wide layout, so
+    turning it on may add one id and must change nothing else. Both halves are
+    checked against real states -- the blocks it does not touch must agree macro for
+    macro, and where the new one is illegal `by_value` must pick the same move."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value, n_macros
+
+    cfg = STANDARD
+    plain = MacroAgent(cfg, choose=by_value(cfg))
+    rich = MacroAgent(cfg, choose=by_value(cfg), repartition=True)
+    assert plain.repartition_macro is None
+    assert plain.n_macros == n_macros(cfg) == 713
+    assert rich.n_macros == n_macros(cfg, repartition=True) == 714
+    assert rich.repartition_macro == plain.end_macro, "REPARTITION must sit below END_TURN"
+
+    n = 8
+    plain.reset(n)
+    rich.reset(n)
+    state = reset(cfg, n, seed=5)
+    offered = 0
+    for _ in range(150):
+        mask = legal_actions(state)
+        obs = encode(state)
+        for env in range(n):
+            a, b = plain.legal_macros(obs, env), rich.legal_macros(obs, env)
+            np.testing.assert_array_equal(a[: plain.end_macro], b[: rich.repartition_macro])
+            assert a[plain.end_macro] == b[rich.end_macro]
+            assert a[plain.draw_macro] == b[rich.draw_macro]
+            if b[rich.repartition_macro]:
+                offered += 1
+                continue
+            # Same decision, allowing for the one id shifting END_TURN and DRAW up.
+            chosen = plain.choose(obs, env, a)
+            shift = int(chosen >= plain.end_macro)
+            assert rich.choose(obs, env, b) == chosen + shift
+        step(state, act_on_state(plain, state, mask), mask)
+    assert offered > 0, "REPARTITION was never legal, so the comparison proved nothing"
+
+
+def test_a_repartition_is_offered_only_where_no_other_macro_plays():
+    """It exists for the states the templates cannot describe, and nowhere else: a
+    multi-set rearrangement `optimal` still plays in 47.7% of the states where
+    `by_value` can only draw. Anywhere else it would be a second, much slower policy
+    -- a CP-SAT solve against one matrix comparison -- deciding moves the templates
+    already had. The table is also untouchable before the opening meld, so a solve
+    that repartitions it is illegal there rather than merely unwise."""
+    from rummi.agents.base import act_on_state, has_melded
+    from rummi.agents.macro import MacroAgent, by_value
+
+    cfg = STANDARD
+    agent = MacroAgent(cfg, choose=by_value(cfg), repartition=True)
+    n = 8
+    agent.reset(n)
+    state = reset(cfg, n, seed=11)
+    offered = refused = premeld = 0
+    for _ in range(150):
+        mask = legal_actions(state)
+        obs = encode(state)
+        melded = has_melded(obs)
+        for env in range(n):
+            legal = agent.legal_macros(obs, env)
+            if not melded[env]:
+                assert not legal[agent.repartition_macro], "offered before the opening meld"
+                premeld += 1
+                continue
+            stuck = not legal[: agent.repartition_macro].any()
+            if legal[agent.repartition_macro]:
+                assert stuck, "offered where a template, lay-off or steal already plays"
+                # What made it legal is a solve that plays something, and the plan is
+                # kept: an expansion that came back empty would be DRAW, which
+                # reverts the turn.
+                assert agent._solved[env], "offered with no expansion behind it"
+                offered += 1
+            elif stuck:
+                refused += 1
+        step(state, act_on_state(agent, state, mask), mask)
+
+    assert premeld > 0, "never saw a pre-meld state, so that half proved nothing"
+    assert offered > 0, "never offered, so neither did the rest"
+    assert refused > 0, "always offered when stuck, so the solver's own refusal is untested"
+
+
+def test_a_repartition_reaches_a_whole_table_and_conserves_tiles():
+    """The invariant the macro space rests on, on its longest expansion: this one
+    dissolves most of the table and rebuilds it, tens of micro-actions where every
+    other macro is a handful. Replayed against the env's own mask on a copy of the
+    state -- every action legal in turn, nothing left on the workbench, every slot
+    valid, and every tile still accounted for."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value
+    from rummi.env.numpy.sets import evaluate_slots
+
+    cfg = STANDARD
+    agent = MacroAgent(cfg, choose=by_value(cfg), repartition=True)
+    n = 8
+    agent.reset(n)
+    state = reset(cfg, n, seed=5)
+    replayed = 0
+    longest = 0
+    for _ in range(150):
+        mask = legal_actions(state)
+        obs = encode(state)
+        for env in range(n):
+            if not agent.legal_macros(obs, env)[agent.repartition_macro]:
+                continue
+            actions = agent.expand(obs, env, agent.repartition_macro)
+            assert actions, "a legal REPARTITION expanded to nothing, which is DRAW"
+            probe = state.select(env)
+            for action in actions:
+                probe_mask = legal_actions(probe)
+                assert probe_mask[0, action], f"REPARTITION emitted {action}, illegal"
+                step(probe, np.array([action]), probe_mask)
+            probe.check_invariants()
+            assert probe.workbench.sum() == 0, "left tiles held"
+            verdict = evaluate_slots(cfg, probe.table_sets)
+            assert (verdict.is_valid | verdict.is_empty).all(), "left a broken set"
+            assert probe.racks[0, int(probe.current[0])].sum() < int(obs["rack"][env].sum())
+            replayed += 1
+            longest = max(longest, len(actions))
+        step(state, act_on_state(agent, state, mask), mask)
+
+    assert replayed > 0, "never expanded a REPARTITION"
+    assert longest > 4, f"the longest expansion was {longest}, so no real rearrangement"
+
+
+def test_a_repartition_is_never_played_twice_over():
+    """Termination, and it is not obvious: the macro is chosen by a fallback, so a
+    repartition that left the state offering another would loop until the micro
+    budget reverted the turn. It cannot, because the solver maximises tiles played
+    and a maximal repartition leaves nothing for the next solve to find -- so the
+    decision after one is a template play or the end of the turn, never another
+    solve and never DRAW."""
+    from rummi.agents.base import act_on_state
+    from rummi.agents.macro import MacroAgent, by_value
+
+    cfg = STANDARD
+    agent = MacroAgent(cfg, repartition=True)
+    base = by_value(cfg)
+    previous = np.zeros(12, dtype=int)
+    followed = 0
+
+    def choose(obs, env, legal):
+        nonlocal followed
+        macro = base(obs, env, legal)
+        if previous[env] == agent.repartition_macro:
+            assert macro != agent.repartition_macro, "repartitioned twice in a row"
+            assert macro != agent.draw_macro, "drew after a repartition, reverting it"
+            followed += 1
+        previous[env] = macro
+        return macro
+
+    agent.choose = choose
+    agent.reset(12)
+    state = reset(cfg, 12, seed=5)
+    for _ in range(200):
+        mask = legal_actions(state)
+        step(state, act_on_state(agent, state, mask), mask)
+    assert followed > 0, "no repartition was ever followed by another decision"
+
+
 def test_delegating_with_always_play_is_exactly_its_inner_agent():
     """The sanity check that makes the comparison meaningful: the two-action agent
     at `always_play` must *be* `greedy`, action for action, or a difference in
