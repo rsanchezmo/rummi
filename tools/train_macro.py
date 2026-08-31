@@ -785,11 +785,16 @@ def main() -> None:
                 "score it with --diagnostic-games")
     if args.repartition and args.space == "hybrid":
         p.error("--repartition names a macro-space action; the hybrid table has no row for it")
-    if args.repartition and (args.history or args.init_from_macro or "self" in opponents):
-        # HistoryMacroAgent and the snapshot member do not thread the flag, and
-        # the macro-to-hybrid map is over the 713-action table.
-        p.error("--repartition is not wired for --history, --init-from-macro or a "
-                "'self' opponent")
+    if args.repartition and (args.history or args.init_from_macro):
+        # HistoryMacroAgent does not thread the flag, and the macro-to-hybrid map
+        # is over the 713-action table.
+        p.error("--repartition is not wired for --history or --init-from-macro")
+    if args.oracle_rack and "self" in opponents:
+        # The snapshot's chooser reads the learner's `features`, and the block in
+        # there is the rack of seat 1 -- which is the snapshot itself. It would be
+        # handed its own rack labelled as its opponent's, silently.
+        p.error("--oracle-rack is the learner's view; a 'self' snapshot reading it "
+                "gets the wrong seat's block")
 
     cfg = dataclasses.replace(
         CONFIG_BY_NAME[args.config],
@@ -959,7 +964,9 @@ def main() -> None:
         def choose(o, e: int, legal: np.ndarray) -> int:
             return choosers[snapshot_of[e]](o, e, legal)
 
-        return HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
+        if hybrid:
+            return HybridAgent(cfg, choose=choose)
+        return MacroAgent(cfg, choose=choose, repartition=args.repartition)
 
     env = FixedOpponentEnv(
         num_envs=args.envs, cfg=cfg, seed=args.seed, backend=args.backend,
