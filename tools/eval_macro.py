@@ -11,6 +11,11 @@ standard-trained net skips it with the reason printed. The macro table must matc
 and a checkpoint from an older layout indexes different actions with the same ids,
 so refusing it is the point rather than a limitation.
 
+**Entropy is reported beside every score**, because argmax scoring confounds
+quality with concentration: a diffuse policy reads as near-random under the mode
+whatever its sampled play is worth. Two checkpoints are comparable under `--sample`
+always, and under argmax only when their entropies are comparably low.
+
 Nothing here writes `docs/data/`: a training run is one seed of one recipe, and the
 capture rule (`capture_experiments.py`) is that only reproducible agents are
 captured.
@@ -28,14 +33,18 @@ import numpy as np
 import torch
 
 from train_macro import MacroNet
+from rummi.agents.base import Agent
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
+from rummi.agents.learned.history import HistoryMacroAgent, OpponentHistory, history_dim
 from rummi.agents.learned.torch_net import MASKED
 from rummi.agents.macro import MacroAgent, action_features, n_macros
 from rummi.evaluate.protocol import SUITES, SUITE_BY_NAME, Suite, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 
 
-def incompatibility(ck_cfg: RummiConfig, suite_cfg: RummiConfig) -> str | None:
+def incompatibility(
+    ck_cfg: RummiConfig, suite_cfg: RummiConfig, history: bool = False
+) -> str | None:
     """Why the checkpoint cannot be scored on this suite, or None if it can."""
     if feature_dim(suite_cfg) != feature_dim(ck_cfg):
         return f"feature dim {feature_dim(suite_cfg)} != checkpoint's {feature_dim(ck_cfg)}"
@@ -43,6 +52,11 @@ def incompatibility(ck_cfg: RummiConfig, suite_cfg: RummiConfig) -> str | None:
         return "feature scale differs from the checkpoint's"
     if not np.array_equal(action_features(suite_cfg), action_features(ck_cfg)):
         return f"macro table differs from the checkpoint's ({n_macros(suite_cfg)} vs {n_macros(ck_cfg)} macros)"
+    if history and suite_cfg.n_players != 2:
+        return (
+            "opponent history attributes the table delta to one opponent, and this "
+            f"suite seats {suite_cfg.n_players - 1}"
+        )
     return None
 
 
@@ -51,10 +65,19 @@ def main() -> None:
     p.add_argument("checkpoint", type=pathlib.Path)
     p.add_argument("--suites", nargs="+", default=[s.name for s in SUITES], choices=sorted(SUITE_BY_NAME))
     p.add_argument("--games", type=int, default=None, help="deals per suite; the suite's own count if omitted")
+    p.add_argument(
+        "--sample", action="store_true",
+        help="sample from the masked policy instead of taking its mode. Seeded, so "
+             "a score stays reproducible -- but it is a different score, and the two "
+             "modes are only comparable within themselves",
+    )
+    p.add_argument("--sample-seed", type=int, default=0)
     args = p.parse_args()
 
     ck = torch.load(args.checkpoint, weights_only=True)
     cfg = CONFIG_BY_NAME[ck["cfg"]]
+    history = bool(ck.get("history", False))
+    decay = float(ck.get("history_decay", 0.8))
 
     # A hybrid-space or older-layout checkpoint would load into the wrong rows
     # silently downstream, so the head width is checked against today's layout first.
@@ -67,38 +90,69 @@ def main() -> None:
             "which this tool cannot place on the ladder"
         )
 
-    net = MacroNet(cfg, n_macros(cfg), ck["hidden"], head=ck["head"])
+    net = MacroNet(
+        cfg, n_macros(cfg), ck["hidden"], head=ck["head"],
+        extra=history_dim(cfg) if history else 0,
+    )
     net.load_state_dict(ck["state"])
     net.eval()
     scale = feature_scale(cfg)
+    generator = torch.Generator().manual_seed(args.sample_seed)
+    entropy_sum, entropy_n = 0.0, 0
 
-    def choose(o: dict, e: int, legal: np.ndarray) -> int:
-        row = np.concatenate(
-            [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
-        ).astype(np.float32) / scale
-        with torch.no_grad():
-            logits, _ = net(torch.as_tensor(row)[None])
-        logits = torch.where(
-            torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
-        )
-        return int(logits[0].argmax())
+    def chooser(tracker: OpponentHistory | None):
+        """One chooser per agent, closing over that agent's own tracker.
+
+        `evaluate` builds an agent per seat rotation, so a tracker shared across
+        them would carry one game's opponent into another's decisions.
+        """
+
+        def choose(o: dict, e: int, legal: np.ndarray) -> int:
+            row = np.concatenate(
+                [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
+            ).astype(np.float32) / scale
+            if tracker is not None:
+                row = np.concatenate([row, tracker.row(e)])
+            with torch.no_grad():
+                logits, _ = net(torch.as_tensor(row)[None])
+            logits = torch.where(
+                torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
+            )
+            logp = torch.log_softmax(logits[0], -1)
+            nonlocal entropy_sum, entropy_n
+            entropy_sum += float(-(logp.exp() * logp).sum())
+            entropy_n += 1
+            if not args.sample:
+                return int(logits[0].argmax())
+            return int(torch.multinomial(logp.exp(), 1, generator=generator))
+
+        return choose
+
+    def build(c: RummiConfig) -> Agent:
+        if not history:
+            return MacroAgent(c, choose=chooser(None))
+        tracker = OpponentHistory(c, decay=decay)
+        return HistoryMacroAgent(c, tracker, choose=chooser(tracker))
 
     label = args.checkpoint.stem
-    print(f"{label}: config {ck['cfg']}, {ck['head']} head, hidden {ck['hidden']}")
+    print(
+        f"{label}: config {ck['cfg']}, {ck['head']} head, hidden {ck['hidden']}, "
+        f"history {history}, {'sampled' if args.sample else 'argmax'}"
+    )
     for name in args.suites:
         suite: Suite = SUITE_BY_NAME[name]
-        reason = incompatibility(cfg, suite.cfg)
+        reason = incompatibility(cfg, suite.cfg, history)
         if reason is not None:
             print(f"{name:18s} skipped -- {reason}")
             continue
-        result = evaluate(
-            label, suite, build_agent=lambda c: MacroAgent(c, choose=choose), games=args.games
-        )
+        entropy_sum, entropy_n = 0.0, 0
+        result = evaluate(label, suite, build_agent=build, games=args.games)
         assert not result.disqualified, f"{label} was disqualified on {name}"
         assert result.illegal_attempts == 0, f"{label} proposed a masked-out action on {name}"
         print(
             f"{name:18s} win {result.win_rate:>6.1%}  score {result.mean_score:>+8.2f}  "
-            f"stalemate {result.stalemates / max(1, result.games):>6.1%}  n={result.games}",
+            f"stalemate {result.stalemates / max(1, result.games):>6.1%}  "
+            f"H {entropy_sum / max(entropy_n, 1):>5.3f}  n={result.games}",
             flush=True,
         )
 

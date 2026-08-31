@@ -77,6 +77,7 @@ from torch import nn
 
 from rummi.agents.base import Agent
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
+from rummi.agents.learned.history import HistoryMacroAgent, OpponentHistory, history_dim
 from rummi.agents.learned.torch_net import MASKED
 from rummi.agents.hybrid import (
     HybridAgent,
@@ -118,11 +119,14 @@ class MacroNet(nn.Module):
     def __init__(
         self, cfg: RummiConfig, macros: int, hidden: int = 256,
         head: str = "flat", key_dim: int = 64, describe: np.ndarray | None = None,
+        extra: int = 0,
     ) -> None:
         super().__init__()
         self.head = head
+        # `extra` widens the input alone -- the opponent-history block is appended
+        # to the observation features, so at 0 the trunk is the one it always was.
         self.trunk = nn.Sequential(
-            nn.Linear(feature_dim(cfg), hidden), nn.ReLU(),
+            nn.Linear(feature_dim(cfg) + extra, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden), nn.ReLU(),
         )
         if head == "pointer":
@@ -153,8 +157,8 @@ class MacroNet(nn.Module):
 
 
 def gather(
-    net: MacroNet, cfg: RummiConfig, env, teacher, samples: int, beta: float, generator,
-    hybrid: bool = False,
+    net: MacroNet, env, teacher, samples: int, beta: float, generator,
+    encode, make_agent,
 ) -> dict:
     """States, and the macro the teacher would pick in each.
 
@@ -162,6 +166,9 @@ def gather(
     labels land on states the student actually reaches. The poisoned half-built
     table that made this worthless on the primitive action space cannot occur here,
     because every macro leaves the table whole.
+
+    `encode` is the one state-encoding path the whole trainer shares, so a cloned
+    net is fitted on exactly the rows RL will feed it -- history block included.
     """
     obs, info = env.reset()
     obs = host(obs)
@@ -172,9 +179,7 @@ def gather(
 
     def choose(o, e: int, legal: np.ndarray) -> int:
         label = teacher(o, e, legal)
-        x = np.concatenate(
-            [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
-        ).astype(np.float32) / feature_scale(cfg)
+        x = encode(o, e)
         xs.append(x)
         legals.append(legal.copy())
         ys.append(label)
@@ -187,7 +192,7 @@ def gather(
         )
         return int(logits[0].argmax())
 
-    agent = HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
+    agent = make_agent(choose)
     agent.reset(env.num_envs)
     while len(xs) < samples:
         obs, _, _, _, info = env.step(agent.act(obs, np.asarray(info["action_mask"])))
@@ -243,7 +248,7 @@ def fit(net: MacroNet, data: dict, epochs: int, lr: float, generator) -> None:
 
 def restore(
     path: pathlib.Path, config: str, space: str, macros: int,
-    hidden: int | None, head: str | None,
+    hidden: int | None, head: str | None, history: bool = False,
 ) -> tuple[dict, int, str]:
     """A checkpoint from `--out`, with the architecture *it* was saved with.
 
@@ -263,6 +268,9 @@ def restore(
         ("--space", space, saved_space),
         ("--hidden", hidden, saved_hidden),
         ("--head", head, saved_head),
+        # The history block widens the trunk's input, so this is architecture too --
+        # and a bool has no "left alone" value, hence the explicit comparison.
+        ("--history", history, bool(checkpoint.get("history", False))),
     ):
         if given is not None and given != saved:
             raise SystemExit(
@@ -382,6 +390,24 @@ def main() -> None:
              "own row",
     )
     p.add_argument(
+        "--history", action="store_true",
+        help="append the opponent-history block to the observation features. The "
+             "observation is one state and the net is feedforward, so what the "
+             "opponent declined to play is unreachable without it -- and against a "
+             "deterministic opponent a declined lay-off is a hard constraint on its "
+             "rack, not a hint. Two seats only. It buys nothing measured: 3 seeds "
+             "each way score +29.9 without it and land inside that range with it, "
+             "once matched on entropy. And they have to be matched, because the 111 "
+             "extra inputs delay the entropy collapse by ~20 updates -- H 1.15-1.73 "
+             "at update 40 against 0.44-0.67 -- so the recipe's usual scoring point "
+             "reads this arm mid-convergence rather than at its peak",
+    )
+    p.add_argument(
+        "--history-decay", type=float, default=0.8,
+        help="per-turn decay on the 'declined while the table would have taken it' "
+             "counter. Evidence about a rack goes stale as the opponent draws",
+    )
+    p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
         help="warm-start from a checkpoint saved by --out. Takes its architecture: "
              "--hidden and --head describe tensors already in the file, so passing "
@@ -466,6 +492,11 @@ def main() -> None:
     unknown = sorted({name for name in opponents if name not in OPPONENTS})
     if unknown:
         p.error(f"unknown opponent(s) {', '.join(unknown)}; choose from {', '.join(OPPONENTS)}")
+    if args.history and "self" in opponents:
+        # The tracker belongs to the learner's seat, and a snapshot sits on the
+        # other one. Feeding it the learner's block would hand it the wrong
+        # opponent's history -- silently, since the widths match.
+        p.error("--history has no tracker for a 'self' opponent; drop one of them")
 
     cfg = dataclasses.replace(
         CONFIG_BY_NAME[args.config],
@@ -479,15 +510,18 @@ def main() -> None:
     macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
     if args.init_from:
         checkpoint, hidden, head = restore(
-            args.init_from, args.config, args.space, macros, args.hidden, args.head
+            args.init_from, args.config, args.space, macros, args.hidden, args.head,
+            args.history,
         )
     else:
         checkpoint = None
         hidden = HIDDEN if args.hidden is None else args.hidden
         head = HEAD if args.head is None else args.head
+    tracker = OpponentHistory(cfg, decay=args.history_decay) if args.history else None
     net = MacroNet(
         cfg, macros, hidden, head=head,
         describe=hybrid_action_features(cfg) if hybrid else None,
+        extra=history_dim(cfg) if tracker is not None else 0,
     )
     if checkpoint is not None:
         net.load_state_dict(checkpoint["state"])
@@ -497,7 +531,19 @@ def main() -> None:
         row = np.concatenate(
             [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
         ).astype(np.float32)
-        return row / scale
+        row = row / scale
+        if tracker is None:
+            return row
+        return np.concatenate([row, tracker.row(e)])
+
+    def make_agent(chooser: Choose) -> Agent:
+        """The one place an agent is built, so the tracker can never be left out
+        of a path that feeds the net a history block."""
+        if hybrid:
+            return HybridAgent(cfg, choose=chooser)
+        if tracker is None:
+            return MacroAgent(cfg, choose=chooser)
+        return HistoryMacroAgent(cfg, tracker, choose=chooser)
 
     def argmax_choose(model: MacroNet) -> Choose:
         """Deterministic: a snapshot opponent and a reported score are both meant to
@@ -618,8 +664,8 @@ def main() -> None:
             # replaced, or each round forgets what the last one fixed.
             beta = 1.0 if args.clone_rounds == 1 else max(0.0, 1.0 - r / (args.clone_rounds - 1))
             fresh = gather(
-                net, cfg, env, teachers[args.clone], per_round, beta, generator,
-                hybrid=hybrid,
+                net, env, teachers[args.clone], per_round, beta, generator,
+                features, make_agent,
             )
             print(
                 f"  round {r}  beta {beta:.2f}  {len(fresh['y']):,} states  "
@@ -656,6 +702,10 @@ def main() -> None:
         torch.save(
             {
                 "cfg": args.config, "space": args.space, "hidden": hidden, "head": head,
+                # The block widens the trunk's input and the evaluator has to run
+                # the same tracker, so the flag travels with the weights: a net
+                # scored with the block zeroed is not the net that was trained.
+                "history": bool(args.history), "history_decay": args.history_decay,
                 "state": net.state_dict(),
             },
             path,
@@ -705,7 +755,7 @@ def main() -> None:
         tally[member_of[e]] += (1, int(macro == end_action), int(macro == draw_action))
         return macro
 
-    agent = HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
+    agent = make_agent(choose)
     agent.reset(args.envs)
     if agent_reset_needed:
         open_choice[:] = [None] * args.envs
@@ -713,6 +763,7 @@ def main() -> None:
         f"config={args.config} space={args.space} opponent={args.opponent} "
         f"actions={macros} head={head} micro_cost={args.micro_step_cost} "
         f"params={sum(q.numel() for q in net.parameters()):,}"
+        + (f" history={history_dim(cfg)}d decay={args.history_decay}" if tracker else "")
         + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
            f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
         + (f" init_from={args.init_from}" if args.init_from else ""),
@@ -750,6 +801,11 @@ def main() -> None:
                 potential = rack_before - args.gamma * rack_after
                 reward = reward + args.rack_shaping * np.where(done, 0.0, potential)
             accrued += reward
+            if tracker is not None:
+                # Envs are recycled, so nothing the tracker holds may cross a
+                # re-deal. The env re-deals on the *next* step, which is what the
+                # tracker's own one-observation blind spot covers.
+                tracker.clear(done)
             for e in np.flatnonzero(done):
                 if open_choice[e] is not None:
                     prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
@@ -932,7 +988,13 @@ def main() -> None:
             )
         )
         for label, ch in baselines:
-            scored = HybridAgent(cfg, choose=ch) if hybrid else MacroAgent(cfg, choose=ch)
+            # Only the learned one reads the tracker, and a baseline sharing it
+            # would drive the same per-env memory from a different game.
+            scored = (
+                make_agent(ch) if label == "learned"
+                else HybridAgent(cfg, choose=ch) if hybrid
+                else MacroAgent(cfg, choose=ch)
+            )
             result = evaluate(label, suite, build_agent=lambda c, s=scored: s,
                               games=args.eval_games)
             print(
@@ -961,6 +1023,8 @@ def main() -> None:
                     "init_from": str(args.init_from) if args.init_from else None,
                     "hidden": hidden,
                     "head": head,
+                    "opponent_history": bool(args.history),
+                    "opponent_history_decay": args.history_decay if args.history else None,
                     "clone": args.clone,
                     "seed": args.seed,
                     "micro_step_cost": args.micro_step_cost,
