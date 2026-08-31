@@ -134,8 +134,8 @@ which is why `step` is decomposed into `_check_actions` / `_autoreset` /
 ## Why the mask, when DRAW is always legal
 
 A fair question, because the mask is the most expensive thing in a step: on the
-standard config `legal_actions` costs **2.8x** the rest of the env put together
-(42.3k env-steps/s with it, 117.5k without, same actions in both arms).
+standard config `legal_actions` costs **1.6x** the rest of the env put together
+(145k env-steps/s with it, 385k without, same actions in both arms).
 
 It stays because **35 of 2400 actions are legal at a typical step -- 1.47%**. An
 agent choosing without the mask picks an illegal action ~98.5% of the time, and
@@ -230,6 +230,13 @@ design, which is why the eval at the end always uses the unshaped suite.
   per-family `flatnonzero` selection — that read is a host sync every step and
   costs the entire `torch.compile` speedup. `sort` needs
   `sort(dim=-1, stable=True)`; `stable` is keyword-only.
+- **torch on MPS** has no `frexp`, so the kernel reads a bit index by counting
+  thresholds there while NumPy and JAX read a float exponent. Inductor also fails
+  codegen — an internal dtype error, not a message about your code — if
+  `legal_actions` selects an ASSIGN code by `slot_ok` before the product, so the
+  torch port applies that factor to the finished block instead. Both are about
+  `torch.compile` on MPS, the benchmark's headline figure, so run
+  `tests/test_torch_backend.py` after touching that kernel.
 - **Every backend** must shuffle decks with NumPy's `SeedSequence`/`Generator`.
   The permutation is part of the contract; a framework-native RNG deals
   different tiles and fails conformance.

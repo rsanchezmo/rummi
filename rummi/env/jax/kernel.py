@@ -19,7 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import tables
+from rummi.rules.encoding import SlotCode, slot_code, tables
 
 NO_COLOR = -2
 NO_NUMBER = -2
@@ -41,6 +41,8 @@ class Lookup(NamedTuple):
     copies: np.ndarray
     offload: np.ndarray
     """Face value with the joker at ``joker_penalty``: what a tile sheds when played."""
+    packing: SlotCode
+    """The :class:`~rummi.rules.encoding.SlotCode` table and its field layout."""
 
 
 @cache
@@ -55,6 +57,7 @@ def lookup(cfg: RummiConfig) -> Lookup:
         is_joker=t.is_joker.copy(),
         copies=t.copies.astype(np.int32),
         offload=offload,
+        packing=slot_code(cfg),
     )
 
 
@@ -70,7 +73,8 @@ class SlotStats(NamedTuple):
     number_mask: jax.Array
     same_color: jax.Array
     same_number: jax.Array
-    distinct_real: jax.Array
+    distinct_colors: jax.Array
+    distinct_numbers: jax.Array
 
 
 class SlotEval(NamedTuple):
@@ -96,43 +100,50 @@ def _or_reduce(x: jax.Array) -> jax.Array:
     return out
 
 
+def _bit_length(mask: jax.Array) -> jax.Array:
+    """Index of the highest set bit, plus one; ``0`` for an empty mask.
+
+    A float's exponent *is* that value, so ``frexp`` reads it off directly -- and
+    unlike a lookup table it does not grow with the number range.
+    """
+    return jnp.frexp(mask.astype(jnp.float32))[1]
+
+
 def slot_stats(cfg: RummiConfig, slots: jax.Array) -> SlotStats:
-    """Reduce ``(..., L)`` kind ids to per-slot summary scalars."""
-    t = lookup(cfg)
+    """Reduce ``(..., L)`` kind ids to per-slot summary scalars.
+
+    One gather and two reductions over the positions; everything after them is
+    per-slot bit arithmetic. See :class:`~rummi.rules.encoding.SlotCode` for the
+    packing that makes an OR and a sum enough.
+    """
+    code = lookup(cfg).packing
     slots = slots.astype(jnp.int32)
 
-    occupied = slots >= 0
-    is_joker = occupied & (slots == cfg.joker_kind)
-    real = occupied & ~is_joker
+    packed = jnp.asarray(code.code)[slots + 1]
+    present = _or_reduce(packed)
+    total = packed.sum(-1)
 
-    safe = jnp.clip(slots, 0, None)
-    color = jnp.asarray(t.color)[safe]
-    number = jnp.asarray(t.number)[safe]
+    color_mask = present & code.color_bits
+    number_mask = (present >> code.number_shift) & code.number_bits
 
-    n = occupied.sum(-1)
-    n_jokers = is_joker.sum(-1)
-    n_real = real.sum(-1)
+    n = (slots >= 0).sum(-1).astype(jnp.int32)
+    n_real = total >> code.real_shift
+    n_jokers = n - n_real
     no_real = n_real == 0
 
-    # Fill values are each reduction's identity, so a slot with no real tiles
-    # comes out with the loosest possible bounds.
-    c_min = jnp.where(real, color, cfg.n_colors).min(-1)
-    c_max = jnp.where(real, color, -1).max(-1)
-    lo = jnp.where(real, number, cfg.n_numbers).min(-1)
-    hi = jnp.where(real, number, 1).max(-1)
+    # A field's sum matches its OR exactly when no bit in it was set twice.
+    distinct_colors = (total & code.color_field) == color_mask
+    distinct_numbers = ((total >> code.number_shift) & code.number_field) == number_mask
 
-    same_color = no_real | (c_min == c_max)
-    same_number = no_real | (lo == hi)
+    # `x & (x - 1)` clears the lowest set bit, so this is "one bit at most".
+    same_color = (color_mask & (color_mask - 1)) == 0
+    same_number = (number_mask & (number_mask - 1)) == 0
 
-    one = jnp.int32(1)
-    color_mask = _or_reduce(jnp.where(real, one << color, 0))
-    number_mask = _or_reduce(jnp.where(real, one << (number - 1), 0))
-
-    # Duplicate real kinds: sort reals to the front, then compare neighbours.
-    # Jokers may legitimately repeat, so they are pushed past the reals.
-    key = jnp.sort(jnp.where(real, slots, cfg.n_kinds), axis=-1)
-    adjacent_dup = (key[..., 1:] == key[..., :-1]) & (key[..., :-1] < cfg.n_kinds)
-    distinct_real = ~adjacent_dup.any(-1)
+    # With no real tiles the masks are empty, which lands these on the loosest
+    # values for the run-window test.
+    hi = jnp.maximum(_bit_length(number_mask), 1)
+    lo = jnp.where(no_real, cfg.n_numbers, _bit_length(number_mask & -number_mask))
+    c_max = _bit_length(color_mask) - 1
 
     return SlotStats(
         n=n,
@@ -146,7 +157,8 @@ def slot_stats(cfg: RummiConfig, slots: jax.Array) -> SlotStats:
         number_mask=number_mask,
         same_color=same_color,
         same_number=same_number,
-        distinct_real=distinct_real,
+        distinct_colors=distinct_colors,
+        distinct_numbers=distinct_numbers,
     )
 
 
@@ -161,10 +173,10 @@ def evaluate(cfg: RummiConfig, s: SlotStats) -> SlotEval:
     win_hi = jnp.minimum(s.lo, cfg.n_numbers - n + 1)
     window_fits = win_lo <= win_hi
 
-    run_shape = s.same_color & s.distinct_real
+    run_shape = s.same_color & s.distinct_numbers
     run_valid = run_shape & long_enough & (n <= cfg.n_numbers) & window_fits
 
-    group_shape = s.same_number & s.distinct_real
+    group_shape = s.same_number & s.distinct_colors
     group_valid = group_shape & long_enough & (n <= cfg.n_colors)
 
     run_open = run_shape & (n <= cfg.n_numbers)
@@ -191,32 +203,65 @@ def evaluate_slots(cfg: RummiConfig, slots: jax.Array) -> SlotEval:
     return evaluate(cfg, slot_stats(cfg, slots))
 
 
-def assign_open(cfg: RummiConfig, s: SlotStats) -> jax.Array:
-    """``(..., K)`` would adding one tile of each kind leave the slot extendable?"""
-    t = lookup(cfg)
-    n_next = s.n[..., None] + 1
-    one = jnp.int32(1)
+class AssignCode(NamedTuple):
+    """ASSIGN legality, factored into a colour half and a number half.
 
-    fits_run = n_next <= cfg.n_numbers
-    fits_group = n_next <= cfg.n_colors
-    distinct = s.distinct_real[..., None]
+    A numbered kind *is* a ``(colour, number)`` pair -- that is how kind ids are
+    laid out -- and every term of the predicate constrains only one of the two. So
+    the ``(..., K)`` answer is a product of an ``(..., C)`` and an ``(..., N)``
+    table, and the caller materialises it in whichever order it wants: the action
+    mask is kind-major, :func:`assign_open` is kind-minor. Bit 0 of each code
+    carries the run branch and bit 1 the group branch, so one AND resolves both.
+    """
+
+    color: jax.Array
+    """``(..., C)`` uint8."""
+    number: jax.Array
+    """``(..., N)`` uint8."""
+    joker: jax.Array
+    """``(...)`` bool: the joker is one kind, so it is not part of the grid."""
+
+
+def assign_codes(cfg: RummiConfig, s: SlotStats) -> AssignCode:
+    """The two halves of the ASSIGN legality test. See :class:`AssignCode`."""
+    colors = jnp.arange(cfg.n_colors, dtype=jnp.int32)
+    numbers = jnp.arange(1, cfg.n_numbers + 1, dtype=jnp.int32)
+
+    run_slot = (s.n + 1 <= cfg.n_numbers) & s.distinct_numbers
+    group_slot = (s.n + 1 <= cfg.n_colors) & s.distinct_colors & bool(cfg.group_possible)
     no_real = (s.n_real == 0)[..., None]
 
-    kind_color = jnp.asarray(t.color)
-    kind_number = jnp.asarray(t.number)
-    color_free = (s.color_mask[..., None] & (one << jnp.clip(kind_color, 0, None))) == 0
-    number_free = (s.number_mask[..., None] & (one << (jnp.clip(kind_number, 1, None) - 1))) == 0
-    color_agrees = no_real | (s.color[..., None] == kind_color)
-    number_agrees = no_real | (s.number[..., None] == kind_number)
+    # Numbered tile: it must not duplicate a colour (group) or a number (run)
+    # already present, and must agree with whatever the slot has settled on.
+    run_color = (no_real | (s.color[..., None] == colors)) & run_slot[..., None]
+    group_color = ((s.color_mask[..., None] & (1 << colors)) == 0) & group_slot[..., None]
+    run_number = (s.number_mask[..., None] & (1 << (numbers - 1))) == 0
+    group_number = no_real | (s.number[..., None] == numbers)
 
-    numbered_run = fits_run & distinct & color_agrees & number_free
-    numbered_group = fits_group & distinct & number_agrees & color_free
+    return AssignCode(
+        color=run_color.astype(jnp.uint8) | (group_color.astype(jnp.uint8) << 1),
+        number=run_number.astype(jnp.uint8) | (group_number.astype(jnp.uint8) << 1),
+        # A joker constrains nothing beyond the shape the slot already has.
+        joker=(run_slot & s.same_color) | (group_slot & s.same_number),
+    )
 
-    # A joker constrains nothing beyond the shape the slot already has.
-    joker_run = fits_run & distinct & s.same_color[..., None]
-    joker_group = fits_group & distinct & s.same_number[..., None]
 
-    is_joker = jnp.asarray(t.is_joker)
-    run_ok = jnp.where(is_joker, joker_run, numbered_run)
-    group_ok = jnp.where(is_joker, joker_group, numbered_group)
-    return run_ok | (group_ok & bool(cfg.group_possible))
+def assign_open(cfg: RummiConfig, s: SlotStats) -> jax.Array:
+    """``(..., K)`` would adding one tile of each kind leave the slot extendable?"""
+    codes = assign_codes(cfg, s)
+    grid = (codes.color[..., :, None] & codes.number[..., None, :]) != 0
+    return jnp.concatenate(
+        [grid.reshape(*s.n.shape, cfg.n_numbered_kinds), codes.joker[..., None]], axis=-1
+    )
+
+
+class SlotSummary(NamedTuple):
+    """Both stages for one table, so the two readers of it can share the work."""
+
+    stats: SlotStats
+    ev: SlotEval
+
+
+def summarize(cfg: RummiConfig, slots: jax.Array) -> SlotSummary:
+    stats = slot_stats(cfg, slots)
+    return SlotSummary(stats=stats, ev=evaluate(cfg, stats))

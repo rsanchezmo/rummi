@@ -26,7 +26,6 @@ import numpy as np
 
 from rummi.agents import build
 from rummi.agents.base import Agent, Observation, act_by_seat
-from rummi.env.observation import encode
 from rummi.env.vector_env import RummiVectorEnv
 
 Opponent = str | Agent
@@ -148,7 +147,7 @@ class FixedOpponentEnv(RummiVectorEnv):
         # A fresh deal starts at seat 0, so this only does work when the learner
         # sits elsewhere -- but it is what makes learner_seat mean anything.
         rewards_all = self._run_opponents()
-        return encode(self.state), self._info(rewards_all)
+        return self._encode(), self._info(rewards_all)
 
     def step(self, actions):
         actions = self._check_actions(actions)
@@ -166,7 +165,7 @@ class FixedOpponentEnv(RummiVectorEnv):
         self._pending_reset = terminated | truncated
 
         rewards = rewards_all[:, self.learner_seat]
-        return encode(self.state), rewards, terminated, truncated, self._info(rewards_all)
+        return self._encode(), rewards, terminated, truncated, self._info(rewards_all)
 
     # --- the opponents -------------------------------------------------------
     def _reset_seats(self) -> None:
@@ -198,7 +197,11 @@ class FixedOpponentEnv(RummiVectorEnv):
             waiting = ~self.state.done & (self.state.current != self.learner_seat)
             if not waiting.any():
                 return total
-            actions, illegal = act_by_seat(self._seats, self.state, self.required_mask)
+            # The env encoded this state when the last advance left it; the
+            # opponents read the same observation the learner would.
+            actions, illegal = act_by_seat(
+                self._seats, self.state, self.required_mask, obs=self._encode()
+            )
             self._illegal += illegal
             total += self._advance(actions, active=waiting).rewards
 

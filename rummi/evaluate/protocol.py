@@ -32,6 +32,8 @@ from rummi.env.numpy.deal import reset as deal_reset
 from rummi.env.numpy.deal import reset_envs
 from rummi.env.numpy.engine import step as engine_step
 from rummi.env.numpy.masks import legal_actions
+from rummi.env.numpy.sets import summarize
+from rummi.env.observation import encode
 
 PROTOCOL_VERSION = "2.0"
 
@@ -146,8 +148,11 @@ def _play_batch(
     for _ in range(suite.max_steps):
         if state.done.all():
             break
-        mask = legal_actions(state)
-        actions, illegal = act_by_seat(seats, state, mask)
+        # The mask and the agents' observation come from one summary of the table:
+        # both need it, and it is the most expensive thing in either.
+        summary = summarize(suite.cfg, state.table_sets)
+        mask = legal_actions(state, summary)
+        actions, illegal = act_by_seat(seats, state, mask, obs=encode(state, summary))
         result.illegal_attempts += illegal
         engine_step(state, actions, mask)
 

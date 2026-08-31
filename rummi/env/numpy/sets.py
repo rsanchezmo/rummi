@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import EMPTY, tables
+from rummi.rules.encoding import EMPTY, slot_code
 
 _NO_COLOR = np.int16(-2)
 """Sentinel that compares unequal to every real colour, so a mixed-colour slot
@@ -51,9 +51,17 @@ class SlotStats:
     number_mask: np.ndarray
     same_color: np.ndarray
     same_number: np.ndarray
-    distinct_real: np.ndarray
-    """No real kind appears twice. Combined with ``same_color`` this is exactly
-    "distinct numbers"; with ``same_number`` it is exactly "distinct colours"."""
+    distinct_colors: np.ndarray
+    """No colour appears twice among the real tiles."""
+    distinct_numbers: np.ndarray
+    """No number appears twice among the real tiles.
+
+    A run is shaped by ``same_color & distinct_numbers`` and a group by
+    ``same_number & distinct_colors``; under either conjunction the flag says
+    exactly "no kind appears twice", which is the rule being applied. Neither is
+    read outside such a pairing, so the general duplicate test -- which costs a
+    sort -- is never needed.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,63 +82,67 @@ class SlotEval:
     reading is taken, matching the rule that the player declares it."""
 
 
+def _bit_length(mask: np.ndarray) -> np.ndarray:
+    """Index of the highest set bit, plus one; ``0`` for an empty mask.
+
+    A float's exponent *is* that value, so ``frexp`` reads it off directly -- and
+    unlike a lookup table it does not grow with the number range.
+    """
+    return np.frexp(mask.astype(np.float32))[1]
+
+
 def slot_stats(cfg: RummiConfig, slots: np.ndarray) -> SlotStats:
-    """Reduce ``(..., L)`` kind ids to per-slot summary scalars."""
-    t = tables(cfg)
+    """Reduce ``(..., L)`` kind ids to per-slot summary scalars.
+
+    One gather and two reductions over the positions; everything after them is
+    per-slot bit arithmetic. See :class:`~rummi.rules.encoding.SlotCode` for the
+    packing that makes an OR and a sum enough.
+    """
+    code = slot_code(cfg)
     slots = np.asarray(slots)
 
-    occupied = slots >= 0
-    is_joker = occupied & (slots == cfg.joker_kind)
-    real = occupied & ~is_joker
+    packed = code.code[slots + 1]
+    present = np.bitwise_or.reduce(packed, axis=-1)
+    total = packed.sum(-1)
 
-    safe = np.where(real, slots, 0)
-    color = t.color[safe].astype(np.int16)
-    number = t.number[safe].astype(np.int16)
+    color_mask = (present & code.color_bits).astype(np.int32)
+    number_mask = ((present >> code.number_shift) & code.number_bits).astype(np.int32)
 
-    n = occupied.sum(-1).astype(np.int16)
-    n_jokers = is_joker.sum(-1).astype(np.int16)
-    n_real = real.sum(-1).astype(np.int16)
+    n = (slots >= 0).sum(-1).astype(np.int16)
+    n_real = (total >> code.real_shift).astype(np.int16)
+    n_jokers = (n - n_real).astype(np.int16)
     no_real = n_real == 0
 
-    c_min = np.where(real, color, np.int16(cfg.n_colors)).min(-1)
-    c_max = np.where(real, color, np.int16(-1)).max(-1)
-    lo = np.where(real, number, np.int16(cfg.n_numbers)).min(-1)
-    hi = np.where(real, number, np.int16(1)).max(-1)
+    # A field's sum matches its OR exactly when no bit in it was set twice.
+    distinct_colors = (total & code.color_field) == color_mask
+    distinct_numbers = ((total >> code.number_shift) & code.number_field) == number_mask
 
-    same_color = no_real | (c_min == c_max)
-    same_number = no_real | (lo == hi)
+    # `x & (x - 1)` clears the lowest set bit, so this is "one bit at most".
+    same_color = (color_mask & (color_mask - 1)) == 0
+    same_number = (number_mask & (number_mask - 1)) == 0
 
-    shared_color = np.where(same_color & ~no_real, c_max, _NO_COLOR).astype(np.int16)
-    shared_number = np.where(same_number & ~no_real, hi, _NO_NUMBER).astype(np.int16)
-
-    one = np.int64(1)
-    color_mask = np.bitwise_or.reduce(
-        np.where(real, one << color.astype(np.int64), np.int64(0)), axis=-1
-    )
-    number_mask = np.bitwise_or.reduce(
-        np.where(real, one << (number.astype(np.int64) - 1), np.int64(0)), axis=-1
-    )
-
-    # Duplicate real kinds are detected by sorting reals to the front; jokers and
-    # empties are pushed past them because they may legitimately repeat.
-    key = np.where(real, slots, np.int16(cfg.n_kinds)).astype(np.int16)
-    key = np.sort(key, axis=-1)
-    adjacent_dup = (key[..., 1:] == key[..., :-1]) & (key[..., :-1] < cfg.n_kinds)
-    distinct_real = ~adjacent_dup.any(-1)
+    # With no real tiles the masks are empty, which lands these on the loosest
+    # values for the run-window test.
+    hi = np.maximum(_bit_length(number_mask), 1).astype(np.int16)
+    lo = np.where(
+        no_real, np.int16(cfg.n_numbers), _bit_length(number_mask & -number_mask)
+    ).astype(np.int16)
+    c_max = (_bit_length(color_mask) - 1).astype(np.int16)
 
     return SlotStats(
         n=n,
         n_jokers=n_jokers,
         n_real=n_real,
-        color=shared_color,
-        number=shared_number,
-        lo=lo.astype(np.int16),
-        hi=hi.astype(np.int16),
+        color=np.where(same_color & ~no_real, c_max, _NO_COLOR).astype(np.int16),
+        number=np.where(same_number & ~no_real, hi, _NO_NUMBER).astype(np.int16),
+        lo=lo,
+        hi=hi,
         color_mask=color_mask,
         number_mask=number_mask,
         same_color=same_color,
         same_number=same_number,
-        distinct_real=distinct_real,
+        distinct_colors=distinct_colors,
+        distinct_numbers=distinct_numbers,
     )
 
 
@@ -150,10 +162,10 @@ def evaluate(cfg: RummiConfig, s: SlotStats) -> SlotEval:
     win_hi = np.minimum(s.lo.astype(np.int32), n_numbers - n + 1)
     window_fits = win_lo <= win_hi
 
-    run_shape = s.same_color & s.distinct_real
+    run_shape = s.same_color & s.distinct_numbers
     run_valid = run_shape & long_enough & (n <= n_numbers) & window_fits
 
-    group_shape = s.same_number & s.distinct_real
+    group_shape = s.same_number & s.distinct_colors
     group_valid = group_shape & long_enough & (n <= n_colors)
 
     is_valid = run_valid | group_valid
@@ -189,43 +201,82 @@ def evaluate_slots(cfg: RummiConfig, slots: np.ndarray) -> SlotEval:
     return evaluate(cfg, slot_stats(cfg, slots))
 
 
+@dataclass(frozen=True, slots=True)
+class SlotSummary:
+    """Both stages for one table, so the two readers of it can share the work.
+
+    The action mask and the observation are computed from the same state and both
+    need every field here; computing it twice cost about a fifth of a step.
+    """
+
+    stats: SlotStats
+    ev: SlotEval
+
+
+def summarize(cfg: RummiConfig, slots: np.ndarray) -> SlotSummary:
+    stats = slot_stats(cfg, slots)
+    return SlotSummary(stats=stats, ev=evaluate(cfg, stats))
+
+
+@dataclass(frozen=True, slots=True)
+class AssignCode:
+    """ASSIGN legality, factored into a colour half and a number half.
+
+    A numbered kind *is* a ``(colour, number)`` pair -- that is how kind ids are
+    laid out -- and every term of the predicate constrains only one of the two. So
+    the ``(..., K)`` answer is a product of an ``(..., C)`` and an ``(..., N)``
+    table, and the caller materialises it in whichever memory order it wants: the
+    action mask is kind-major, :func:`assign_open` is kind-minor. Bit 0 of each
+    code carries the run branch and bit 1 the group branch, so a single bitwise
+    AND resolves both.
+    """
+
+    color: np.ndarray
+    """``(..., C)`` uint8."""
+    number: np.ndarray
+    """``(..., N)`` uint8."""
+    joker: np.ndarray
+    """``(...)`` bool: the joker is one kind, so it is not part of the grid."""
+
+
+def assign_codes(cfg: RummiConfig, s: SlotStats) -> AssignCode:
+    """The two halves of the ASSIGN legality test. See :class:`AssignCode`."""
+    colors = np.arange(cfg.n_colors, dtype=np.int32)
+    numbers = np.arange(1, cfg.n_numbers + 1, dtype=np.int32)
+    n_next = s.n.astype(np.int32) + 1
+
+    run_slot = (n_next <= cfg.n_numbers) & s.distinct_numbers
+    group_slot = (n_next <= cfg.n_colors) & s.distinct_colors & bool(cfg.group_possible)
+    no_real = (s.n_real == 0)[..., None]
+
+    # Numbered tile: it must not duplicate a colour (group) or a number (run)
+    # already present, and must agree with whatever the slot has settled on.
+    run_color = (no_real | (s.color[..., None] == colors)) & run_slot[..., None]
+    group_color = ((s.color_mask[..., None] & (1 << colors)) == 0) & group_slot[..., None]
+    run_number = (s.number_mask[..., None] & (1 << (numbers - 1))) == 0
+    group_number = no_real | (s.number[..., None] == numbers)
+
+    return AssignCode(
+        color=run_color.view(np.uint8) | (group_color.view(np.uint8) << 1),
+        number=run_number.view(np.uint8) | (group_number.view(np.uint8) << 1),
+        # A joker constrains nothing beyond the shape the slot already has.
+        joker=(run_slot & s.same_color) | (group_slot & s.same_number),
+    )
+
+
 def assign_open(cfg: RummiConfig, s: SlotStats) -> np.ndarray:
     """``(..., K)`` bool: would adding one tile of each kind leave the slot extendable?
 
     This is the ASSIGN legality test. Availability of the tile is the caller's
     concern; this answers only whether the resulting set could still be completed.
     """
-    t = tables(cfg)
-    n_next = s.n.astype(np.int32)[..., None] + 1
-    one = np.int64(1)
-
-    kind_color = t.color.astype(np.int16)
-    kind_number = t.number.astype(np.int16)
-    kind_is_joker = t.is_joker
-
-    fits_run = n_next <= np.int32(cfg.n_numbers)
-    fits_group = n_next <= np.int32(cfg.n_colors)
-    distinct = s.distinct_real[..., None]
-
-    # Numbered tile: it must not duplicate a colour (group) or a number (run)
-    # already present, and must agree with whatever the slot has settled on.
-    color_free = (s.color_mask[..., None] & (one << kind_color.astype(np.int64))) == 0
-    number_free = (
-        s.number_mask[..., None] & (one << (kind_number.astype(np.int64) - 1))
-    ) == 0
-    color_agrees = (s.n_real == 0)[..., None] | (s.color[..., None] == kind_color)
-    number_agrees = (s.n_real == 0)[..., None] | (s.number[..., None] == kind_number)
-
-    numbered_run = fits_run & distinct & color_agrees & number_free
-    numbered_group = fits_group & distinct & number_agrees & color_free
-
-    # A joker constrains nothing beyond the shape the slot already has.
-    joker_run = fits_run & distinct & s.same_color[..., None]
-    joker_group = fits_group & distinct & s.same_number[..., None]
-
-    run_ok = np.where(kind_is_joker, joker_run, numbered_run)
-    group_ok = np.where(kind_is_joker, joker_group, numbered_group)
-    return run_ok | (group_ok & bool(cfg.group_possible))
+    codes = assign_codes(cfg, s)
+    shape = s.n.shape
+    out = np.empty((*shape, cfg.n_kinds), dtype=bool)
+    grid = codes.color[..., :, None] & codes.number[..., None, :]
+    out[..., : cfg.n_numbered_kinds] = (grid != 0).reshape(*shape, cfg.n_numbered_kinds)
+    out[..., cfg.joker_kind] = codes.joker
+    return out
 
 
 def pad_slot(cfg: RummiConfig, kinds) -> np.ndarray:

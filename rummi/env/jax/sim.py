@@ -25,7 +25,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from rummi.env.jax.kernel import assign_open, evaluate, lookup, slot_stats
+from rummi.env.jax.kernel import SlotStats, SlotSummary, assign_codes, lookup, summarize
 from rummi.rules.config import RewardMode, RummiConfig
 from rummi.rules.encoding import EMPTY, tables
 
@@ -217,10 +217,15 @@ def meld_value(cfg: RummiConfig, state: JaxState, slot_value: jax.Array) -> jax.
 
 
 @partial(jax.jit, static_argnums=0)
-def legal_actions(cfg: RummiConfig, state: JaxState) -> jax.Array:
+def legal_actions(
+    cfg: RummiConfig, state: JaxState, summary: SlotSummary | None = None
+) -> jax.Array:
+    """``summary`` is this table's :func:`~rummi.env.jax.kernel.summarize`, passed in
+    by a caller that is also encoding an observation from the same state."""
     b = state.racks.shape[0]
-    stats = slot_stats(cfg, state.table_sets)
-    ev = evaluate(cfg, stats)
+    if summary is None:
+        summary = summarize(cfg, state.table_sets)
+    stats, ev = summary.stats, summary.ev
 
     rack = current_rack(state)
     has_melded = jnp.take_along_axis(state.melded, state.current[:, None], axis=1)[:, 0]
@@ -241,12 +246,6 @@ def legal_actions(cfg: RummiConfig, state: JaxState) -> jax.Array:
     place = rack > 0
     pick = (state.table_sets >= 0) & touchable[..., None]
     dissolve = touchable
-    assign = (
-        assign_open(cfg, stats)
-        & (state.workbench > 0)[:, None, :]
-        & (lengths < cfg.max_set_len)[..., None]
-        & (touchable | is_first_empty)[..., None]
-    )
 
     table_whole = (ev.is_valid | ev.is_empty).all(-1)
     played_something = state.placed_rack.sum(-1) > 0
@@ -254,19 +253,44 @@ def legal_actions(cfg: RummiConfig, state: JaxState) -> jax.Array:
     end_turn = (state.workbench.sum(-1) == 0) & table_whole & played_something & meld_ok
     playable = (state.micro_count < cfg.max_micro_per_turn) & ~state.done
     gate = playable[:, None]
+    # Everything ASSIGN asks of the slot rather than of the tile.
+    slot_ok = (lengths < cfg.max_set_len) & (touchable | is_first_empty) & gate
 
     return jnp.concatenate(
         [
             place & gate,
             pick.reshape(b, -1) & gate,
             dissolve & gate,
-            # ASSIGN ids are kind-major, so transpose the (S, K) predicate.
-            assign.transpose(0, 2, 1).reshape(b, -1) & gate,
+            _assign_block(cfg, state, stats, slot_ok),
             (end_turn & playable)[:, None],
             jnp.ones((b, 1), bool),
         ],
         axis=-1,
     )
+
+
+def _assign_block(
+    cfg: RummiConfig, state: JaxState, stats: SlotStats, slot_ok: jax.Array
+) -> jax.Array:
+    """``(B, S*K)`` the ASSIGN block, built kind-major as the action ids are.
+
+    :class:`~rummi.env.jax.kernel.AssignCode` is a (colour x number) product, so the
+    block comes out in the order the ids want. Building the ``(S, K)`` form first
+    would mean transposing S*K booleans per env to say the same thing.
+    """
+    b = state.racks.shape[0]
+    codes = assign_codes(cfg, stats)
+    # The per-slot factor folds in before the product, where it is S values wide
+    # rather than S*K.
+    color = jnp.where(slot_ok[..., None], codes.color, jnp.uint8(0)).transpose(0, 2, 1)
+    number = codes.number.transpose(0, 2, 1)
+    grid = (color[:, :, None, :] & number[:, None, :, :]) != 0
+    block = jnp.concatenate(
+        [grid.reshape(b, cfg.n_numbered_kinds, cfg.max_sets), (codes.joker & slot_ok)[:, None, :]],
+        axis=1,
+    )
+    # The tile has to be in hand, which is a fact about the kind, not the slot.
+    return (block & (state.workbench > 0)[..., None]).reshape(b, -1)
 
 
 def check_actions(mask: jax.Array, actions: jax.Array, live: jax.Array) -> None:

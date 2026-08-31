@@ -12,20 +12,26 @@ from __future__ import annotations
 import torch
 
 from rummi.rules.observation import N_SCALARS, SLOT_FEATURES
-from rummi.env.torch.kernel import evaluate, lookup, slot_stats
+from rummi.env.torch.kernel import SlotSummary, summarize
 from rummi.env.torch.sim import TorchState, current_rack, meld_value
 
 
-def encode(state: TorchState) -> dict[str, torch.Tensor]:
+def encode(state: TorchState, summary: SlotSummary | None = None) -> dict[str, torch.Tensor]:
+    """``summary`` is this table's :func:`~rummi.env.torch.kernel.summarize`, passed
+    in by a caller that is also building a mask from the same state."""
     cfg = state.cfg
     dev = state.device
     b, p = state.batch_size, cfg.n_players
 
-    stats = slot_stats(cfg, state.table_sets)
-    ev = evaluate(cfg, stats)
+    if summary is None:
+        summary = summarize(cfg, state.table_sets)
+    stats, ev = summary.stats, summary.ev
 
     rack = current_rack(state)
-    unseen = lookup(cfg, dev).copies.unsqueeze(0) - rack - state.table_counts() - state.workbench
+    # The pool plus every other rack. Tile conservation makes that identical to
+    # `copies - rack - table - workbench`, and it is a (P, K) sum rather than a
+    # scatter over every position on the table.
+    unseen = state.racks.sum(1) - rack + state.pool
 
     slot_features = torch.stack(
         [

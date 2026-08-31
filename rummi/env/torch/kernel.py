@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import torch
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import tables
+from rummi.rules.encoding import SlotCode, slot_code, tables
 
 NO_COLOR = -2
 NO_NUMBER = -2
@@ -33,6 +33,11 @@ class Lookup:
     copies: torch.Tensor
     offload: torch.Tensor
     """Face value with the joker at ``joker_penalty``: what a tile sheds when played."""
+    slot_code: torch.Tensor
+    """The :class:`~rummi.rules.encoding.SlotCode` table, indexed by ``kind + 1``."""
+    packing: SlotCode
+    """Its shifts and field masks. Held here rather than looked up in ``slot_stats``:
+    ``slot_code`` is ``lru_cache``-wrapped and Dynamo refuses to trace through one."""
 
 
 _CACHE: dict[tuple[int, str, str], Lookup] = {}
@@ -57,6 +62,8 @@ def lookup(cfg: RummiConfig, device: torch.device) -> Lookup:
         is_joker=to(t.is_joker, torch.bool),
         copies=to(t.copies),
         offload=to(offload),
+        slot_code=to(slot_code(cfg).code),
+        packing=slot_code(cfg),
     )
     _CACHE[key] = built
     return built
@@ -75,7 +82,8 @@ class SlotStats:
     number_mask: torch.Tensor
     same_color: torch.Tensor
     same_number: torch.Tensor
-    distinct_real: torch.Tensor
+    distinct_colors: torch.Tensor
+    distinct_numbers: torch.Tensor
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,43 +98,56 @@ class SlotEval:
     value: torch.Tensor
 
 
+def _bit_length(mask: torch.Tensor, width: int) -> torch.Tensor:
+    """Index of the highest set bit, plus one; ``0`` for an empty mask.
+
+    Counted by thresholds rather than read off a float exponent: MPS has no
+    ``frexp``, and ``width`` is static and small enough that this stays one pass.
+    """
+    powers = 1 << torch.arange(width, device=mask.device)
+    return (mask.unsqueeze(-1) >= powers).sum(-1)
+
+
 def slot_stats(cfg: RummiConfig, slots: torch.Tensor) -> SlotStats:
-    """Reduce ``(..., L)`` kind ids to per-slot summary scalars."""
+    """Reduce ``(..., L)`` kind ids to per-slot summary scalars.
+
+    One gather and two reductions over the positions; everything after them is
+    per-slot bit arithmetic. See :class:`~rummi.rules.encoding.SlotCode` for the
+    packing that makes an OR and a sum enough.
+    """
     t = lookup(cfg, slots.device)
+    code = t.packing
     slots = slots.to(torch.int64)
 
-    occupied = slots >= 0
-    is_joker = occupied & (slots == cfg.joker_kind)
-    real = occupied & ~is_joker
+    packed = t.slot_code[slots + 1]
+    present = _or_reduce(packed)
+    total = packed.sum(-1)
 
-    safe = slots.clamp(min=0)
-    color = t.color[safe]
-    number = t.number[safe]
+    color_mask = present & code.color_bits
+    number_mask = (present >> code.number_shift) & code.number_bits
 
-    n = occupied.sum(-1)
-    n_jokers = is_joker.sum(-1)
-    n_real = real.sum(-1)
+    n = (slots >= 0).sum(-1)
+    n_real = total >> code.real_shift
+    n_jokers = n - n_real
     no_real = n_real == 0
 
-    # Fill values are the identity for each reduction, so a slot with no real
-    # tiles yields the loosest possible bounds.
-    c_min = torch.where(real, color, cfg.n_colors).amin(-1)
-    c_max = torch.where(real, color, -1).amax(-1)
-    lo = torch.where(real, number, cfg.n_numbers).amin(-1)
-    hi = torch.where(real, number, torch.ones_like(number)).amax(-1)
+    # A field's sum matches its OR exactly when no bit in it was set twice.
+    distinct_colors = (total & code.color_field) == color_mask
+    distinct_numbers = ((total >> code.number_shift) & code.number_field) == number_mask
 
-    same_color = no_real | (c_min == c_max)
-    same_number = no_real | (lo == hi)
+    # `x & (x - 1)` clears the lowest set bit, so this is "one bit at most".
+    same_color = (color_mask & (color_mask - 1)) == 0
+    same_number = (number_mask & (number_mask - 1)) == 0
 
-    one = torch.ones((), dtype=torch.int64, device=slots.device)
-    color_mask = _or_reduce(torch.where(real, one << color, torch.zeros_like(color)))
-    number_mask = _or_reduce(torch.where(real, one << (number - 1), torch.zeros_like(number)))
-
-    # Duplicate real kinds: sort reals to the front, then compare neighbours.
-    # Jokers may legitimately repeat, so they are pushed past the reals.
-    key = torch.where(real, slots, torch.full_like(slots, cfg.n_kinds)).sort(-1).values
-    adjacent_dup = (key[..., 1:] == key[..., :-1]) & (key[..., :-1] < cfg.n_kinds)
-    distinct_real = ~adjacent_dup.any(-1)
+    # With no real tiles the masks are empty, which lands these on the loosest
+    # values for the run-window test.
+    hi = _bit_length(number_mask, cfg.n_numbers).clamp(min=1)
+    lo = torch.where(
+        no_real,
+        torch.full_like(hi, cfg.n_numbers),
+        _bit_length(number_mask & -number_mask, cfg.n_numbers),
+    )
+    c_max = _bit_length(color_mask, cfg.n_colors) - 1
 
     return SlotStats(
         n=n,
@@ -140,7 +161,8 @@ def slot_stats(cfg: RummiConfig, slots: torch.Tensor) -> SlotStats:
         number_mask=number_mask,
         same_color=same_color,
         same_number=same_number,
-        distinct_real=distinct_real,
+        distinct_colors=distinct_colors,
+        distinct_numbers=distinct_numbers,
     )
 
 
@@ -164,10 +186,10 @@ def evaluate(cfg: RummiConfig, s: SlotStats) -> SlotEval:
     win_hi = torch.clamp(s.lo, max=cfg.n_numbers - n + 1)
     window_fits = win_lo <= win_hi
 
-    run_shape = s.same_color & s.distinct_real
+    run_shape = s.same_color & s.distinct_numbers
     run_valid = run_shape & long_enough & (n <= cfg.n_numbers) & window_fits
 
-    group_shape = s.same_number & s.distinct_real
+    group_shape = s.same_number & s.distinct_colors
     group_valid = group_shape & long_enough & (n <= cfg.n_colors)
 
     run_open = run_shape & (n <= cfg.n_numbers)
@@ -197,29 +219,68 @@ def evaluate_slots(cfg: RummiConfig, slots: torch.Tensor) -> SlotEval:
     return evaluate(cfg, slot_stats(cfg, slots))
 
 
-def assign_open(cfg: RummiConfig, s: SlotStats) -> torch.Tensor:
-    """``(..., K)`` would adding one tile of each kind leave the slot extendable?"""
-    t = lookup(cfg, s.n.device)
-    n_next = s.n.unsqueeze(-1) + 1
-    one = torch.ones((), dtype=torch.int64, device=s.n.device)
+@dataclass(frozen=True, slots=True)
+class AssignCode:
+    """ASSIGN legality, factored into a colour half and a number half.
 
-    fits_run = n_next <= cfg.n_numbers
-    fits_group = n_next <= cfg.n_colors
-    distinct = s.distinct_real.unsqueeze(-1)
+    A numbered kind *is* a ``(colour, number)`` pair -- that is how kind ids are
+    laid out -- and every term of the predicate constrains only one of the two. So
+    the ``(..., K)`` answer is a product of an ``(..., C)`` and an ``(..., N)``
+    table, and the caller materialises it in whichever order it wants: the action
+    mask is kind-major, :func:`assign_open` is kind-minor. Bit 0 of each code
+    carries the run branch and bit 1 the group branch, so one AND resolves both.
+    """
+
+    color: torch.Tensor
+    """``(..., C)`` uint8."""
+    number: torch.Tensor
+    """``(..., N)`` uint8."""
+    joker: torch.Tensor
+    """``(...)`` bool: the joker is one kind, so it is not part of the grid."""
+
+
+def assign_codes(cfg: RummiConfig, s: SlotStats) -> AssignCode:
+    """The two halves of the ASSIGN legality test. See :class:`AssignCode`."""
+    dev = s.n.device
+    colors = torch.arange(cfg.n_colors, device=dev)
+    numbers = torch.arange(1, cfg.n_numbers + 1, device=dev)
+
+    run_slot = (s.n + 1 <= cfg.n_numbers) & s.distinct_numbers
+    group_slot = (s.n + 1 <= cfg.n_colors) & s.distinct_colors & bool(cfg.group_possible)
     no_real = (s.n_real == 0).unsqueeze(-1)
 
-    color_free = (s.color_mask.unsqueeze(-1) & (one << t.color.clamp(min=0))) == 0
-    number_free = (s.number_mask.unsqueeze(-1) & (one << (t.number.clamp(min=1) - 1))) == 0
-    color_agrees = no_real | (s.color.unsqueeze(-1) == t.color)
-    number_agrees = no_real | (s.number.unsqueeze(-1) == t.number)
+    # Numbered tile: it must not duplicate a colour (group) or a number (run)
+    # already present, and must agree with whatever the slot has settled on.
+    run_color = (no_real | (s.color.unsqueeze(-1) == colors)) & run_slot.unsqueeze(-1)
+    group_color = ((s.color_mask.unsqueeze(-1) & (1 << colors)) == 0) & group_slot.unsqueeze(-1)
+    run_number = (s.number_mask.unsqueeze(-1) & (1 << (numbers - 1))) == 0
+    group_number = no_real | (s.number.unsqueeze(-1) == numbers)
 
-    numbered_run = fits_run & distinct & color_agrees & number_free
-    numbered_group = fits_group & distinct & number_agrees & color_free
+    return AssignCode(
+        color=run_color.to(torch.uint8) | (group_color.to(torch.uint8) << 1),
+        number=run_number.to(torch.uint8) | (group_number.to(torch.uint8) << 1),
+        # A joker constrains nothing beyond the shape the slot already has.
+        joker=(run_slot & s.same_color) | (group_slot & s.same_number),
+    )
 
-    # A joker constrains nothing beyond the shape the slot already has.
-    joker_run = fits_run & distinct & s.same_color.unsqueeze(-1)
-    joker_group = fits_group & distinct & s.same_number.unsqueeze(-1)
 
-    run_ok = torch.where(t.is_joker, joker_run, numbered_run)
-    group_ok = torch.where(t.is_joker, joker_group, numbered_group)
-    return run_ok | (group_ok & bool(cfg.group_possible))
+def assign_open(cfg: RummiConfig, s: SlotStats) -> torch.Tensor:
+    """``(..., K)`` would adding one tile of each kind leave the slot extendable?"""
+    codes = assign_codes(cfg, s)
+    grid = (codes.color.unsqueeze(-1) & codes.number.unsqueeze(-2)) != 0
+    return torch.cat(
+        [grid.flatten(-2, -1), codes.joker.unsqueeze(-1)], dim=-1
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SlotSummary:
+    """Both stages for one table, so the two readers of it can share the work."""
+
+    stats: SlotStats
+    ev: SlotEval
+
+
+def summarize(cfg: RummiConfig, slots: torch.Tensor) -> SlotSummary:
+    stats = slot_stats(cfg, slots)
+    return SlotSummary(stats=stats, ev=evaluate(cfg, stats))

@@ -80,6 +80,7 @@ def act_by_seat(
     state,
     mask: np.ndarray,
     actions: np.ndarray | None = None,
+    obs: Observation | None = None,
 ) -> tuple[np.ndarray, int]:
     """Fill in one action per env from the agent seated at whichever seat is acting.
 
@@ -88,6 +89,9 @@ def act_by_seat(
     one seat itself. Masked-out proposals are replaced by ``DRAW`` and counted
     rather than raised -- a run that reports its illegal attempts is worth more
     than one that dies half-way with no diagnosis.
+
+    ``obs`` is this state's observation when the caller already holds one;
+    otherwise it is encoded here, and only if some seat actually plays.
 
     The single multi-seat counterpart to :func:`act_on_state`: agents still see
     only the encoded observation, and the seat rotation in it is what lets one
@@ -100,7 +104,6 @@ def act_by_seat(
     if actions is None:
         actions = np.full(n, cfg.draw_action, dtype=np.int64)
     rows = np.arange(n)
-    obs: Observation | None = None
     illegal_attempts = 0
 
     for seat, agent in enumerate(seats):

@@ -16,20 +16,27 @@ import jax.numpy as jnp
 
 from rummi.rules.config import RummiConfig
 from rummi.rules.observation import SLOT_FEATURES
-from rummi.env.jax.kernel import evaluate, lookup, slot_stats
-from rummi.env.jax.sim import JaxState, current_rack, meld_value, pool_size, table_counts
+from rummi.env.jax.kernel import SlotSummary, summarize
+from rummi.env.jax.sim import JaxState, current_rack, legal_actions, meld_value, pool_size
 
 
 @partial(jax.jit, static_argnums=0)
-def encode(cfg: RummiConfig, state: JaxState) -> dict[str, jax.Array]:
+def encode(
+    cfg: RummiConfig, state: JaxState, summary: SlotSummary | None = None
+) -> dict[str, jax.Array]:
+    """``summary`` is this table's :func:`~rummi.env.jax.kernel.summarize`, passed in
+    by a caller that is also building a mask from the same state."""
     p = cfg.n_players
 
-    stats = slot_stats(cfg, state.table_sets)
-    ev = evaluate(cfg, stats)
+    if summary is None:
+        summary = summarize(cfg, state.table_sets)
+    stats, ev = summary.stats, summary.ev
 
     rack = current_rack(state)
-    copies = jnp.asarray(lookup(cfg).copies)
-    unseen = copies[None, :] - rack - table_counts(cfg, state) - state.workbench
+    # The pool plus every other rack. Tile conservation makes that identical to
+    # `copies - rack - table - workbench`, and it is a (P, K) sum rather than a
+    # scatter over every position on the table.
+    unseen = state.racks.sum(1) - rack + state.pool
 
     slot_features = jnp.stack(
         [
@@ -74,3 +81,10 @@ def encode(cfg: RummiConfig, state: JaxState) -> dict[str, jax.Array]:
             axis=-1,
         ),
     }
+
+
+@partial(jax.jit, static_argnums=0)
+def observe(cfg: RummiConfig, state: JaxState) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """The mask and the observation of one state, sharing the table's summary."""
+    summary = summarize(cfg, state.table_sets)
+    return legal_actions(cfg, state, summary), encode(cfg, state, summary)

@@ -100,6 +100,7 @@ class RummiVectorEnv(VectorEnv):
         self._steps = 0
         self.state = self.backend.reset(cfg, num_envs, seed=seed)
         self._mask: np.ndarray | None = np.zeros((num_envs, cfg.n_actions), dtype=bool)
+        self._obs: dict[str, Any] | None = None
         # Whether `_mask` describes the state as it stands. Only a re-deal (or a
         # not-yet-reset env) makes it stale, so a step never has to recompute the
         # mask its predecessor already produced.
@@ -116,8 +117,7 @@ class RummiVectorEnv(VectorEnv):
         self._steps = 0
         self.state = self.backend.reset(self.cfg, self.num_envs, seed=self._base_seed)
         self._pending_reset[:] = False
-        self._mask = self.backend.legal_actions(self.cfg, self.state) if self.wants_mask else None
-        self._mask_fresh = True
+        self._observe()
         self._render()
         return self._encode(), self._info(
             np.zeros((self.num_envs, self.cfg.n_players), np.float32)
@@ -159,14 +159,15 @@ class RummiVectorEnv(VectorEnv):
             )
             self._pending_reset[:] = False
             self._mask_fresh = False
+            self._obs = None
         return just_reset
 
     def _advance(self, actions: np.ndarray, active: np.ndarray):
         """Apply one micro-action to every ``active`` env.
 
         The mask an advance leaves behind is the mask its successor needs, so this
-        recomputes one only after a re-deal. Doing it unconditionally cost a
-        second :func:`legal_actions` per step -- 29% of the env's step time on the
+        recomputes one only after a re-deal. Doing it unconditionally costs a
+        second :func:`legal_actions` per step, which measures **83% slower** on the
         standard config, for a value already in hand.
         """
         if self.wants_mask and not self._mask_fresh:
@@ -180,20 +181,37 @@ class RummiVectorEnv(VectorEnv):
             active,
         )
         self._steps += 1
-        if self.wants_mask:
-            self._mask = self.backend.legal_actions(self.cfg, self.state)
+        self._observe()
         self._render()
         return result
 
+    def _observe(self) -> None:
+        """Refresh the mask and the observation together.
+
+        Both describe the state as it now stands and both are built on the same
+        summary of the table, so a backend computing them in one call does that
+        work once. The step that follows consumes the mask this leaves behind.
+        """
+        if self.wants_mask:
+            self._mask, self._obs = self.backend.observe(self.cfg, self.state)
+        else:
+            self._mask, self._obs = None, self.backend.encode(self.cfg, self.state)
+        self._mask_fresh = True
+
     def _encode(self) -> dict[str, Any]:
         """The observation in the backend's own array type.
+
+        Whatever :meth:`_observe` last produced: it is the observation of the
+        current state, and re-encoding would repeat the whole table summary.
 
         Not converted: a device backend that copied its observation to the host
         every step would give back the speedup it was chosen for. Gymnasium's
         ``wrappers.vector`` conversions are the boundary -- see the note in
         CLAUDE.md.
         """
-        return self.backend.encode(self.cfg, self.state)
+        if self._obs is None:
+            self._obs = self.backend.encode(self.cfg, self.state)
+        return self._obs
 
     def _render(self) -> None:
         if self.render_mode != RenderMode.NONE.value:

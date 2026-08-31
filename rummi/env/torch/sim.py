@@ -27,10 +27,11 @@ import torch
 from rummi.rules.config import RewardMode, RummiConfig
 from rummi.rules.encoding import EMPTY, tables
 from rummi.env.torch.kernel import (
-    assign_open,
-    evaluate,
+    SlotStats,
+    SlotSummary,
+    assign_codes,
     lookup,
-    slot_stats,
+    summarize,
 )
 
 NO_WINNER = -1
@@ -230,11 +231,14 @@ def meld_value(state: TorchState, slot_value: torch.Tensor) -> torch.Tensor:
     return state.placed_rack @ lookup(state.cfg, state.device).value
 
 
-def legal_actions(state: TorchState) -> torch.Tensor:
+def legal_actions(state: TorchState, summary: SlotSummary | None = None) -> torch.Tensor:
+    """``summary`` is this table's :func:`~rummi.env.torch.kernel.summarize`, passed
+    in by a caller that is also encoding an observation from the same state."""
     cfg = state.cfg
     b = state.batch_size
-    stats = slot_stats(cfg, state.table_sets)
-    ev = evaluate(cfg, stats)
+    if summary is None:
+        summary = summarize(cfg, state.table_sets)
+    stats, ev = summary.stats, summary.ev
 
     rack = current_rack(state)
     has_melded = state.melded.gather(1, state.current.view(-1, 1)).squeeze(1)
@@ -255,31 +259,47 @@ def legal_actions(state: TorchState) -> torch.Tensor:
     place = rack > 0
     pick = (state.table_sets >= 0) & touchable.unsqueeze(-1)
     dissolve = touchable
-    assign = (
-        assign_open(cfg, stats)
-        & (state.workbench > 0).unsqueeze(1)
-        & (lengths < cfg.max_set_len).unsqueeze(-1)
-        & (touchable | is_first_empty).unsqueeze(-1)
-    )
 
     table_whole = (ev.is_valid | ev.is_empty).all(-1)
     played_something = state.placed_rack.sum(-1) > 0
     meld_ok = has_melded | (meld_value(state, ev.value) >= cfg.initial_meld)
     end_turn = (state.workbench.sum(-1) == 0) & table_whole & played_something & meld_ok
     playable = (state.micro_count < cfg.max_micro_per_turn) & ~state.done
+    # Everything ASSIGN asks of the slot rather than of the tile.
+    slot_ok = (lengths < cfg.max_set_len) & (touchable | is_first_empty) & playable.unsqueeze(-1)
 
     mask = torch.zeros((b, cfg.n_actions), dtype=torch.bool, device=state.device)
     gate = playable.unsqueeze(-1)
     mask[:, cfg.place_offset : cfg.pick_offset] = place & gate
     mask[:, cfg.pick_offset : cfg.dissolve_offset] = pick.reshape(b, -1) & gate
     mask[:, cfg.dissolve_offset : cfg.assign_offset] = dissolve & gate
-    # ASSIGN ids are kind-major, so transpose the (S, K) predicate before flattening.
-    mask[:, cfg.assign_offset : cfg.end_turn_action] = (
-        assign.transpose(1, 2).reshape(b, -1) & gate
-    )
+    mask[:, cfg.assign_offset : cfg.end_turn_action] = _assign_block(cfg, state, stats, slot_ok)
     mask[:, cfg.end_turn_action] = end_turn & playable
     mask[:, cfg.draw_action] = True
     return mask
+
+
+def _assign_block(
+    cfg: RummiConfig, state: TorchState, stats: SlotStats, slot_ok: torch.Tensor
+) -> torch.Tensor:
+    """``(B, S*K)`` the ASSIGN block, built kind-major as the action ids are.
+
+    :class:`~rummi.env.torch.kernel.AssignCode` is a (colour x number) product, so
+    the block comes out in the order the ids want. Building the ``(S, K)`` form
+    first would mean transposing S*K booleans per env to say the same thing.
+    """
+    codes = assign_codes(cfg, stats)
+    color, number = codes.color.transpose(1, 2), codes.number.transpose(1, 2)
+    grid = (color.unsqueeze(2) & number.unsqueeze(1)) != 0
+    block = torch.cat([grid.flatten(1, 2), codes.joker.unsqueeze(1)], dim=1)
+    # The tile has to be in hand and the slot has to accept it. Both are applied to
+    # the finished block rather than folded into the narrower code: selecting a code
+    # by `slot_ok` inside this graph makes Inductor's MPS backend fail codegen for
+    # the `slot_ok` buffer, and MPS + `compile` is the benchmark's headline figure.
+    # Compiled, the extra pass fuses away anyway.
+    block &= (state.workbench > 0).unsqueeze(-1)
+    block &= slot_ok.unsqueeze(1)
+    return block.reshape(state.batch_size, -1)
 
 
 # --- engine -------------------------------------------------------------------

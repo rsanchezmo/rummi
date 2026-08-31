@@ -17,10 +17,9 @@ from __future__ import annotations
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import tables
 from rummi.rules.observation import N_SCALARS, SLOT_FEATURES, max_meld_value
 from rummi.env.numpy.masks import current_rack, meld_value
-from rummi.env.numpy.sets import evaluate, slot_stats
+from rummi.env.numpy.sets import SlotSummary, summarize
 from rummi.env.numpy.state import BatchState
 
 
@@ -65,16 +64,19 @@ def _seat_rotation(state: BatchState) -> np.ndarray:
     return (state.current[:, None].astype(np.int64) + np.arange(p)[None, :]) % p
 
 
-def encode(state: BatchState) -> dict[str, np.ndarray]:
+def encode(state: BatchState, summary: SlotSummary | None = None) -> dict[str, np.ndarray]:
+    """``summary`` is the table's :func:`~rummi.env.numpy.sets.summarize`, which the
+    caller passes when it is also building a mask from the same state."""
     cfg = state.cfg
-    stats = slot_stats(cfg, state.table_sets)
-    ev = evaluate(cfg, stats)
+    if summary is None:
+        summary = summarize(cfg, state.table_sets)
+    stats, ev = summary.stats, summary.ev
 
     rack = current_rack(state)
-    table_counts = state.table_counts()
-    unseen = (
-        tables(cfg).copies[None, :].astype(np.int16) - rack - table_counts - state.workbench
-    )
+    # The pool plus every other rack. Tile conservation makes that identical to
+    # `copies - rack - table - workbench`, and it is a (P, K) sum rather than a
+    # scatter over every position on the table.
+    unseen = state.racks.sum(1) - rack + state.pool
 
     slot_features = np.stack(
         [

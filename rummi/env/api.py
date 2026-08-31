@@ -57,6 +57,14 @@ class Backend(Protocol):
         Gymnasium's ``wrappers.vector`` conversions are the boundary.
         """
 
+    def observe(self, cfg: RummiConfig, state: Any) -> tuple[Any, dict[str, Any]]:
+        """The mask and the observation of one state, in a single call.
+
+        Every step needs both, and both are built on the same per-slot summary of
+        the table -- the most expensive thing in either. Asking for them together
+        is what lets a backend compute that once.
+        """
+
     def step(
         self, cfg: RummiConfig, state: Any, actions, mask=None, active=None
     ) -> tuple[Any, StepOut]: ...
@@ -91,6 +99,14 @@ class NumpyBackend:
         from rummi.env.observation import encode
 
         return encode(state)
+
+    def observe(self, cfg, state):
+        from rummi.env.numpy.masks import legal_actions
+        from rummi.env.numpy.sets import summarize
+        from rummi.env.observation import encode
+
+        summary = summarize(cfg, state.table_sets)
+        return legal_actions(state, summary), encode(state, summary)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         from rummi.env.numpy.engine import step
@@ -145,6 +161,14 @@ class TorchBackend:
         from rummi.env.torch.observation import encode
 
         return encode(state)
+
+    def observe(self, cfg, state):
+        from rummi.env.torch.kernel import summarize
+        from rummi.env.torch.observation import encode
+        from rummi.env.torch.sim import legal_actions
+
+        summary = summarize(cfg, state.table_sets)
+        return legal_actions(state, summary), encode(state, summary)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import torch
@@ -201,6 +225,11 @@ class JaxBackend:
         from rummi.env.jax.observation import encode
 
         return encode(cfg, state)
+
+    def observe(self, cfg, state):
+        from rummi.env.jax.observation import observe
+
+        return observe(cfg, state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import jax.numpy as jnp
