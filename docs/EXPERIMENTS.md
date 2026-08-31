@@ -155,6 +155,7 @@ and the u40-u100 window is where to look.
 | `--clone` (macro space) | +22.59 | Helps on the primitive space, hurts here. |
 | `--kl-coef` (macro space) | -0.4 | Mandatory on the primitive space, a constraint here: it pinned entropy to 0.001. |
 | `--lr-decay` | **no effect** | Linear anneal to zero over 300 updates, five seeds against five without: +29.31 vs +29.10 at u40, -19.62 vs -24.71 at u100, -4.83 vs +10.13 at u300. Inside seed noise everywhere, and the collapse happens anyway. Kept because it is the first thing anyone asks of a PPO loop; the schedule is also gentle where it matters (87% of `--lr` still live at u40) so this is weak evidence against step size, not a refutation of it. |
+| `--envs 1024` (macro space) | **no effect** | 16x the batch, three seeds. At u18 entropy is 1.17/1.17/1.29, indistinguishable from the 64-env runs at u20 (1.10-1.27) -- a policy given sixteen times the data per update is exactly as diffuse after the same number of updates. Concentration tracks **updates, not samples**, so the batch is 16x the cost per update for nothing. Scores from that run are not quotable: every checkpoint was in the entropy band where argmax is unreliable, below. |
 | `--backend jax` (macro space) | **no effect** | 1332 against NumPy's 1362 dec/s at `--envs 256`. This trainer scores one env per forward pass and `legal_macros` is 28.5% of runtime against the policy's 13%, so the simulator is not what a larger batch waits on. The 1.6x in `CLAUDE.md` is under `train_ppo.py`, whose policy is batched. |
 
 **Three explanations for the collapse, all refuted.** An entropy floor is
@@ -167,6 +168,40 @@ point, so no behaviour aggregate separates them either; only `terminal` moves, w
 means the trainer can already see the collapse and simply acts on nothing. The
 surviving hypothesis is the advantage's own noise: it is normalised over ~30 closed
 episodes per update.
+
+**Argmax scoring confounds how good a policy is with how concentrated it is.**
+Every number in this file comes from `MacroAgent` taking the mode. Scored both ways
+across the sweep (five seeds, n=480):
+
+| update | argmax | sampled | entropy |
+|---|---|---|---|
+| u20 | -67.02 | **-3.73** | 1.163 |
+| u40 | **+28.42** | +12.20 | 0.547 |
+| u60 | +24.36 | +11.69 | 0.454 |
+| u80 | +5.97 | -1.63 | 0.452 |
+| u100 | -24.45 | -22.47 | 0.455 |
+| u140 | -28.43 | -28.93 | 0.404 |
+| u300 | +10.51 | -5.36 | 0.320 |
+
+Above entropy ~1 the mode is nearly arbitrary -- ~20 legal macros, near-uniform --
+and taking it *every* time loses every game while sampling the same distribution
+plays normally. At u20 that is worth **63 points**, and a checkpoint reading exactly
+`random`'s -441.94 is usually this rather than a policy that failed to learn. Below
+~0.5 the sign flips and argmax leads by 8-16. Two consequences: **do not compare
+checkpoints by argmax score unless their entropy is comparable and low**, and a
+score at the random floor is a claim to check, not to believe.
+
+**The collapse is real, though.** Sampled scoring falls the same way -- +12.20 at
+u40 to -28.93 at u140 -- so it is behaviour and not measurement, and it remains
+unexplained after four refuted causes.
+
+**And the sampled policy never exceeds +12.20**, under half of `by_value`'s +28.01.
+Every "the learned policy matches the heuristic" row above rests on the mode. A
+deterministic agent is a legitimate agent, so +28.42 stands as its score -- but the
+accurate statement is narrower than it looks: *the single most likely action is
+usually as good as `by_value`'s pick, while the distribution around it is much
+worse.* The policy has not learned to play at the heuristic's level; it has learned
+a mode that does.
 
 **The recipes do not transfer between action spaces.** Cloning is mandatory in one
 and harmful in the other; the same inversion holds for the anchor, for exploration
