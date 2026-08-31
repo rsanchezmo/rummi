@@ -26,6 +26,7 @@ import train_macro as trainer
 from rummi.agents.hybrid import hybrid_action_features, macro_to_hybrid_actions
 from rummi.agents.hybrid import n_actions as n_hybrid_actions
 from rummi.agents.learned.features import feature_dim
+from rummi.agents.learned.history import history_dim
 from rummi.agents.macro import n_macros
 from rummi.rules.config import TINY_GROUPS
 
@@ -90,6 +91,27 @@ def test_every_action_is_counted_in_exactly_one_block(hybrid: bool):
     primitives = int((blocks == trainer.BLOCKS.index("prim")).sum())
     # Both committing primitives have their own block, and the macro space has none.
     assert primitives == (TINY_GROUPS.n_actions - 2 if hybrid else 0)
+
+
+def test_the_history_block_widens_the_input_and_nothing_else(tmp_path: Path):
+    """At `extra=0` the net is the one it always was, which is what makes a
+    features-off arm a control rather than a second treatment."""
+    plain = build()
+    off = trainer.MacroNet(TINY_GROUPS, MACROS, HIDDEN, extra=0)
+    assert {k: v.shape for k, v in plain.state_dict().items()} == {
+        k: v.shape for k, v in off.state_dict().items()
+    }
+    on = trainer.MacroNet(TINY_GROUPS, MACROS, HIDDEN, extra=history_dim(TINY_GROUPS))
+    assert on.trunk[0].in_features - plain.trunk[0].in_features == history_dim(TINY_GROUPS)
+    assert on.trunk[2].in_features == plain.trunk[2].in_features
+
+
+def test_history_is_architecture_the_checkpoint_owns(tmp_path: Path):
+    """The block widens the trunk's input, so resuming with the flag flipped would
+    load one run's weights into a net of another shape."""
+    path = save(tmp_path / "ck.pt", build().state_dict())
+    with pytest.raises(SystemExit, match="contradicts"):
+        trainer.restore(path, CFG, "macro", MACROS, None, None, history=True)
 
 
 def test_a_head_of_the_wrong_width_is_refused(tmp_path: Path):
