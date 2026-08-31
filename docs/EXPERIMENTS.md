@@ -81,6 +81,7 @@ commonest move in the game, and no policy inside it could have recovered that.
 | macro space, one step per minibatch | -393.95 | 0.0% | Four noisy small-batch steps are far worse than one averaged step. |
 | hybrid space, any recipe | ~-1.0 term. | 0.0% | Collapses to stalling. A macro is on offer in **4.9%** of decisions. |
 | self-play A/B control: `--opponent greedy`, 3 seeds | -19.59 / +9.82 / **+30.51** | 33.5-84.6% | A **50-point spread** on one recipe, where the `3 seeds on 713` row above spread 2.6. One seed of three beat `by_value`. |
+| **scored at update 40**, 5 seeds | **+30.84 / +29.20 / +29.76 / +25.25 / +27.04** | 76.5-85.6% | Mean **+28.42** against `by_value`'s +28.01. The same recipe scored at 300 averages +10. **The bar is reached in 40 updates and then training destroys it.** |
 | self-play A/B: `--opponent greedy,self`, 3 seeds | -6.66 / **-72.24** / -17.71 | 9.8-42.5% | Worse on two seeds of three -- and the control's own spread is larger than the gap between the arms, so the sign is not evidence. **Inconclusive.** |
 
 **The one apparent win did not replicate, now measured across seeds.** +26.72 was
@@ -124,6 +125,26 @@ One methodological check worth recording, since the whole table rests on it:
 `eval_macro.py` argmaxes, and sampling the same checkpoints instead scores them
 **worse** (-19.59 -> -32.24, +30.51 -> +16.62). The spread between seeds is real
 policy quality, not an artifact of taking the mode.
+
+**The recipe peaks at update 40 and the endpoint is a lottery ticket.** Five seeds
+checkpointed every 20 updates and scored at each (`--checkpoint-every`, plots from
+the CSV). Every seed reaches `by_value`'s level by **update 40**; three of five then
+collapse -- one to **-105** -- and partially recover, while two sit flat at ~+28 for
+the remaining 260 updates. A 300-update score records where in that collapse the run
+happened to stop.
+
+At u40, chosen once for all five seeds and re-scored at n=480: **+28.42 mean against
+`by_value`'s +28.01**, three seeds above it. Quote that number and not the per-seed
+maximum (+30.02): a max over fifteen noisy n=240 evals is selection on noise.
+
+**This does not overturn "no learned policy beats `by_value`" -- it changes what is
+wrong.** +28.42 against +28.01 is a tie, and three of five above is inside the
+noise. But the rows above say the policy *lands below* the heuristic and stops
+there, and that is not what happens: it reaches the heuristic in **40 updates**, at
+one seventh the compute, and then training takes it apart. Those are different
+failures with different fixes, and every 300-update row conflates them. The
+instability is also not inevitable -- two seeds never fall -- so it is trainable,
+and the u40-u100 window is where to look.
 
 ## Settings measured as harmful
 

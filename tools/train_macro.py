@@ -421,6 +421,12 @@ def main() -> None:
     p.add_argument("--eval-games", type=int, default=0)
     p.add_argument("--out", type=pathlib.Path, default=None)
     p.add_argument(
+        "--checkpoint-every", type=int, default=0,
+        help="also save every N updates, as <out>-uNNN.pt. The curves peak around "
+             "update 60-80 and degrade after, so a run's final weights are not its "
+             "best ones and scoring only those measures the far side of the peak",
+    )
+    p.add_argument(
         "--log-json", type=pathlib.Path, default=None,
         help="per-update metrics. Its rates are per *decision*, not the per-step "
              "end_turn/melded that tools/plot_training.py expects, so its panels do "
@@ -613,6 +619,18 @@ def main() -> None:
         for parameter in reference.parameters():
             parameter.requires_grad_(False)
         print(f"anchoring to the cloned policy, kl_coef={args.kl_coef}", flush=True)
+
+    def save(path: pathlib.Path) -> None:
+        """`eval_macro.py` rebuilds the architecture from these, never from a flag."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "cfg": args.config, "space": args.space, "hidden": hidden, "head": head,
+                "state": net.state_dict(),
+            },
+            path,
+        )
+        print(f"wrote {path}", flush=True)
 
     # The critic is at init after cloning, so its advantages are noise until fitted.
     value_opt = torch.optim.Adam(net.v.parameters(), lr=args.lr)
@@ -835,6 +853,8 @@ def main() -> None:
         )
         if len(opponents) > 1:
             print("      " + "   ".join(_opponent_line(row) for row in by_opponent), flush=True)
+        if args.out and args.checkpoint_every and update % args.checkpoint_every == 0:
+            save(args.out.with_name(f"{args.out.stem}-u{update:03d}{args.out.suffix}"))
         history.append(
             {
                 "update": update,
@@ -856,15 +876,7 @@ def main() -> None:
     env.close()
 
     if args.out:
-        args.out.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "cfg": args.config, "space": args.space, "hidden": hidden, "head": head,
-                "state": net.state_dict(),
-            },
-            args.out,
-        )
-        print(f"wrote {args.out}")
+        save(args.out)
 
     scores: list[dict] = []
     if args.eval_games:
