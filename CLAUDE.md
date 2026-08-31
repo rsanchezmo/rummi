@@ -11,7 +11,7 @@ rediscover or easy to get wrong — everything else is in `README.md` and
 
 ```bash
 source .venv/bin/activate
-pytest -n auto                                           # 488 tests, ~19s (76s serial)
+pytest -n auto                                           # 493 tests, ~20s (76s serial)
 python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput

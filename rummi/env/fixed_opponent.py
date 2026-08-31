@@ -104,8 +104,11 @@ class FixedOpponentEnv(RummiVectorEnv):
     trust: nothing checks them, and ``opponent_illegal`` counts only what a current
     mask covers. Every bundled planner is exact mid-turn -- nobody else touches the
     table during a turn -- and `test_the_opponents_play_the_same_games_either_way`
-    holds the two paths to identical games. An opponent that chooses per action,
-    such as the learned one or a pool holding it, keeps a mask before each action.
+    holds the two paths to identical games -- for `MacroAgent` too, which is the
+    harder case: it decides again mid-turn, every time an expansion runs out, and
+    may still skip the mask because `can_end_turn` reads the one bit it wanted out
+    of the observation. An opponent that *chooses* from the mask, such as the hybrid
+    one or a pool holding it, keeps a mask before each action.
     """
 
     def __init__(
@@ -141,6 +144,16 @@ class FixedOpponentEnv(RummiVectorEnv):
             if agent is not None
         )
         self._illegal = 0
+
+    @property
+    def pool_index(self) -> np.ndarray:
+        """``(N,)`` which pool member each env faces, by index into ``opponent``.
+
+        Public because the split is only useful if a caller can read it: metrics
+        pooled over a mixed batch cannot say whether the learner improved or its
+        opponent got worse.
+        """
+        return self._pool_index
 
     def _seat_agent(self) -> Agent:
         """The agent for one seat, built fresh so no two seats share per-env memory.

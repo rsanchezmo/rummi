@@ -49,10 +49,11 @@ from itertools import combinations
 
 import numpy as np
 
-from rummi.agents.base import Observation, has_melded, table, turn_starting
+from rummi.agents.base import Observation, can_end_turn, has_melded, table, turn_starting
 from rummi.agents.greedy_agent import appendable
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import kind_of, tables
+from rummi.rules.observation import MICRO_COUNT
 
 _TEMPLATES: dict[RummiConfig, np.ndarray] = {}
 
@@ -233,6 +234,15 @@ class MacroAgent:
 
     name = "macro"
 
+    needs_mask_per_action = False
+    """Every macro is judged from the observation -- `can_end_turn` answers the one
+    question the mask used to -- and an expansion is replayed from the decision that
+    produced it. So a caller may skip rebuilding the mask between decisions, which
+    is worth 17% of a step when this agent is seated as an opponent. `act` still
+    reads the mask to abandon a stale expansion, exactly as a `PlanningAgent` does:
+    where the caller has one it is honoured, and where it does not the replay is
+    taken on trust."""
+
     def __init__(self, cfg: RummiConfig, choose: Choose | None = None) -> None:
         self.cfg = cfg
         self.templates = set_templates(cfg)
@@ -253,8 +263,8 @@ class MacroAgent:
         self,
         obs: Observation,
         env: int,
-        mask: np.ndarray,
         held: np.ndarray | None = None,
+        can_end: bool | None = None,
     ) -> np.ndarray:
         """`(n_macros,)` mask. `held` is the workbench, per kind.
 
@@ -266,6 +276,9 @@ class MacroAgent:
 
         `MacroAgent` itself never passes this -- it decides only when nothing is
         held -- so the default is the clean-workbench rule unchanged.
+
+        `can_end` is :func:`~rummi.agents.base.can_end_turn` for this env, which a
+        caller deciding a whole batch computes once and passes in.
         """
         from rummi.solver.to_actions import slot_contents
 
@@ -317,7 +330,9 @@ class MacroAgent:
 
         # Pre-meld the threshold is on the whole turn, so a single template that
         # cannot reach it is still worth playing alongside another.
-        out[self.end_macro] = bool(mask[env, cfg.end_turn_action])
+        out[self.end_macro] = (
+            bool(can_end_turn(cfg, obs)[env]) if can_end is None else can_end
+        )
         out[self.draw_macro] = True  # DRAW is never masked, by design
         return out
 
@@ -410,17 +425,30 @@ class MacroAgent:
         n = mask.shape[0]
         out = np.full(n, cfg.draw_action, dtype=np.int64)
         fresh = turn_starting(obs)
+        # Once for the batch: every decision below asks these, and they are what this
+        # agent used to need a per-action mask for.
+        endable = can_end_turn(cfg, obs)
+        spendable = np.asarray(obs["scalars"])[:, MICRO_COUNT] < cfg.max_micro_per_turn
 
         for env in range(n):
             if active is not None and not active[env]:
                 continue
             if fresh[env]:
                 self._queues[env] = []
+            if not spendable[env]:
+                # The budget is spent, so the env has masked everything but DRAW and
+                # nothing queued can be applied. A caller that rebuilds the mask each
+                # action would abandon the expansion here; one that does not has no
+                # other way to learn it, and the turn would never commit.
+                self._queues[env] = []
+                continue
             queue = self._queues.setdefault(env, [])
             if not queue:
                 # An empty queue is a clean decision point: the table is whole and
                 # nothing is held, because every macro finishes what it starts.
-                macro = self.choose(obs, env, self.legal_macros(obs, env, mask))
+                macro = self.choose(
+                    obs, env, self.legal_macros(obs, env, can_end=bool(endable[env]))
+                )
                 queue = self._queues[env] = self.expand(obs, env, macro)
             if not queue:
                 continue

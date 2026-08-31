@@ -152,3 +152,36 @@ def test_the_space_accepts_what_encode_produces():
         for env in range(state.batch_size):
             single = {k: v[env] for k, v in obs.items()}
             assert space.contains(single), f"{cfg.n_players}p env {env} outside the space"
+
+
+def test_end_turn_legality_is_derivable_from_the_observation():
+    """`can_end_turn` reproduces the mask's END_TURN column exactly.
+
+    That equality is what lets an agent deciding mid-turn skip rebuilding the mask,
+    which is the most expensive thing in a step -- so a drift here is a silent
+    performance-for-correctness trade rather than a crash. Greedy, not random:
+    random play never melds, so `END_TURN` would be false throughout and the
+    equality would hold for the wrong reason.
+    """
+    from rummi.agents import build
+    from rummi.agents.base import act_on_state, can_end_turn
+
+    cfg = STANDARD_4P
+    agent = build("greedy", cfg)
+    agent.reset(16)
+    state = reset(cfg, 16, seed=5)
+    legal_count = illegal_count = 0
+    for _ in range(300):
+        mask = legal_actions(state)
+        live = ~np.asarray(state.done)
+        derived = can_end_turn(cfg, encode(state))
+        np.testing.assert_array_equal(
+            derived[live], mask[live, cfg.end_turn_action],
+            err_msg="the derived END_TURN bit disagrees with the mask",
+        )
+        legal_count += int(derived[live].sum())
+        illegal_count += int((~derived[live]).sum())
+        step(state, act_on_state(agent, state, mask), mask)
+
+    assert legal_count > 0, "END_TURN was never legal, so only the false branch ran"
+    assert illegal_count > 0, "END_TURN was always legal, which cannot be right"
