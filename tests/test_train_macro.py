@@ -73,6 +73,8 @@ def test_a_saved_net_comes_back_with_the_same_weights(tmp_path: Path, head: str)
         {"hidden": 64},
         {"head": "pointer"},
         {"memory": "lstm"},
+        {"oracle": True},
+        {"repartition": True},
     ],
 )
 def test_a_flag_that_contradicts_the_checkpoint_is_refused(tmp_path: Path, override: dict):
@@ -98,6 +100,19 @@ def test_every_action_is_counted_in_exactly_one_block(hybrid: bool):
     primitives = int((blocks == trainer.BLOCKS.index("prim")).sum())
     # Both committing primitives have their own block, and the macro space has none.
     assert primitives == (TINY_GROUPS.n_actions - 2 if hybrid else 0)
+
+
+def test_the_repartition_macro_is_its_own_block():
+    from rummi.agents.macro import repartition_offset
+
+    blocks = trainer.action_blocks(TINY_GROUPS, hybrid=False, repartition=True)
+    assert blocks.shape == (n_macros(TINY_GROUPS, True),)
+    assert blocks[repartition_offset(TINY_GROUPS)] == trainer.BLOCKS.index("repart")
+    assert blocks[-2] == trainer.BLOCKS.index("end")
+    assert blocks[-1] == trainer.BLOCKS.index("draw")
+    # Without the flag nothing lands in that block: the space ends before it.
+    plain = trainer.action_blocks(TINY_GROUPS, hybrid=False)
+    assert not (plain == trainer.BLOCKS.index("repart")).any()
 
 
 def test_the_history_block_widens_the_input_and_nothing_else(tmp_path: Path):

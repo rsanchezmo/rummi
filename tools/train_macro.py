@@ -99,6 +99,7 @@ from rummi.agents.macro import (
     extend_offset,
     first_legal,
     n_macros,
+    repartition_offset,
     steal_offset,
 )
 from rummi.env.fixed_opponent import FixedOpponentEnv
@@ -113,11 +114,12 @@ HIDDEN, HEAD = 256, "flat"
 """Defaults for the architecture flags, which parse to None so that a flag passed
 alongside `--init-from` can be told apart from one left alone."""
 
-BLOCKS = ("new_set", "extend", "steal", "end", "draw", "prim")
+BLOCKS = ("new_set", "extend", "steal", "repart", "end", "draw", "prim")
 """What a decision is counted as. `prim` exists only in the hybrid space, where a
 policy can spend a whole horizon inside the 2400 primitives: pooled end and draw
 rates cannot say where the rest of the mass went, and whether the macro block is
-reached at all is the question that space exists to answer."""
+reached at all is the question that space exists to answer. `repart` exists only
+under --repartition, the solver-backed macro."""
 
 
 class MacroNet(nn.Module):
@@ -340,7 +342,8 @@ def fit(net: MacroNet, data: dict, epochs: int, lr: float, generator) -> None:
 def restore(
     path: pathlib.Path, config: str, space: str, macros: int,
     hidden: int | None, head: str | None, history: bool = False,
-    memory: str = "none", memory_dim: int = 0,
+    memory: str = "none", memory_dim: int = 0, oracle: bool = False,
+    repartition: bool = False,
 ) -> tuple[dict, int, str]:
     """A checkpoint from `--out`, in `space` and with the architecture *it* was
     saved with.
@@ -377,6 +380,9 @@ def restore(
         # The cell is architecture the same way: tensors that exist or do not.
         ("--memory", memory, str(checkpoint.get("memory", "none"))),
         ("--memory-dim", memory_dim, int(checkpoint.get("memory_dim", 0))),
+        # The oracle block widens the input; repartition widens the action head.
+        ("--oracle-rack", oracle, bool(checkpoint.get("oracle_rack", False))),
+        ("--repartition", repartition, bool(checkpoint.get("repartition", False))),
     ):
         if given is not None and given != saved:
             raise SystemExit(
@@ -449,19 +455,24 @@ def transfer_from_macro(
     net.load_state_dict(out)
 
 
-def action_blocks(cfg: RummiConfig, hybrid: bool) -> np.ndarray:
+def action_blocks(cfg: RummiConfig, hybrid: bool, repartition: bool = False) -> np.ndarray:
     """`BLOCKS` index of every action id in the space being trained.
 
     Derived from the layout functions rather than restated, so it cannot drift from
     the head the net is built with.
     """
-    total = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
+    total = n_hybrid_actions(cfg) if hybrid else n_macros(cfg, repartition)
     offset = cfg.n_actions if hybrid else 0
     n_macro = total - offset - (0 if hybrid else 2)
     out = np.full(total, BLOCKS.index("prim"), dtype=np.int64)
     macro = np.arange(n_macro)
+    # The last branch is reachable only when the space carries REPARTITION; the
+    # hybrid table and the plain macro one both end before it.
     out[offset : offset + n_macro] = np.where(
-        macro < extend_offset(cfg), 0, np.where(macro < steal_offset(cfg), 1, 2)
+        macro < extend_offset(cfg), BLOCKS.index("new_set"),
+        np.where(macro < steal_offset(cfg), BLOCKS.index("extend"),
+                 np.where(macro < repartition_offset(cfg), BLOCKS.index("steal"),
+                          BLOCKS.index("repart"))),
     )
     out[cfg.end_turn_action if hybrid else n_macro] = BLOCKS.index("end")
     out[cfg.draw_action if hybrid else n_macro + 1] = BLOCKS.index("draw")
@@ -526,6 +537,14 @@ def main() -> None:
         "--space", default="macro", choices=["macro", "hybrid"],
         help="hybrid adds the 2400 primitives alongside the macros, so any legal "
              "turn is expressible while a safe macro stays on offer",
+    )
+    p.add_argument(
+        "--repartition", action="store_true",
+        help="widen the macro space by the one solver-backed REPARTITION macro, "
+             "offered only where nothing else plays. by_value in this space ties "
+             "optimal head-to-head at a tenth of the compute, which makes it the "
+             "optimal-tier teacher for --clone and gives RL headroom past the "
+             "template ceiling",
     )
     p.add_argument(
         "--backend", default="numpy",
@@ -612,6 +631,29 @@ def main() -> None:
     p.add_argument(
         "--memory-dim", type=int, default=128,
         help="width of the --memory cell's state; ignored without one",
+    )
+    p.add_argument(
+        "--oracle-rack", action="store_true",
+        help="append the opponent's TRUE rack to the features, read from the raw "
+             "env state at train time. This deliberately breaks the agent contract "
+             "-- the observation merges that rack into `unseen` precisely so no "
+             "agent can read it -- so the flag travels with the checkpoint and "
+             "eval_macro refuses to score one on the protocol. It exists as the "
+             "*upper bound* on the information channel: belief features and the "
+             "LSTM both measured null against greedy, and either null could be "
+             "blamed on the mechanism failing to extract the signal. An arm handed "
+             "the answer outright bounds what any mechanism could have extracted. "
+             "Two seats only; score it with --diagnostic-games",
+    )
+    p.add_argument(
+        "--diagnostic-games", type=int, default=0,
+        help="after training, play this many episodes in a fresh training-style env "
+             "under the argmax policy and report win rate and mean terminal reward. "
+             "The learner keeps its pinned seat, so the numbers are arm-vs-arm "
+             "comparable and NOT protocol-comparable -- this exists because an "
+             "--oracle-rack checkpoint can never enter the frozen protocol, and a "
+             "control has to be scored through the same pipe to anchor it "
+             "(--init-from <ckpt> --updates 0 --diagnostic-games N)",
     )
     p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
@@ -730,6 +772,24 @@ def main() -> None:
         # between the protocol's seat rotations; eval_macro.py builds a fresh state
         # per rotation, which is what makes its score mean something.
         p.error("--memory checkpoints are scored with tools/eval_macro.py; drop --eval-games")
+    if recurrent and args.diagnostic_games:
+        p.error("--diagnostic-games drives argmax_choose, which threads no cell state; "
+                "score --memory checkpoints with tools/eval_macro.py")
+    if args.oracle_rack and CONFIG_BY_NAME[args.config].n_players != 2:
+        p.error("--oracle-rack reads THE opponent's rack; this config seats more than one")
+    if args.oracle_rack and (args.clone or args.eval_games):
+        # `gather` steps the env itself, so the trainer's per-step refresh would go
+        # stale under it -- and the frozen protocol hands an agent the observation
+        # alone, which is the entire reason this flag cannot be scored there.
+        p.error("--oracle-rack supports neither --clone nor --eval-games; "
+                "score it with --diagnostic-games")
+    if args.repartition and args.space == "hybrid":
+        p.error("--repartition names a macro-space action; the hybrid table has no row for it")
+    if args.repartition and (args.history or args.init_from_macro or "self" in opponents):
+        # HistoryMacroAgent and the snapshot member do not thread the flag, and
+        # the macro-to-hybrid map is over the 713-action table.
+        p.error("--repartition is not wired for --history, --init-from-macro or a "
+                "'self' opponent")
 
     cfg = dataclasses.replace(
         CONFIG_BY_NAME[args.config],
@@ -740,7 +800,7 @@ def main() -> None:
     generator = torch.Generator().manual_seed(args.seed)
     scale = feature_scale(cfg)
     hybrid = args.space == "hybrid"
-    macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
+    macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg, args.repartition)
     if args.init_from and args.init_from_macro:
         p.error("--init-from and --init-from-macro are two warm starts; pass one")
     if args.init_from_macro and not hybrid:
@@ -750,6 +810,7 @@ def main() -> None:
         checkpoint, hidden, head = restore(
             args.init_from, args.config, args.space, macros, args.hidden, args.head,
             args.history, args.memory, args.memory_dim if recurrent else 0,
+            args.oracle_rack, args.repartition,
         )
     elif args.init_from_macro:
         checkpoint, hidden, head = restore(
@@ -761,10 +822,19 @@ def main() -> None:
         hidden = HIDDEN if args.hidden is None else args.hidden
         head = HEAD if args.head is None else args.head
     tracker = OpponentHistory(cfg, decay=args.history_decay) if args.history else None
+    # The opponent's true rack, scaled like `rack`, refreshed from the raw state
+    # each step so it always describes the observation beside it. Appended last,
+    # after any history block -- the order is architecture the checkpoint owns.
+    oracle_block = (
+        np.zeros((args.envs, cfg.n_kinds), dtype=np.float32)
+        if args.oracle_rack else None
+    )
     net = MacroNet(
         cfg, macros, hidden, head=head,
-        describe=hybrid_action_features(cfg) if hybrid else None,
-        extra=history_dim(cfg) if tracker is not None else 0,
+        describe=hybrid_action_features(cfg) if hybrid
+        else action_features(cfg, args.repartition),
+        extra=(history_dim(cfg) if tracker is not None else 0)
+        + (cfg.n_kinds if oracle_block is not None else 0),
         memory=args.memory, memory_dim=args.memory_dim,
     )
     if args.init_from_macro:
@@ -778,9 +848,11 @@ def main() -> None:
             [np.asarray(o[f])[e].reshape(-1) for f in FEATURE_FIELDS]
         ).astype(np.float32)
         row = row / scale
-        if tracker is None:
-            return row
-        return np.concatenate([row, tracker.row(e)])
+        if tracker is not None:
+            row = np.concatenate([row, tracker.row(e)])
+        if oracle_block is not None:
+            row = np.concatenate([row, oracle_block[e]])
+        return row
 
     def make_agent(chooser: Choose) -> Agent:
         """The one place an agent is built, so the tracker can never be left out
@@ -788,7 +860,7 @@ def main() -> None:
         if hybrid:
             return HybridAgent(cfg, choose=chooser)
         if tracker is None:
-            return MacroAgent(cfg, choose=chooser)
+            return MacroAgent(cfg, choose=chooser, repartition=args.repartition)
         return HistoryMacroAgent(cfg, tracker, choose=chooser)
 
     def argmax_choose(model: MacroNet) -> Choose:
@@ -894,8 +966,23 @@ def main() -> None:
         opponent=[opponent_member(name) for name in opponents],
     )
     assert np.array_equal(member_of, env.pool_index), "the seating is not what was assumed"
+
+    def refresh_oracle(source: FixedOpponentEnv) -> None:
+        """Read the opponent's rack off the same state the observation came from.
+
+        Called wherever a fresh observation lands, so the block and the row it is
+        appended to can never describe two different moments.
+        """
+        if oracle_block is None:
+            return
+        racks = source.backend.to_numpy(source.state.racks)
+        oracle_block[:] = racks[:, 1 - source.learner_seat].astype(np.float32) / max(
+            cfg.n_copies, 1
+        )
+
     obs, info = env.reset()
     obs = host(obs)
+    refresh_oracle(env)
 
     teachers = (
         {"by_value": macro_first(cfg), "first_legal": primitives_only(cfg)}
@@ -954,6 +1041,10 @@ def main() -> None:
                 "history": bool(args.history), "history_decay": args.history_decay,
                 # Same contract: the evaluator has to step the same cell.
                 "memory": args.memory, "memory_dim": net.memory_dim,
+                # The brand that keeps a state-reading net off the protocol, and
+                # the flag that says which action table the head was built over.
+                "oracle_rack": bool(args.oracle_rack),
+                "repartition": bool(args.repartition),
                 "state": net.state_dict(),
             },
             path,
@@ -967,7 +1058,7 @@ def main() -> None:
     # the last two actions.
     end_action = cfg.end_turn_action if hybrid else macros - 2
     draw_action = cfg.draw_action if hybrid else macros - 1
-    block_of = action_blocks(cfg, hybrid)
+    block_of = action_blocks(cfg, hybrid, args.repartition)
     block_names = BLOCKS if hybrid else BLOCKS[:-1]
 
     # The live cell state per env, and each decision's copy of it from before the
@@ -1039,6 +1130,8 @@ def main() -> None:
         f"params={sum(q.numel() for q in net.parameters()):,}"
         + (f" history={history_dim(cfg)}d decay={args.history_decay}" if tracker else "")
         + (f" memory={args.memory}:{net.memory_dim}d" if recurrent else "")
+        + (" oracle_rack" if args.oracle_rack else "")
+        + (" repartition" if args.repartition else "")
         + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
            f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
         + (f" init_from={args.init_from}" if args.init_from else "")
@@ -1071,6 +1164,7 @@ def main() -> None:
             rack_before = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
             obs, reward, term, trunc, info = env.step(actions)
             obs = host(obs)
+            refresh_oracle(env)
             reward = np.asarray(reward, dtype=np.float32)
             done = np.asarray(term) | np.asarray(trunc)
             if args.rack_shaping:
@@ -1377,6 +1471,49 @@ def main() -> None:
                 }
             )
 
+    diagnostic = None
+    if args.diagnostic_games:
+        # Arm-vs-arm scoring through the training env itself, for checkpoints the
+        # frozen protocol cannot accept: an --oracle-rack net needs the block fed
+        # beside its observation, and `evaluate` hands an agent the observation
+        # alone. The learner keeps its pinned seat here, so these numbers compare
+        # arms scored through this same loop and never enter the ladder.
+        diag = FixedOpponentEnv(
+            num_envs=args.envs, cfg=cfg, seed=args.seed + 10_000, backend=args.backend,
+            opponent=[opponent_member(name) for name in opponents],
+        )
+        scored = make_agent(argmax_choose(net))
+        scored.reset(args.envs)
+        dobs, dinfo = diag.reset()
+        dobs = host(dobs)
+        refresh_oracle(diag)
+        played, wins, total_reward = 0, 0, 0.0
+        while played < args.diagnostic_games:
+            dactions = scored.act(dobs, np.asarray(dinfo["action_mask"]))
+            dobs, dreward, dterm, dtrunc, dinfo = diag.step(dactions)
+            dobs = host(dobs)
+            refresh_oracle(diag)
+            dreward = np.asarray(dreward, dtype=np.float32)
+            ddone = np.asarray(dterm) | np.asarray(dtrunc)
+            if tracker is not None:
+                tracker.clear(ddone)
+            for e in np.flatnonzero(ddone):
+                played += 1
+                wins += int(dreward[e] > 0)
+                total_reward += float(dreward[e])
+        diag.close()
+        diagnostic = {
+            "games": played,
+            "win_rate": wins / played,
+            "mean_terminal": total_reward / played,
+        }
+        print(
+            f"diagnostic  win {diagnostic['win_rate']:>6.1%}  "
+            f"terminal {diagnostic['mean_terminal']:>+7.3f}  n={played}  "
+            "(in-env argmax, pinned seat: arm-vs-arm only)",
+            flush=True,
+        )
+
     if args.log_json:
         args.log_json.parent.mkdir(parents=True, exist_ok=True)
         args.log_json.write_text(
@@ -1398,6 +1535,9 @@ def main() -> None:
                     "opponent_history_decay": args.history_decay if args.history else None,
                     "memory": args.memory,
                     "memory_dim": net.memory_dim,
+                    "oracle_rack": bool(args.oracle_rack),
+                    "repartition": bool(args.repartition),
+                    "diagnostic": diagnostic,
                     "clone": args.clone,
                     "seed": args.seed,
                     "micro_step_cost": args.micro_step_cost,

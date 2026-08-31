@@ -88,24 +88,33 @@ commonest move in the game, and no policy inside it could have recovered that.
 | self-play A/B: `--opponent greedy,self`, 3 seeds | -6.66 / **-72.24** / -17.71 | 9.8-42.5% | Worse on two seeds of three -- and the control's own spread is larger than the gap between the arms, so the sign is not evidence. **Inconclusive.** |
 | opponent-history belief features (`--history`), 3 seeds | +27.67 / +24.75 / n.c. | ≤84% | **Null.** The inference is sharp -- a declined lay-off proves the opponent holds zero of that kind, 2,469/2,469 checks -- but entropy-matched at u60 the converged seeds land inside the control's argmax range, and one seed never converged. The 111 extra inputs delay the entropy collapse ~20 updates, so arms of different width must be matched on entropy, never on update count. |
 | LSTM memory (`--memory lstm`, full BPTT), 3 seeds | +29.86 / +30.28 / -61.92 | 20-85% | **Null the same way.** Two seeds converge at the top of the control's same-day range (+22.92 / +29.00 / +27.70, n=240 each); the third hits the known late collapse. Sampled ties too (+11.36/+15.32 vs +9.89-+15.25). Zeroing the trained cell state flips **0.0% of 9,625 argmax decisions**: the policy converges memoryless. |
+| oracle: opponent's TRUE rack as input (`--oracle-rack`), 3 seeds | 82.2% / 82.2% / n.c. win, in-env | -- | **The upper bound on the whole channel, and it is ~zero.** Contract-breaking by design, so it is scored arm-vs-arm through `--diagnostic-games` on identical deals: converged oracle seeds 82.2%/82.2% against the control's 75.0%/81.2%/80.3% (n=400 each). Zeroing the block flips **0.0% of ~9,500 argmax decisions** -- handed the answer outright, the policy learns to discard it. |
+| clone `by_value+repartition` (`--repartition --clone`, DAgger 300k) | **+47.32** | **99.6%** | **The cloning ceiling, and the strongest learned agent produced.** Agreement 68.3% cold -> 99.4% on the student's own states; the clone scores its optimal-tier teacher's +48.01 to within noise, protocol-legal and observation-only. The residual 0.6% disagreement costs ~0.7 points -- no information story, exactly as the sufficiency claim predicts. Nothing about `optimal` resists a network except the NP-hard *construction*, which stays in the solver where it belongs: the net decides *when* to repartition, CP-SAT decides *how*. |
 
-**The information channel is closed against `greedy`, by both mechanisms.** The
-observation merges the pool and opponents' racks into `unseen` on purpose, so the
-only hidden information is which unseen tiles the opponent holds, and the only path
-to it is cross-step history -- nothing in a snapshot can say what an opponent
-declined to play. Both ways of reading that channel are now measured: engineered
-belief features (`--history`, exact negative evidence against a deterministic
-opponent) and learned memory (`--memory lstm`, an LSTMCell stepped once per
-decision and trained with full BPTT over each env's decision sequence -- the
-one-step truncation cannot learn to *store* anything, so it would not have been a
-test). Both train to policies indistinguishable from the memoryless control under
-argmax and under sampling, and the LSTM's memory is behaviourally inert under a
-direct probe. That is consistent with the delegating result above -- no cross-turn
-strategy was findable at any inner strength -- and with the day's recurring
-scoreboard: capability moves points, information does not. The arena where the
-channel *should* matter is self-play, and neither mechanism is wired for it yet:
-`--history` has no tracker for the snapshot seat, `--memory` no per-env state for
-one. Wire that before concluding anything about information in general.
+**The information channel is closed against `greedy` -- twice by mechanism, once
+by bound.** The observation merges the pool and opponents' racks into `unseen` on
+purpose, so the only hidden information is which unseen tiles the opponent holds,
+and the only path to it is cross-step history -- nothing in a snapshot can say what
+an opponent declined to play. Both ways of reading that channel are measured:
+engineered belief features (`--history`, exact negative evidence against a
+deterministic opponent) and learned memory (`--memory lstm`, an LSTMCell stepped
+once per decision and trained with full BPTT over each env's decision sequence --
+the one-step truncation cannot learn to *store* anything, so it would not have
+been a test). Both train to policies indistinguishable from the memoryless control
+under argmax and under sampling, and both leave their memory behaviourally inert
+under a direct probe. Either null could still have been blamed on the mechanism
+failing to extract the signal, which is what the `--oracle-rack` arm removes: a
+policy handed the opponent's true rack -- no inference left to do -- ties the same
+control on the same deals and ignores the block. What history could at best have
+reconstructed is worth nothing here even reconstructed perfectly. That is
+consistent with the delegating result above -- no cross-turn strategy was findable
+at any inner strength -- and with the recurring scoreboard: capability moves
+points, information does not. The remaining caveat is the opponent, not the
+mechanism: against deterministic `greedy` there may simply be nothing to exploit,
+and the arena where information *should* matter is self-play, which none of the
+three arms is wired for yet (`--history` has no tracker for the snapshot seat,
+`--memory` and `--oracle-rack` no per-env state for one). Wire that before
+concluding anything about information in general.
 
 **The one apparent win did not replicate, now measured across seeds.** +26.72 was
 one seed on the 730-action layout. On the current 713 layout the same recipe scored

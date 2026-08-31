@@ -116,9 +116,18 @@ def main() -> None:
     decay = float(ck.get("history_decay", 0.8))
     memory = str(ck.get("memory", "none"))
     memory_dim = int(ck.get("memory_dim", 0))
+    if bool(ck.get("oracle_rack", False)):
+        raise SystemExit(
+            "this checkpoint was trained reading the opponent's true rack "
+            "(--oracle-rack), and the protocol hands an agent the observation "
+            "alone -- there is nothing here that can feed the block. Score it "
+            "with train_macro.py --diagnostic-games"
+        )
     if history and space == "hybrid":
         raise SystemExit("a hybrid checkpoint with a history block has no agent to drive it")
-    table, action_count = layout(space, args.repartition)
+    # New checkpoints carry the flag; --repartition stays for older files.
+    repartition = args.repartition or bool(ck.get("repartition", False))
+    table, action_count = layout(space, repartition)
 
     # An older-layout checkpoint would load into the wrong rows silently
     # downstream, so the head width is checked against today's layout first.
@@ -185,7 +194,7 @@ def main() -> None:
         if history:
             tracker = OpponentHistory(c, decay=decay)
             return HistoryMacroAgent(c, tracker, choose=chooser(tracker))
-        return MacroAgent(c, choose=chooser(None), repartition=args.repartition)
+        return MacroAgent(c, choose=chooser(None), repartition=repartition)
 
     label = args.checkpoint.stem
     print(
@@ -195,7 +204,7 @@ def main() -> None:
     )
     for name in args.suites:
         suite: Suite = SUITE_BY_NAME[name]
-        reason = incompatibility(space, cfg, suite.cfg, args.repartition, history)
+        reason = incompatibility(space, cfg, suite.cfg, repartition, history)
         if reason is not None:
             print(f"{name:18s} skipped -- {reason}")
             continue
