@@ -7,7 +7,13 @@ import pytest
 
 from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
 from rummi.rules.encoding import EMPTY, kind_name, kind_of
-from rummi.env.numpy.sets import assign_open, evaluate_slots, pad_slot, slot_stats
+from rummi.env.numpy.sets import (
+    assign_open,
+    assign_open_at,
+    evaluate_slots,
+    pad_slot,
+    slot_stats,
+)
 from rummi.solver import brute_force
 
 ORACLE_CONFIGS = [TINY, TINY_GROUPS]
@@ -50,6 +56,25 @@ def test_kernel_matches_oracle_exhaustively(cfg: RummiConfig):
         assert int(ev.value[i]) == brute_force.value(cfg, content, MAX_JOKERS), (
             f"value mismatch for {label}"
         )
+
+
+@pytest.mark.parametrize("cfg", ORACLE_CONFIGS, ids=["tiny", "tiny_groups"])
+def test_the_mask_matches_the_dense_predicate(cfg: RummiConfig):
+    """The action mask asks `assign_open_at` only about the kinds a workbench holds;
+    everything else in that block is false by construction. It has to answer exactly
+    what the dense grid would, so the two are compared over every slot content the
+    enumeration produces and every kind -- the mask is the only thing standing
+    between an agent and an illegal move.
+    """
+    slots = np.stack([pad_slot(cfg, c) for c in _all_contents(cfg)])[None]
+    stats = slot_stats(cfg, slots)
+    dense = assign_open(cfg, stats)
+
+    kinds = np.arange(cfg.n_kinds)
+    envs = np.zeros_like(kinds)
+    np.testing.assert_array_equal(
+        assign_open_at(cfg, stats, envs, kinds), np.asarray(dense)[envs, :, kinds]
+    )
 
 
 @pytest.mark.parametrize("cfg", ORACLE_CONFIGS, ids=["tiny", "tiny_groups"])

@@ -230,12 +230,12 @@ than a hope.
 
 | backend | state | peak env-steps/s | vs NumPy | at batch |
 |---|---|---:|---:|---:|
-| NumPy (`rummi/env/numpy/`) | reference | 166k | 1.0x | 4,096 |
-| torch CPU | conformant | 233k | 1.4x | 16,384 |
-| torch CPU + `compile` | conformant | 312k | 1.9x | 16,384 |
-| torch MPS | conformant | 420k | 2.5x | 16,384 |
-| torch MPS + `compile` | conformant | **786k** | **4.7x** | 16,384 |
-| JAX CPU (`lax.scan`) | conformant | 347k | 2.1x | 16,384 |
+| NumPy (`rummi/env/numpy/`) | reference | 195k | 1.0x | 16,384 |
+| torch CPU | conformant | 227k | 1.2x | 16,384 |
+| torch CPU + `compile` | conformant | 286k | 1.5x | 16,384 |
+| torch MPS | conformant | 432k | 2.2x | 16,384 |
+| torch MPS + `compile` | conformant | **809k** | **4.2x** | 16,384 |
+| JAX CPU (`lax.scan`) | conformant | 346k | 1.8x | 1,024 |
 
 Standard config, `A=2400`, best of three, action choice held to the cheapest
 possible so the figure measures the simulator. Data in `docs/data/backends.json`;
@@ -260,8 +260,10 @@ Read the shape rather than the top row:
   only overtakes it past a thousand.
 * **Fusion multiplies the GPU, not the CPU** — 1.8x on MPS at 4,096, 1.3x on
   torch CPU at 16,384. It removes per-kernel overhead, and the CPU has less.
-* **Both frameworks agree on CPU** (1.9x, 2.1x), which is decent evidence that
-  ~2x is the real headroom over a vectorised NumPy reference.
+* **Both frameworks agree on CPU** (1.5x, 1.8x), which is decent evidence that the
+  headroom over a vectorised NumPy reference is real.
+* **The NumPy row does less work**: it builds the ASSIGN block only at the kinds a
+  workbench holds, which a shape-static backend cannot. See section 10.
 * **JAX leads at small batch** (1.4x at 64 envs) and is flattest thereafter.
   `lax.scan` buys almost nothing over a fused step.
 * JAX is CPU-only here — no production Metal backend — so it cannot be compared
@@ -287,6 +289,13 @@ Read the shape rather than the top row:
   straight into the kind-major action ids without ever building the `(S, K)` form.
   Inductor's MPS backend fails codegen if the per-slot factor is selected into a
   code before the product, so the torch port applies it to the finished block.
+- A tile must be in hand for ASSIGN to be legal, and a workbench holds ~6 kinds of
+  53, so most of that block is computed to produce zeros. The NumPy reference takes
+  the product only at the `(env, kind)` pairs held and leaves the rest of the
+  zero-initialised mask alone -- 1.8x on `legal_actions`. **A port should not copy
+  this**: the pair count depends on the data, and neither `jit` nor `compile` can
+  have a shape that does. The dense form is the portable one, and the two are held
+  equal by `test_the_mask_matches_the_dense_predicate`.
 - `counts_of` uses an offset-`bincount` scatter; use `scatter_add` / `bincount`
   equivalents rather than a Python loop over the batch.
 - Effects should be applied as masked whole-batch updates, not by selecting the

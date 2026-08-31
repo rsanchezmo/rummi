@@ -248,12 +248,12 @@ what a training loop actually gets. Same units, different work.
 
 | backend | peak env-steps/s | vs NumPy | at batch |
 |---|---:|---:|---:|
-| NumPy (reference) | 166k | 1.0x | 4,096 |
-| torch CPU | 233k | 1.4x | 16,384 |
-| torch CPU + `compile` | 312k | 1.9x | 16,384 |
-| torch MPS | 420k | 2.5x | 16,384 |
-| torch MPS + `compile` | **786k** | **4.7x** | 16,384 |
-| JAX (`lax.scan`) | 347k | 2.1x | 16,384 |
+| NumPy (reference) | 195k | 1.0x | 16,384 |
+| torch CPU | 227k | 1.2x | 16,384 |
+| torch CPU + `compile` | 286k | 1.5x | 16,384 |
+| torch MPS | 432k | 2.2x | 16,384 |
+| torch MPS + `compile` | **809k** | **4.2x** | 16,384 |
+| JAX (`lax.scan`) | 346k | 1.8x | 1,024 |
 
 Standard config, best of three, peak over batch sizes up to 16,384, with the
 action choice held to the cheapest possible so the figure measures the *simulator*
@@ -275,9 +275,14 @@ Read the shape of the curves rather than the top row:
 - **Fusion multiplies the GPU, not the CPU.** `compile` is worth 1.8x on MPS at
   4,096 (720k against 399k) and 1.3x on torch CPU (312k against 233k at 16,384).
   What it removes is per-kernel overhead, and the CPU has less of it to remove.
-- **Both frameworks agree on CPU** (1.9x and 2.1x). Two implementations written
-  independently landing in the same band is decent evidence that ~2x is the real
-  headroom over a vectorised NumPy reference rather than a tuning artefact.
+- **Both frameworks agree on CPU** (1.5x and 1.8x). Two implementations written
+  independently landing in the same band is decent evidence that the headroom over
+  a vectorised NumPy reference is real rather than a tuning artefact.
+- **The NumPy row is doing less work, not better work.** ASSIGN is legal only for a
+  tile in hand, and a workbench holds ~6 kinds of 53, so the reference builds that
+  block at the pairs held rather than over the whole grid. The pair count depends on
+  the data, which is exactly what `jit` and `compile` cannot have, so the other two
+  build it in full. See SPEC.md section 10.
 - **JAX is fastest at small batch** — 1.4x at 64 envs, where torch is still
   paying fixed per-call costs — and flattest thereafter. `lax.scan` buys almost
   nothing over the fused version: the per-step work already dominates, so the
@@ -290,17 +295,18 @@ compared against MPS on equal hardware. On a CUDA box, re-measure.
 
 | backend | B=1024 | B=4096 | vs NumPy |
 |---|---:|---:|---:|
-| NumPy (reference) | 149k | 150k | 1.0x |
-| torch CPU | 74k | 170k | 1.1x |
-| torch CPU + `compile` | 219k | 373k | 2.5x |
-| torch MPS | 153k | 304k | 2.0x |
-| torch MPS + `compile` | **289k** | **679k** | **4.5x** |
-| JAX CPU | 373k | 362k | 2.4x |
+| NumPy (reference) | 190k | 191k | 1.0x |
+| torch CPU | 72k | 162k | 0.8x |
+| torch CPU + `compile` | 206k | 334k | 1.8x |
+| torch MPS | 146k | 300k | 1.6x |
+| torch MPS + `compile` | **319k** | **694k** | **3.6x** |
+| JAX CPU | 355k | 347k | 1.8x |
 
 `RummiVectorEnv.step`, so the mask, the transition, the observation encoding *and*
-next-step autoreset are all inside the figure. Constant `DRAW` actions in every
-arm, so it measures the env rather than the cost of sampling from a `(B, 2400)`
-mask — that sampling is a real cost for a policy, just not the env's. Data in
+next-step autoreset are all inside the figure. Every arm replays one script of
+first-legal actions recorded on the reference backend, so no arm reads a mask to
+choose — a read forces an async backend to finish, and the sampling is a policy's
+cost anyway, not the env's. Data in
 `docs/data/env_throughput.json`; regenerate with
 `python -m rummi.bench.bench_env --compile --json docs/data/env_throughput.json`.
 
@@ -320,8 +326,8 @@ against `greedy`, `jax` is 1.6x NumPy while `torch-mps+compile` is 0.71x. See
 the comparison: the env encodes an observation every step, keeps next-step
 autoreset, and reads a handful of `(N,)` telemetry vectors back to the host — and
 it is measured at 4,096 rather than at each backend's best batch. Compiled MPS
-puts a number on all of that: **679k against the simulator's 720k at the same
-batch**, so everything the env adds over the simulator costs about 6%.
+puts a number on all of that: **694k against the simulator's 753k at the same
+batch**, so everything the env adds over the simulator costs about 8%.
 
 Conformance is not assumed. Every backend replays recorded trajectories and must
 reproduce 42 state digests per config, and masks and rewards are compared against

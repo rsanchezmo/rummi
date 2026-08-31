@@ -6,9 +6,20 @@ mask, transition, observation encoding and next-step autoreset all included. Tha
 gap is the whole reason the torch and jax observation encoders exist -- without
 them a device backend copies its observation to the host every step.
 
-Actions are constant `DRAW`, which is always legal, so the figure is the env and
-not the cost of sampling from a `(B, n_actions)` mask. That sampling is a real
-cost for a policy; it is just not the env's.
+Actions are a script: the first legal action at each step, recorded once on the
+reference backend and replayed on all of them. Two reasons, both learned the hard
+way.
+
+*The arm has to play.* A constant `DRAW` needs no mask read, but it reverts the
+turn, so nothing is ever in hand -- and the NumPy mask skips the whole ASSIGN block
+when the workbench is empty. That arm measured a step that never built the most
+expensive thing in one.
+
+*The loop must not read a mask.* Reading one to choose an action forces an async
+backend to finish the step, and if the read sits outside the timed region it takes
+the step's execution with it: JAX measured 614k that way, above its own simulator
+figure, which is impossible since the env is the simulator plus an observation. A
+script needs no read, and the last one is forced before the clock stops.
 """
 
 from __future__ import annotations
@@ -24,12 +35,30 @@ from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.api import available
 
 
+def script(cfg: RummiConfig, batch_size: int, steps: int) -> list[np.ndarray]:
+    """The first legal action at each step, recorded on the reference backend.
+
+    Every backend replays the identical sequence, which is what makes the arms
+    comparable -- and conformance is what makes it legal on all of them.
+    """
+    from rummi.env.vector_env import RummiVectorEnv
+
+    env = RummiVectorEnv(num_envs=batch_size, cfg=cfg, seed=0, backend="numpy")
+    env.reset()
+    out = []
+    for _ in range(steps):
+        actions = env.required_mask.argmax(-1)
+        out.append(actions)
+        env.step(actions)
+    env.close()
+    return out
+
+
 def rate(
     backend: str, cfg: RummiConfig, batch_size: int, iters: int, repeats: int = 3
 ) -> float:
     from rummi.env.vector_env import RummiVectorEnv
 
-    actions = np.full(batch_size, cfg.draw_action, dtype=np.int64)
     if backend.endswith("+compile"):
         import torch
 
@@ -37,6 +66,7 @@ def rate(
         # built here, so past it `compile` falls back to eager without saying so and
         # the cell reports an eager number under a compiled name.
         torch._dynamo.reset()
+    plan = script(cfg, batch_size, iters + 2)
     best = 0.0
     for _ in range(repeats):
         # A fresh env each repeat: the state advances while it is timed and the
@@ -45,11 +75,13 @@ def rate(
         env.reset()
         # Two throwaway steps keep tracing out of the timed region: `reset` builds
         # the observation graph, the first step the transition's.
-        env.step(actions)
-        env.step(actions)
+        env.step(plan[0])
+        env.step(plan[1])
         t0 = time.perf_counter()
-        for _ in range(iters):
+        for actions in plan[2:]:
             env.step(actions)
+        # An async backend has the last step in flight; the figure has to include it.
+        env.backend.to_numpy(env.required_mask)
         best = max(best, iters * batch_size / (time.perf_counter() - t0))
         env.close()
     return best

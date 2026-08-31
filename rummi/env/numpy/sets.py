@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.encoding import EMPTY, slot_code
+from rummi.rules.encoding import EMPTY, slot_code, tables
 
 _NO_COLOR = np.int16(-2)
 """Sentinel that compares unequal to every real colour, so a mixed-colour slot
@@ -277,6 +277,45 @@ def assign_open(cfg: RummiConfig, s: SlotStats) -> np.ndarray:
     out[..., : cfg.n_numbered_kinds] = (grid != 0).reshape(*shape, cfg.n_numbered_kinds)
     out[..., cfg.joker_kind] = codes.joker
     return out
+
+
+def assign_open_at(
+    cfg: RummiConfig, s: SlotStats, envs: np.ndarray, kinds: np.ndarray
+) -> np.ndarray:
+    """``(P, S)`` :func:`assign_open` for each ``(env, kind)`` pair, over every slot.
+
+    The same predicate, evaluated only where the answer can be anything but false.
+    A tile has to be in hand to be assigned and a workbench holds a handful of kinds
+    -- 5.8 of 53 on the standard config -- so taking the (colour x number) product at
+    the kinds held costs an order of magnitude less than taking it over the whole
+    grid and masking afterwards. The two are held equal by
+    `test_the_mask_matches_the_dense_predicate`, and by every backend comparison:
+    torch and JAX build the grid, because a shape that depends on the data is what
+    ``jit`` and ``compile`` cannot have.
+    """
+    t = tables(cfg)
+    color = t.color[kinds].astype(np.int32)[:, None]
+    number = t.number[kinds].astype(np.int32)[:, None]
+    is_joker = t.is_joker[kinds][:, None]
+
+    n_next = s.n[envs].astype(np.int32) + 1
+    no_real = s.n_real[envs] == 0
+    run_slot = (n_next <= cfg.n_numbers) & s.distinct_numbers[envs]
+    group_slot = (
+        (n_next <= cfg.n_colors) & s.distinct_colors[envs] & bool(cfg.group_possible)
+    )
+
+    # Clamped only to keep the shift legal: where the kind is the joker, the joker
+    # branch of the `where` is the one taken.
+    number_free = (s.number_mask[envs] & (1 << np.maximum(number - 1, 0))) == 0
+    color_free = (s.color_mask[envs] & (1 << np.maximum(color, 0))) == 0
+    color_agrees = no_real | (s.color[envs] == color)
+    number_agrees = no_real | (s.number[envs] == number)
+
+    # A joker constrains nothing beyond the shape the slot already has.
+    run_ok = np.where(is_joker, s.same_color[envs], color_agrees & number_free)
+    group_ok = np.where(is_joker, s.same_number[envs], number_agrees & color_free)
+    return (run_slot & run_ok) | (group_slot & group_ok)
 
 
 def pad_slot(cfg: RummiConfig, kinds) -> np.ndarray:

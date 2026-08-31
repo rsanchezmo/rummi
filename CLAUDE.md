@@ -174,6 +174,16 @@ illegal *now* and legal next turn.
 It is also why the benchmark **disqualifies** an illegal action instead of
 substituting one silently: a fallback with no cost is something to farm.
 
+**The NumPy mask computes only the ASSIGN columns that can be legal.** A tile has
+to be in hand to be assigned and a workbench holds 5.8 kinds of 53, so the block is
+built at the `(env, kind)` pairs held rather than over the whole grid and masked
+after -- `assign_open_at` against `assign_open`, 24.0ms -> 13.0ms at B=4096. Two
+things follow. The shape depends on the data, so **torch and JAX cannot do this**:
+`jit` and `compile` need it static, and their rows in the simulator table are doing
+structurally more work, not worse work. And a benchmark that plays only `DRAW` never
+puts a tile in hand, so it never builds the block at all -- which is why
+`bench_env` plays the first legal action now, chosen outside the clock.
+
 `RummiVectorEnv(action_mask=False, validate_actions=False)` is there for the
 callers that genuinely do not need it -- a throughput benchmark, or an agent that
 plans a whole turn and only wants the mask once per turn. It is refused unless

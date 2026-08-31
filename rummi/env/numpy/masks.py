@@ -17,7 +17,7 @@ import numpy as np
 
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import tables
-from rummi.env.numpy.sets import SlotStats, SlotSummary, assign_codes, summarize
+from rummi.env.numpy.sets import SlotStats, SlotSummary, assign_open_at, summarize
 from rummi.env.numpy.state import BatchState
 
 
@@ -115,28 +115,18 @@ def _fill_assign(
     slot_ok: np.ndarray,
     mask: np.ndarray,
 ) -> None:
-    """Write the ASSIGN block of ``mask`` in place.
+    """Write the ASSIGN block of ``mask``, for the kinds that could be legal at all.
 
-    ASSIGN ids are kind-major and :class:`~rummi.env.numpy.sets.AssignCode` is a
-    (colour x number) product, so the block can be written where it belongs.
-    Building the ``(S, K)`` form first would mean transposing S*K booleans per env
-    to say the same thing.
+    A tile has to be in hand, and a workbench holds a handful of kinds. Every other
+    column of the block is false -- which is what ``mask`` already holds -- so only
+    the held ones are computed: see
+    :func:`~rummi.env.numpy.sets.assign_open_at`. ASSIGN ids are kind-major, so
+    each pair lands in one contiguous row.
     """
-    b = state.batch_size
-    codes = assign_codes(cfg, stats)
-    # The per-slot factor folds in before the product, where it is S values wide
-    # rather than S*K.
-    color = np.where(slot_ok[..., None], codes.color, np.uint8(0))
-    color = np.ascontiguousarray(np.moveaxis(color, -1, -2))          # (B, C, S)
-    number = np.ascontiguousarray(np.moveaxis(codes.number, -1, -2))  # (B, N, S)
-
+    env, kind = np.nonzero(state.workbench > 0)
+    if env.size == 0:
+        return
     block = mask[:, cfg.assign_offset : cfg.end_turn_action].reshape(
-        b, cfg.n_kinds, cfg.max_sets
+        state.batch_size, cfg.n_kinds, cfg.max_sets
     )
-    grid = block[:, : cfg.n_numbered_kinds].reshape(
-        b, cfg.n_colors, cfg.n_numbers, cfg.max_sets
-    )
-    np.not_equal(color[:, :, None, :] & number[:, None, :, :], 0, out=grid)
-    block[:, cfg.joker_kind] = codes.joker & slot_ok
-    # The tile has to be in hand, which is a fact about the kind, not the slot.
-    np.logical_and(block, (state.workbench > 0)[..., None], out=block)
+    block[env, kind] = assign_open_at(cfg, stats, env, kind) & slot_ok[env]
