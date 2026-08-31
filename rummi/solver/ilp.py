@@ -16,6 +16,7 @@ variables into one integer per kind.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
 
 import numpy as np
 
@@ -107,6 +108,42 @@ def _materialise(
     return [tuple(sorted(inst)) for inst in instances]
 
 
+@dataclass(frozen=True, slots=True)
+class _Constants:
+    """What the model needs that depends only on the config.
+
+    Rebuilding these per solve was most of the time a solve took: the C++ search is
+    a few milliseconds and constructing the model around it was twice that, nearly
+    all of it Python loops over the ~330 candidates that never change.
+    """
+
+    involved: tuple[tuple[int, ...], ...]
+    """Candidates using each numbered kind."""
+    by_content: dict[tuple[int, ...], int]
+    """Candidate index for a set's sorted contents."""
+    longest_first: tuple[int, ...]
+    length: tuple[int, ...]
+    value: tuple[int, ...]
+
+
+@cache
+def _constants(cfg: RummiConfig) -> _Constants:
+    cand = candidates(cfg)
+    n_cand = len(cand)
+    return _Constants(
+        involved=tuple(
+            tuple(int(c) for c in np.flatnonzero(cand.counts[:, k]))
+            for k in range(cfg.n_numbered_kinds)
+        ),
+        by_content={
+            tuple(sorted(int(k) for k in cand.kinds[c] if k >= 0)): c for c in range(n_cand)
+        },
+        longest_first=tuple(int(c) for c in np.argsort(-cand.length)),
+        length=tuple(int(v) for v in cand.length),
+        value=tuple(int(v) for v in cand.value),
+    )
+
+
 def solve_turn(
     cfg: RummiConfig,
     rack: np.ndarray,
@@ -148,18 +185,15 @@ def solve_turn(
     # Per-candidate bound from what is actually reachable. Without it every one of
     # the ~330 candidates is nominally placeable several times over and CP-SAT
     # spends its whole budget proving otherwise.
-    scarcest = np.array(
-        [available[np.flatnonzero(cand.counts[c])].min() for c in range(n_cand)],
-        dtype=np.int64,
-    )
+    scarcest = np.where(cand.counts > 0, available[None, :], np.iinfo(np.int64).max).min(-1)
     upper = np.minimum(cfg.n_copies + cfg.n_jokers, scarcest + joker_available)
     x = [model.NewIntVar(0, int(upper[c]), f"x{c}") for c in range(n_cand)]
 
+    const = _constants(cfg)
     numbered = np.arange(cfg.n_numbered_kinds)
-    demand = {}
-    for k in numbered:
-        involved = np.flatnonzero(cand.counts[:, k])
-        demand[k] = sum(x[int(c)] for c in involved) if involved.size else 0
+    demand = {
+        k: (sum(x[c] for c in const.involved[k]) if const.involved[k] else 0) for k in numbered
+    }
 
     use = {}
     subs = {}
@@ -178,7 +212,7 @@ def solve_turn(
     # follows from the per-kind constraints, yet stating it as one linear bound is
     # what lets the solver prune whole regions instead of enumerating them.
     model.Add(
-        sum(int(cand.length[c]) * x[c] for c in range(n_cand)) <= int(available.sum())
+        sum(const.length[c] * x[c] for c in range(n_cand)) <= int(available.sum())
     )
 
     played = {k: use[k] - int(visible_table[k]) for k in numbered}
@@ -187,7 +221,7 @@ def solve_turn(
     value_played = (
         sum(int(t.value[k]) * played[k] for k in numbered) + cfg.joker_penalty * played_jokers
     )
-    meld_value = sum(int(cand.value[c]) * x[c] for c in range(n_cand))
+    meld_value = sum(const.value[c] * x[c] for c in range(n_cand))
 
     if opening:
         model.Add(meld_value >= cfg.initial_meld)
@@ -200,9 +234,8 @@ def solve_turn(
     kept_terms = []
     if keep_weight and not opening:
         current = _current_instances(cfg, table)
-        by_content = {tuple(sorted(int(k) for k in cand.kinds[c] if k >= 0)): c for c in range(n_cand)}
         for content, count in current.items():
-            c = by_content.get(content)
+            c = const.by_content.get(content)
             if c is None:
                 continue
             kept = model.NewIntVar(0, count, f"keep{c}")
@@ -232,7 +265,7 @@ def solve_turn(
     # Place the biggest sets first: it finds a strong incumbent immediately, which
     # is what makes the bound bite.
     model.AddDecisionStrategy(
-        [x[c] for c in np.argsort(-cand.length)], cp_model.CHOOSE_FIRST, cp_model.SELECT_MAX_VALUE
+        [x[c] for c in const.longest_first], cp_model.CHOOSE_FIRST, cp_model.SELECT_MAX_VALUE
     )
     status = solver.Solve(model)
     status_name = solver.StatusName(status)

@@ -174,6 +174,16 @@ exactly one tile, `optimal` repartitions the table. It exists so a submission ha
 rungs to place itself between — `optimal` beating `greedy` 100-0 told newcomers
 nothing.
 
+**A planner that vectorises overrides `plan_batch`, not `plan`.** `PlanningAgent`
+plans only at turn boundaries, and by default that is one `plan` call per env --
+which is the entire cost of a bundled agent, because the work per turn is tiny and
+there is one per env. Planned one at a time, `greedy` was **93% of a rollout** and
+`rearrange` 97%, nearly all of it `slot_stats` on rows of thirteen tiles. Both now
+plan the whole batch in one pass (6.5x and 8.8x), and `optimal` overrides it to run
+its CP-SAT solves in a thread pool. Whatever the override does, it must decide each
+env exactly as `plan` would -- `test_planning_a_batch_decides_each_env_as_it_would_alone`
+holds it to that, and it fails on a one-line leak between envs.
+
 ## The reference learned agent
 
 `rummi/agents/learned/` — under `agents/` on purpose. A parallel "policies"

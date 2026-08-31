@@ -17,7 +17,7 @@ from __future__ import annotations
 import numpy as np
 
 from rummi.agents.base import Observation, PlanningAgent, has_melded, table
-from rummi.rules.actions import encode_assign, encode_place
+from rummi.rules.actions import encode_assign_batch, encode_place_batch
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import tables
 from rummi.env.numpy.sets import evaluate_slots
@@ -31,8 +31,8 @@ def _offload_values(cfg: RummiConfig) -> np.ndarray:
     return v
 
 
-def appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.ndarray:
-    """``(S, K)`` may kind ``k`` be appended to slot ``s`` leaving it valid?
+def _appendable_rows(cfg: RummiConfig, rows: np.ndarray, rack: np.ndarray) -> np.ndarray:
+    """``(m, K)`` may kind ``k`` be appended to each of ``m`` slot rows, one rack each?
 
     The verdict comes from :func:`evaluate_slots` over the *grown* row rather than
     from colour/number arithmetic over the tiles already there, and that is what makes
@@ -42,155 +42,204 @@ def appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.ndar
     shares this for exactly that reason -- one feasibility test, so the space's
     legality and its expansion cannot disagree.
     """
-    s, ell = table.shape
     k = cfg.n_kinds
-    base = evaluate_slots(cfg, table)
-    has_room = np.asarray((table < 0).any(-1))
-    pos = np.argmax(table < 0, axis=-1)
+    out = np.zeros((rows.shape[0], k), dtype=bool)
+    base = evaluate_slots(cfg, rows)
+    # Only a valid set with room can take a tile, so only those rows are worth
+    # growing. On a real table most slots are empty, and growing one costs K rows.
+    worth = np.flatnonzero(np.asarray(base.is_valid) & (rows < 0).any(-1))
+    if worth.size:
+        keep = rows[worth]
+        grown = np.repeat(keep[:, None, :], k, axis=1)
+        at = np.broadcast_to(np.argmax(keep < 0, axis=-1)[:, None, None], (worth.size, k, 1))
+        np.put_along_axis(grown, at, np.arange(k, dtype=np.int16)[:, None], axis=-1)
+        out[worth] = evaluate_slots(cfg, grown).is_valid
+    return out & (rack > 0)
 
-    grown = np.repeat(table[:, None, :], k, axis=1)
-    grown[np.arange(s)[:, None], np.arange(k)[None, :], pos[:, None]] = np.arange(
-        k, dtype=np.int16
-    )
-    grown_valid = evaluate_slots(cfg, grown).is_valid
 
-    return grown_valid & base.is_valid[:, None] & has_room[:, None] & np.asarray(rack > 0)[None, :]
+def appendable(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray) -> np.ndarray:
+    """``(..., S, K)`` may kind ``k`` be appended to slot ``s`` leaving it valid?
 
-
-def _appendable_row(cfg: RummiConfig, table: np.ndarray, rack: np.ndarray, slot: int) -> np.ndarray:
-    """`(K,)` -- :func:`appendable` for one slot.
-
-    Appending a tile changes that slot's row and nothing else, so the planning loop
-    refreshes one row instead of all `S`. On the standard config that is 53 grown
-    variants to evaluate per iteration rather than 1855, and `slot_stats` over the
-    grown table was 75% of the agent's remaining runtime.
+    :func:`_appendable_rows` decides it; this only spreads each rack across its own
+    slots, so a whole table -- or a whole batch of them -- is one call.
     """
-    k = cfg.n_kinds
-    row = table[slot : slot + 1]
-    base = evaluate_slots(cfg, row)
-    has_room = bool(np.asarray((row < 0).any(-1))[0])
-    if not has_room or not bool(np.asarray(base.is_valid)[0]):
-        return np.zeros(k, dtype=bool)
-
-    pos = int(np.argmax(row[0] < 0))
-    grown = np.repeat(row[:, None, :], k, axis=1)
-    grown[0, np.arange(k), pos] = np.arange(k, dtype=np.int16)
-    grown_valid = np.asarray(evaluate_slots(cfg, grown).is_valid)[0]
-    return grown_valid & np.asarray(rack > 0)
+    table = np.asarray(table)
+    rack = np.asarray(rack)
+    s, ell = table.shape[-2:]
+    racks = np.repeat(rack.reshape(-1, cfg.n_kinds), s, axis=0)
+    grown = _appendable_rows(cfg, table.reshape(-1, ell), racks)
+    return grown.reshape(*table.shape[:-1], cfg.n_kinds)
 
 
-def _realise(cfg: RummiConfig, counts: np.ndarray, rack: np.ndarray) -> list[int] | None:
-    """Tile list for a candidate, substituting jokers for whatever is missing."""
-    missing = np.maximum(0, counts - rack)
-    needed = int(missing.sum())
-    if needed > int(rack[cfg.joker_kind]):
-        return None
-    tiles: list[int] = []
-    for kind in np.flatnonzero(counts):
-        have = min(int(counts[kind]), int(rack[kind]))
-        tiles.extend([int(kind)] * have)
-        tiles.extend([cfg.joker_kind] * (int(counts[kind]) - have))
-    return tiles
+def _sorted_rows(cfg: RummiConfig, rows: np.ndarray) -> np.ndarray:
+    """Canonical order within a slot: kinds ascending, ``EMPTY`` pushed to the end."""
+    key = np.sort(np.where(rows >= 0, rows, np.int16(cfg.n_kinds)), axis=-1)
+    return np.where(key == cfg.n_kinds, np.int16(-1), key).astype(np.int16)
 
 
-def _best_new_set(
-    cfg: RummiConfig, rack: np.ndarray, by_value: bool
-) -> tuple[list[int], int] | None:
-    """Highest-scoring set formable from ``rack`` alone, or ``None``.
+def _best_new_sets(
+    cfg: RummiConfig, rack: np.ndarray, by_value: np.ndarray
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per rack, the highest-scoring set formable from it: its tiles, value, and
+    whether one exists at all.
 
-    Ranked across every candidate at once, then realised only for the winner.
-    The loop this replaces called :func:`_realise` per candidate -- 329 of them on
-    the standard config -- and profiling put 643k of those calls, each a handful of
-    tiny NumPy reductions, at 60% of the whole agent's runtime.
+    Ranked across every candidate at once, then realised only for the winner. The
+    loop this replaces called `_realise` per candidate -- 329 of them on the
+    standard config -- and profiling put 643k of those calls, each a handful of tiny
+    NumPy reductions, at 60% of the whole agent's runtime.
 
-    Two facts make the vectorised form exact rather than approximate. A realised
-    candidate always has `counts.sum()` tiles (a missing tile becomes a joker, so
-    the count is unchanged), which is precomputed as `cand.length`; and feasibility
-    is just "the shortfall fits in the jokers held", which is one matrix op.
+    Two facts make the vectorised form exact rather than approximate. A candidate
+    holds each kind at most once, so its shortfall is just how many of its kinds the
+    rack is out of, and a missing tile becomes a joker rather than shortening the
+    set -- so `cand.length` is the realised length whatever the rack holds.
     """
     cand = candidates(cfg)
-    counts = cand.counts.astype(np.int64)
+    n = rack.shape[0]
+    kinds = cand.kinds.astype(np.int64)                       # (C, L), EMPTY padded
+    held = np.concatenate([rack > 0, np.ones((n, 1), bool)], axis=1)
+    at = np.where(kinds >= 0, kinds, cfg.n_kinds)             # padding lands on the True
+    have = held[:, at]                                        # (n, C, L)
 
-    shortfall = np.maximum(0, counts - rack[None, :].astype(np.int64)).sum(-1)
-    feasible = shortfall <= int(rack[cfg.joker_kind])
-    if not feasible.any():
-        return None
+    shortfall = (~have).sum(-1)
+    feasible = shortfall <= rack[:, cfg.joker_kind, None]
 
     length = cand.length.astype(np.int64)
     value = cand.value.astype(np.int64)
-    # Melding needs points; afterwards, shedding tiles is what wins. Packed into
-    # one integer so `argmax` does the lexicographic comparison -- and `argmax`
-    # returns the *first* maximum, which is what the strict `>` in the previous
-    # loop over ascending indices did.
-    if by_value:
-        key = value * (int(length.max()) + 1) + length
-    else:
-        key = length * (int(value.max()) + 1) + value
+    # Melding needs points; afterwards, shedding tiles is what wins. Packed into one
+    # integer so `argmax` does the lexicographic comparison -- and `argmax` returns
+    # the *first* maximum, which is what a strict `>` over ascending indices did.
+    by_points = value * (int(length.max()) + 1) + length
+    by_size = length * (int(value.max()) + 1) + value
+    key = np.where(by_value[:, None], by_points[None, :], by_size[None, :])
 
-    best = int(np.argmax(np.where(feasible, key, -1)))
-    tiles = _realise(cfg, cand.counts[best], rack)
-    assert tiles is not None, "the feasibility test and _realise disagree"
-    return tiles, int(cand.value[best])
+    best = np.argmax(np.where(feasible, key, -1), axis=-1)
+    chosen = kinds[best]                                      # (n, L)
+    rows = np.arange(n)
+    # A kind the rack is out of is played as a joker; the padding stays EMPTY.
+    tiles = np.where(
+        chosen < 0,
+        np.int64(-1),
+        np.where(rack[rows[:, None], np.maximum(chosen, 0)] > 0, chosen, cfg.joker_kind),
+    )
+    return tiles, cand.value[best].astype(np.int64), feasible.any(-1)
 
 
 def plan_turn(
     cfg: RummiConfig, rack: np.ndarray, table: np.ndarray, has_melded: bool
 ) -> list[int]:
     """Micro-action ids realising one greedy turn; empty when nothing is worth doing."""
-    rack = rack.copy()
-    table = table.copy()
-    lengths = (table >= 0).sum(-1)
-    placements: list[tuple[int, int]] = []
+    return plan_turns(
+        cfg, np.asarray(rack)[None], np.asarray(table)[None], np.array([has_melded])
+    )[0]
 
-    if has_melded:
-        offload = _offload_values(cfg)
-        # Computed in full once, then refreshed a row at a time: an append touches
-        # the slot it landed in, and the kind's column only if the rack ran out.
-        allowed = appendable(cfg, table, rack)
-        while True:
-            if not allowed.any():
-                break
-            # Shed the most expensive tile available.
-            scores = np.where(allowed, offload[None, :], -1)
-            flat_slot, flat_kind = np.unravel_index(int(np.argmax(scores)), scores.shape)
-            slot, kind = int(flat_slot), int(flat_kind)
-            table[slot, int(np.argmax(table[slot] < 0))] = kind
-            table[slot] = np.sort(np.where(table[slot] >= 0, table[slot], cfg.n_kinds))
-            table[slot] = np.where(table[slot] == cfg.n_kinds, -1, table[slot])
-            rack[kind] -= 1
-            lengths[slot] += 1
-            placements.append((kind, slot))
 
-            allowed[slot] = _appendable_row(cfg, table, rack, slot)
-            if rack[kind] <= 0:
-                allowed[:, kind] = False
+def plan_turns(
+    cfg: RummiConfig, racks: np.ndarray, tables: np.ndarray, melded: np.ndarray
+) -> list[list[int]]:
+    """One greedy turn per env, planned for the whole batch at once.
 
-    empty = [i for i in range(cfg.max_sets) if lengths[i] == 0]
-    meld_total = 0
-    while empty:
-        best = _best_new_set(cfg, rack, by_value=not has_melded)
-        if best is None:
-            break
-        tiles, value = best
-        slot = empty.pop(0)
-        for kind in tiles:
-            rack[kind] -= 1
-            placements.append((kind, slot))
-        meld_total += value
-        if not has_melded and meld_total >= cfg.initial_meld:
-            break
-
-    if not placements:
+    The policy is exactly the one-env policy -- every choice below is the same
+    argmax over the same scores, and the tests hold the two to identical plans. What
+    changes is that the arrays carry the batch, and that is the whole cost of this
+    agent: the work per turn is tiny and there is a great deal of it. Planned one at
+    a time, 512 turns spent 93% of a rollout inside `slot_stats`, called 28,709
+    times on rows of thirteen tiles.
+    """
+    n = racks.shape[0]
+    if n == 0:
         return []
-    if not has_melded and meld_total < cfg.initial_meld:
-        return []
+    rack = np.asarray(racks, dtype=np.int16).copy()
+    table = np.asarray(tables, dtype=np.int16).copy()
+    melded = np.asarray(melded, dtype=bool)
+    rows = np.arange(n)
+    # One entry per placed tile: which kind, into which slot, for which envs.
+    steps: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
 
-    # PLACE everything first, then ASSIGN in slot order so each new set's first
-    # tile arrives while its slot is still the lowest empty one.
-    out = [encode_place(cfg, kind) for kind, _ in placements]
-    out += [encode_assign(cfg, kind, slot) for kind, slot in placements]
-    out.append(cfg.end_turn_action)
-    return out
+    offload = _offload_values(cfg)
+    allowed = appendable(cfg, table, rack) & melded[:, None, None]
+    # A turn can append no more tiles than the rack holds.
+    for _ in range(cfg.rack_size):
+        live = allowed.any((1, 2))
+        if not live.any():
+            break
+        # Shed the most expensive tile available. `argmax` takes the first maximum,
+        # so ties go to the lowest slot and then the lowest kind, as they did.
+        flat = np.argmax(np.where(allowed, offload, -1).reshape(n, -1), axis=-1)
+        slot, kind = flat // cfg.n_kinds, flat % cfg.n_kinds
+
+        row = table[rows, slot]
+        row[rows, np.argmax(row < 0, axis=-1)] = kind.astype(np.int16)
+        row = _sorted_rows(cfg, row)
+        acting = rows[live]
+        table[acting, slot[live]] = row[live]
+        rack[acting, kind[live]] -= 1
+        steps.append((kind, slot, live))
+
+        # An append changes the slot it landed in, and the kind's column only if
+        # the rack ran out of it.
+        allowed[acting, slot[live]] = _appendable_rows(cfg, row[live], rack[live])
+        allowed &= (rack > 0)[:, None, :]
+
+    # Appends only lengthen occupied slots, so the empty ones are still these.
+    is_empty = (table >= 0).sum(-1) == 0
+    in_order = np.argsort(~is_empty, axis=-1, kind="stable")
+    n_empty = is_empty.sum(-1)
+    meld_total = np.zeros(n, dtype=np.int64)
+    done = np.zeros(n, dtype=bool)
+
+    for j in range(int(n_empty.max(initial=0))):
+        live = ~done & (j < n_empty)
+        if not live.any():
+            break
+        tiles, value, feasible = _best_new_sets(cfg, rack, by_value=~melded)
+        live &= feasible
+        if not live.any():
+            break
+        slot = in_order[:, j]
+        for t in range(tiles.shape[1]):
+            kind = tiles[:, t]
+            placing = live & (kind >= 0)
+            rack[rows[placing], kind[placing]] -= 1
+            steps.append((kind, slot, placing))
+        meld_total += np.where(live, value, 0)
+        # Stop an env that could not place, and one that has met the opening meld.
+        done |= ~live | (~melded & (meld_total >= cfg.initial_meld))
+
+    return _to_plans(cfg, steps, melded, meld_total)
+
+
+def _to_plans(
+    cfg: RummiConfig,
+    steps: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+    melded: np.ndarray,
+    meld_total: np.ndarray,
+) -> list[list[int]]:
+    """The action ids each env's placements come to.
+
+    PLACE everything first, then ASSIGN in placement order, so each new set's first
+    tile arrives while its slot is still the lowest empty one.
+    """
+    n = melded.shape[0]
+    if not steps:
+        return [[] for _ in range(n)]
+
+    kinds = np.stack([k for k, _, _ in steps])          # (T, n)
+    slots = np.stack([s for _, s, _ in steps])
+    placed = np.stack([p for _, _, p in steps])
+    # Env-major, so each env's placements come out in the order they were made.
+    env, step = np.nonzero(placed.T)
+    kind, slot = kinds[step, env], slots[step, env]
+    place = encode_place_batch(cfg, kind)
+    assign = encode_assign_batch(cfg, kind, slot)
+
+    bounds = np.cumsum(placed.sum(0))[:-1]
+    # A turn that placed nothing, or that failed to reach the opening meld, is not
+    # worth taking: DRAW is what the caller falls back to.
+    keep = (placed.any(0)) & (melded | (meld_total >= cfg.initial_meld))
+    return [
+        [*p.tolist(), *a.tolist(), cfg.end_turn_action] if keep[i] else []
+        for i, (p, a) in enumerate(zip(np.split(place, bounds), np.split(assign, bounds), strict=True))
+    ]
 
 
 class GreedyAgent(PlanningAgent):
@@ -199,4 +248,9 @@ class GreedyAgent(PlanningAgent):
     def plan(self, obs: Observation, env: int) -> list[int]:
         return plan_turn(
             self.cfg, obs["rack"][env], table(obs)[env], bool(has_melded(obs)[env])
+        )
+
+    def plan_batch(self, obs: Observation, envs: np.ndarray) -> list[list[int]]:
+        return plan_turns(
+            self.cfg, obs["rack"][envs], table(obs)[envs], has_melded(obs)[envs]
         )

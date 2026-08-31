@@ -193,6 +193,16 @@ class PlanningAgent:
     def plan(self, obs: Observation, env: int) -> list[int]:
         raise NotImplementedError
 
+    def plan_batch(self, obs: Observation, envs: np.ndarray) -> list[list[int]]:
+        """A plan for each of ``envs``, whose turns all start on this step.
+
+        One :meth:`plan` call each by default. An agent whose planning vectorises
+        overrides this instead and gets the whole batch in one pass -- which is
+        most of what a planner costs, since the work per turn is small and there
+        is one per env.
+        """
+        return [self.plan(obs, int(env)) for env in envs]
+
     def act(
         self, obs: Observation, mask: np.ndarray, active: np.ndarray | None = None
     ) -> np.ndarray:
@@ -200,20 +210,25 @@ class PlanningAgent:
         n = mask.shape[0]
         out = np.full(n, cfg.draw_action, dtype=np.int64)
         fresh = turn_starting(obs)
+        if active is not None:
+            fresh = fresh & np.asarray(active)
+        starting = np.flatnonzero(fresh)
+        if starting.size:
+            planned = self.plan_batch(obs, starting)
+            for index, plan in zip(starting.tolist(), planned, strict=True):
+                self._plans[index] = plan
 
         for env in range(n):
             if active is not None and not active[env]:
                 continue
-            if fresh[env]:
-                self._plans[env] = self.plan(obs, env)
-            plan = self._plans.get(env)
-            if not plan:
+            queued = self._plans.get(env)
+            if not queued:
                 continue
-            action = plan.pop(0)
+            action = queued.pop(0)
             # A plan that has gone stale is abandoned rather than forced through:
             # DRAW reverts the turn cleanly and is always legal.
             if not mask[env, action]:
-                plan.clear()
+                queued.clear()
                 continue
             out[env] = action
         return out

@@ -678,6 +678,36 @@ def test_the_observation_is_sufficient_to_play():
     assert compared > 20, f"only {compared} turns compared"
 
 
+@pytest.mark.parametrize("name", ["greedy", "rearrange"])
+def test_planning_a_batch_decides_each_env_as_it_would_alone(name: str):
+    """A planner that vectorises has to reach every env's own decision.
+
+    Batching is exactly where one env's plan could pick up another's rack, table or
+    tie-break, and nothing downstream would notice: a wrong-but-legal plan just
+    plays worse. So the batch is held against the same agent asked one env at a
+    time, over a rollout long enough to reach melds, lay-offs and steals.
+    """
+    cfg = STANDARD
+    n = 12
+    from rummi.env.vector_env import RummiVectorEnv
+
+    env = RummiVectorEnv(num_envs=n, cfg=cfg, seed=4)
+    agent = build(name, cfg)
+    agent.reset(n)
+    obs, info = env.reset()
+    planned = 0
+    try:
+        for _ in range(120):
+            batched = agent.plan_batch(obs, np.arange(n))
+            alone = [agent.plan(obs, e) for e in range(n)]
+            assert batched == alone
+            planned += sum(bool(plan) for plan in batched)
+            obs, _, _, _, info = env.step(agent.act(obs, info["action_mask"]))
+    finally:
+        env.close()
+    assert planned > n, f"{name} hardly ever had a plan, so little was compared"
+
+
 def test_planning_agents_honour_env_ownership():
     """A planning agent asked about envs it does not control must not consume
     those envs' plans -- this broke once already in the tournament harness."""

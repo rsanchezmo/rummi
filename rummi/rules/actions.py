@@ -39,6 +39,18 @@ def encode_place(cfg: RummiConfig, kind: int) -> int:
     return cfg.place_offset + kind
 
 
+def encode_place_batch(cfg: RummiConfig, kinds: np.ndarray) -> np.ndarray:
+    """:func:`encode_place` over an array of kinds."""
+    return (cfg.place_offset + np.asarray(kinds)).astype(np.int64)
+
+
+def encode_assign_batch(cfg: RummiConfig, kinds: np.ndarray, slots: np.ndarray) -> np.ndarray:
+    """:func:`encode_assign` over arrays of kinds and slots."""
+    return (cfg.assign_offset + np.asarray(kinds) * cfg.max_sets + np.asarray(slots)).astype(
+        np.int64
+    )
+
+
 def encode_pick(cfg: RummiConfig, slot: int, pos: int) -> int:
     return cfg.pick_offset + slot * cfg.max_set_len + pos
 
