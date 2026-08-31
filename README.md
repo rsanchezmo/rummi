@@ -345,7 +345,7 @@ rummi/
 
 ## What is verified
 
-- **224 tests.** The set-validity kernel is checked *exhaustively* against a
+- **488 tests.** The set-validity kernel is checked *exhaustively* against a
   brute-force oracle on the reduced configs, including the closed-form
   "could I add this tile?" predicate.
 - **10.5M fuzz steps, zero invariant violations.** Tile conservation, mask

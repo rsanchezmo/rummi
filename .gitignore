@@ -8,3 +8,6 @@ __pycache__/
 !docs/*.png
 checkpoints/
 runs/
+.DS_Store
+# Agent worktrees: full checkouts, and git already tracks the branches in them.
+.claude/
