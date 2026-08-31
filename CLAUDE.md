@@ -111,9 +111,22 @@ caller reads on the host anyway, ~1% even on MPS) and the `(N,)` done flags
 next-step autoreset needs. I measured the autoreset read at **+1.0%** on MPS at
 B=4096, so device-side autoreset would buy nothing; do not build it on a hunch.
 
-`FixedOpponentEnv` and rendering are NumPy-only and refuse other backends at
-construction -- the first because `agents.base` reads a `BatchState`, the second
-because the renderer does.
+Rendering is NumPy-only and refuses other backends at construction, because the
+renderer reads a `BatchState`.
+
+`FixedOpponentEnv` runs on any of them. Its opponents are NumPy agents whatever
+the state is made of, so it hands them the observation, the mask and the two seat
+vectors converted to NumPy — `act_by_seat` takes no state at all, which is what
+made that possible. **Which backend pays is not obvious, so measure before
+switching**: at B=1024 against `greedy`, `jax` is **1.6x** NumPy, `torch+compile`
+is **0.93x** and `torch-mps+compile` **0.71x**. A device backend loses because the
+hand-off happens once per opponent *action*; JAX wins because it is CPU-only here,
+so there is nothing to hand over. The other half of that: NumPy gets *slower* per
+step as the batch grows and the mask stops fitting in cache — 14.2k steps/s at 128
+envs against 12.8k at 1024 — while JAX does not, so `--backend jax --envs 1024` is
+the fastest training configuration measured. `train_ppo.py --backend` selects it,
+and the loop is backend-independent: the same seed reports identical metrics
+update for update, whichever one is underneath.
 
 **Do not add a tensor-returning mode to this env.** Gymnasium already ships
 `wrappers.vector.NumpyToTorch`, `JaxToTorch` and `JaxToNumpy`, which convert

@@ -152,7 +152,9 @@ def _play_batch(
         # both need it, and it is the most expensive thing in either.
         summary = summarize(suite.cfg, state.table_sets)
         mask = legal_actions(state, summary)
-        actions, illegal = act_by_seat(seats, state, mask, obs=encode(state, summary))
+        actions, illegal = act_by_seat(
+            seats, suite.cfg, state.current, state.done, mask, encode(state, summary)
+        )
         result.illegal_attempts += illegal
         engine_step(state, actions, mask)
 

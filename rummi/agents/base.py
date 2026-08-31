@@ -77,10 +77,12 @@ def act_on_state(agent: Agent, state, mask: np.ndarray, active=None) -> np.ndarr
 
 def act_by_seat(
     seats: Sequence[Agent | None],
-    state,
+    cfg: RummiConfig,
+    current: np.ndarray,
+    done: np.ndarray,
     mask: np.ndarray,
+    obs: Observation,
     actions: np.ndarray | None = None,
-    obs: Observation | None = None,
 ) -> tuple[np.ndarray, int]:
     """Fill in one action per env from the agent seated at whichever seat is acting.
 
@@ -90,17 +92,13 @@ def act_by_seat(
     rather than raised -- a run that reports its illegal attempts is worth more
     than one that dies half-way with no diagnosis.
 
-    ``obs`` is this state's observation when the caller already holds one;
-    otherwise it is encoded here, and only if some seat actually plays.
-
-    The single multi-seat counterpart to :func:`act_on_state`: agents still see
-    only the encoded observation, and the seat rotation in it is what lets one
-    agent instance play any seat.
+    The single multi-seat counterpart to :func:`act_on_state`, and it takes no
+    state at all: the caller passes the observation, which is what an agent is
+    entitled to see, plus the two host-side vectors saying who is acting and who is
+    finished. That is also what lets a caller on a device backend use it -- it
+    converts those three and keeps its state where it is.
     """
-    from rummi.env.observation import encode
-
-    cfg = state.cfg
-    n = state.batch_size
+    n = mask.shape[0]
     if actions is None:
         actions = np.full(n, cfg.draw_action, dtype=np.int64)
     rows = np.arange(n)
@@ -109,11 +107,9 @@ def act_by_seat(
     for seat, agent in enumerate(seats):
         if agent is None:
             continue
-        active = (state.current == seat) & ~state.done
+        active = (current == seat) & ~done
         if not active.any():
             continue
-        if obs is None:
-            obs = encode(state)
         proposed = np.asarray(agent.act(obs, mask, active))
         illegal = active & ~mask[rows, proposed]
         illegal_attempts += int(illegal.sum())

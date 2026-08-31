@@ -102,11 +102,42 @@ def test_rendering_a_non_numpy_backend_is_refused(backend: str):
 
 
 @pytest.mark.parametrize("backend", OTHERS)
-def test_the_fixed_opponent_env_is_numpy_only(backend: str):
+def test_the_fixed_opponent_env_plays_the_same_games_on_every_backend(backend: str):
+    """Its opponents are NumPy agents whatever the state is made of: the env hands
+    them the observation, the mask and the two seat vectors, converted.
+
+    So the games have to come out identical to the reference backend's -- same
+    rewards, same flags, same telemetry -- with the learner's actions chosen from
+    the mask on the host so every backend is handed the same sequence.
+    """
     from rummi.env.fixed_opponent import FixedOpponentEnv
 
-    with pytest.raises(ValueError, match="cannot drive them"):
-        FixedOpponentEnv(num_envs=2, cfg=C, backend=backend)
+    def drive_opponents(name: str, steps: int = 60):
+        env = FixedOpponentEnv(num_envs=4, cfg=C, seed=5, backend=name, opponent="greedy")
+        rng = np.random.default_rng(0)
+        try:
+            obs, info = env.reset()
+            out = []
+            for _ in range(steps):
+                mask = env.backend.to_numpy(info["action_mask"])
+                actions = np.argmax(np.where(mask, rng.random(mask.shape), -1.0), axis=-1)
+                obs, r, term, trunc, info = env.step(actions)
+                out.append(
+                    (np.asarray(r).copy(), np.asarray(term).copy(), mask.copy(),
+                     info["current_player"].copy(), info["opponent_illegal"])
+                )
+            return out
+        finally:
+            env.close()
+
+    for i, (want, got) in enumerate(
+        zip(drive_opponents("numpy"), drive_opponents(backend), strict=True)
+    ):
+        np.testing.assert_allclose(want[0], got[0], err_msg=f"reward at step {i}")
+        np.testing.assert_array_equal(want[1], got[1], err_msg=f"terminated at step {i}")
+        np.testing.assert_array_equal(want[2], got[2], err_msg=f"mask at step {i}")
+        np.testing.assert_array_equal(want[3], got[3], err_msg=f"current_player at step {i}")
+        assert want[4] == got[4] == 0, "a bundled opponent proposed an illegal action"
 
 
 @pytest.mark.skipif("jax" not in available(), reason="needs the jax extra")

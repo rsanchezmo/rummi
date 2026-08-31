@@ -308,10 +308,13 @@ mask — that sampling is a real cost for a policy, just not the env's. Data in
 puts the mask, the observation and the transition through `torch.compile`. Action
 validation moves out of the compiled step and runs beside it, because branching on
 a device boolean splits the graph in two — the same reason JAX validates outside
-its jitted step. These are self-play figures: `FixedOpponentEnv` is
-NumPy-only, since its opponents are NumPy agents, so the bundled `train_ppo.py`
-runs on the NumPy row and a device backend is for a loop that drives
-`RummiVectorEnv` itself.
+its jitted step.
+
+`FixedOpponentEnv` runs on every backend too, converting the observation, the mask
+and the seat vectors for its NumPy opponents — but which one is fastest there is
+not this table: the hand-off happens once per opponent action, so at B=1024
+against `greedy`, `jax` is 1.6x NumPy while `torch-mps+compile` is 0.71x. See
+`--backend` in `tools/train_ppo.py`.
 
 **Why the env numbers are lower than the simulator's**, since the tables invite
 the comparison: the env encodes an observation every step, keeps next-step

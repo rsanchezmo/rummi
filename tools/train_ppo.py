@@ -384,6 +384,12 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="tiny_groups")
     p.add_argument("--opponent", default="greedy")
+    p.add_argument(
+        "--backend",
+        default="numpy",
+        help="simulator backend under the env; `jax` is ~1.6x here, torch is slower "
+        "because the opponents are NumPy and a device backend pays to hand over",
+    )
     p.add_argument("--updates", type=int, default=40)
     p.add_argument("--envs", type=int, default=64)
     p.add_argument("--horizon", type=int, default=128)
@@ -502,7 +508,8 @@ def main() -> None:
     value_opt = torch.optim.Adam(net.v.parameters(), lr=hyper.lr, eps=1e-5)
 
     env = FixedOpponentEnv(
-        num_envs=hyper.envs, cfg=cfg, seed=args.seed, opponent=args.opponent
+        num_envs=hyper.envs, cfg=cfg, seed=args.seed, opponent=args.opponent,
+        backend=args.backend,
     )
     obs, info = env.reset()
     n_actions = cfg.n_actions

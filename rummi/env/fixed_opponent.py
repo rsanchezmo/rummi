@@ -116,11 +116,6 @@ class FixedOpponentEnv(RummiVectorEnv):
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        if self.backend.name != "numpy":
-            raise ValueError(
-                "the opponents go through agents.base, which reads a NumPy "
-                f"BatchState, so the {self.backend.name} backend cannot drive them"
-            )
         if not self.wants_mask:
             raise ValueError("the opponents choose from the mask, so it cannot be turned off")
         if not 0 <= learner_seat < self.cfg.n_players:
@@ -178,13 +173,14 @@ class FixedOpponentEnv(RummiVectorEnv):
         if just_reset.any():
             self._reset_seats()
 
-        result = self._advance(actions, active=~just_reset & ~self.state.done)
+        live = ~just_reset & ~self.backend.to_numpy(self.state.done)
+        result = self._advance(actions, active=live)
         rewards_all = result.rewards + self._run_opponents()
 
         # Read the flags off the state rather than off the first advance: the
         # learner's own move may end the game, and so may an opponent's reply.
-        terminated = self.state.done & ~self.state.truncated
-        truncated = self.state.truncated.copy()
+        done, truncated = self.backend.to_numpy(self.state.done), self._host_truncated()
+        terminated = done & ~truncated
         self._pending_reset = terminated | truncated
 
         rewards = rewards_all[:, self.learner_seat]
@@ -221,14 +217,16 @@ class FixedOpponentEnv(RummiVectorEnv):
         budget = (cfg.n_players - 1) * (cfg.max_micro_per_turn + 2)
 
         for _ in range(budget):
-            waiting = ~self.state.done & (self.state.current != self.learner_seat)
+            to_numpy = self.backend.to_numpy
+            current, done = to_numpy(self.state.current), to_numpy(self.state.done)
+            waiting = ~done & (current != self.learner_seat)
             if not waiting.any():
                 # The learner is up next and chooses from the mask, so it must be
                 # the mask of this state.
                 self._refresh_mask()
                 return total
             deciding = self._mask_per_action or bool(
-                (waiting & (self.state.micro_count == 0)).any()
+                (waiting & (to_numpy(self.state.micro_count) == 0)).any()
             )
             if deciding:
                 self._refresh_mask()
@@ -243,7 +241,9 @@ class FixedOpponentEnv(RummiVectorEnv):
                 mask = np.broadcast_to(np.True_, self.required_mask.shape)
             # The env encoded this state when the last advance left it; the
             # opponents read the same observation the learner would.
-            actions, illegal = act_by_seat(self._seats, self.state, mask, obs=self._encode())
+            actions, illegal = act_by_seat(
+                self._seats, self.cfg, current, done, self._host(mask), self._host_obs()
+            )
             # An illegal proposal is only visible against a mask of this state.
             self._illegal += illegal if deciding else 0
             total += self._advance(actions, active=waiting, mask=deciding).rewards
@@ -253,6 +253,21 @@ class FixedOpponentEnv(RummiVectorEnv):
             f"actions: {self.opponent!r} is not committing its turn. DRAW is never "
             "masked, so a well-behaved agent always ends one."
         )
+
+    def _host(self, value):
+        """``value`` as NumPy, which is what the opponents read.
+
+        Free on the NumPy backend and on JAX, whose arrays are already host memory;
+        a real copy on a device backend, which is the price of playing NumPy agents
+        against it -- and small beside what the device saves on the step itself.
+        """
+        return self.backend.to_numpy(value)
+
+    def _host_obs(self) -> Observation:
+        return {key: self._host(value) for key, value in self._encode().items()}
+
+    def _host_truncated(self) -> np.ndarray:
+        return np.array(self.backend.to_numpy(self.state.truncated), copy=True)
 
     def _refresh_mask(self) -> None:
         """Bring the mask up to date if an advance was told to leave it behind."""
