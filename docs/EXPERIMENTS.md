@@ -74,6 +74,8 @@ commonest move in the game, and no policy inside it could have recovered that.
 | macro space, pointer, 300 updates | **+26.72** | 80.8% | **Beat `by_value` once. Did not replicate — see below.** |
 | macro space, same recipe, 3 seeds on 713 | +22.48 / +25.06 / +24.12 | 74–79% | Every seed below `by_value`'s +25.23. |
 | + jokers (`45287a7`), same recipe, 1 seed | +17.38 | 62.9% | The capability that lifted the heuristic +4.4 cost the fixed-budget learner ~8: `EXTEND` is legal far more often, every decision is wider, and 300 updates were tuned on the narrower space. Below `first_legal`. |
+| + jokers, pre-joker weights **zero-shot**, seeds 0/1 | **+32.99** / +22.11 | **89.2%** / 74.2% | Transfer is a seed coin-toss decided in states neither net ever saw: s0 ranks the new joker appends above `DRAW` (takes 41% of them), s1 below (draws past 36%). **s0 zero-shot sits above `rearrange`** — the strongest agent produced, and the two nets were one point apart on the space they were trained on. |
+| + jokers, s0 warm-started, 300 more updates vs `greedy` | +20.17 | 68.3% | Finetuning destroyed the transfer bonus: 13 points below the same weights untouched. Unanchored RL walks off the lucky extrapolation ridge, and the sampled-policy terminal reward (~0.0) never shows it. |
 | macro space, cloned from `by_value` | +22.59 | 80.0% | Cloning **hurts** here: it arrives confident, so RL settles near the teacher. |
 | macro space, `--epochs 4` | +7.53 | 50.8% | Reusing a noisy bootstrapped advantage amplifies its error. |
 | macro space, one step per minibatch | -393.95 | 0.0% | Four noisy small-batch steps are far worse than one averaged step. |
