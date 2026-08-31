@@ -56,7 +56,7 @@ from __future__ import annotations
 import numpy as np
 
 from rummi.agents.base import Observation
-from rummi.agents.macro import Choose, MacroAgent, _n_choices, action_features
+from rummi.agents.macro import Choose, MacroAgent, _n_choices, action_features, n_macros
 from rummi.rules.config import RummiConfig
 
 _FEATURES: dict[RummiConfig, np.ndarray] = {}
@@ -66,6 +66,23 @@ def n_actions(cfg: RummiConfig) -> int:
     """Primitives, then the tile-playing macros. `END_TURN` and `DRAW` are already
     primitives, so the macro block stops short of them."""
     return cfg.n_actions + _n_choices(cfg)
+
+
+def macro_to_hybrid_actions(cfg: RummiConfig) -> np.ndarray:
+    """`(n_macros,)` -- where each macro-space action sits in the hybrid space.
+
+    The tile-playing macros keep their order, after the primitive block; `END_TURN`
+    and `DRAW` are the last two macros there and primitives at their own ids here.
+    One map rather than one per caller, because both directions of it are used --
+    a macro ranking reads a hybrid mask through it, a warm start moves macro-space
+    weights into hybrid-space rows -- and two spellings would drift.
+    """
+    n_macro = _n_choices(cfg)
+    out = np.empty(n_macros(cfg), dtype=np.int64)
+    out[:n_macro] = cfg.n_actions + np.arange(n_macro)
+    out[n_macro] = cfg.end_turn_action
+    out[n_macro + 1] = cfg.draw_action
+    return out
 
 
 def hybrid_action_features(cfg: RummiConfig) -> np.ndarray:
@@ -192,23 +209,18 @@ def macro_first(cfg: RummiConfig) -> Choose:
     ranking is `macro.by_value`, so this scores exactly as the macro-only agent does
     wherever a macro is available.
     """
-    from rummi.agents.macro import by_value, n_macros
+    from rummi.agents.macro import by_value
 
     rank = by_value(cfg)
+    where = macro_to_hybrid_actions(cfg)
     n_macro = _n_choices(cfg)
-    total = n_macros(cfg)
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
-        # `by_value` expects the macro-space mask, whose last two entries are
-        # END_TURN and DRAW; here those live in the primitive block.
-        padded = np.zeros(total, dtype=bool)
-        padded[:n_macro] = legal[cfg.n_actions :]
-        padded[n_macro] = bool(legal[cfg.end_turn_action])
+        # `by_value` ranks over a macro-space mask, so the hybrid one is read
+        # through the map and its answer mapped back. DRAW is never masked.
+        padded = legal[where].copy()
         padded[n_macro + 1] = True
-        macro = rank(obs, env, padded)
-        if macro < n_macro:
-            return cfg.n_actions + macro
-        return cfg.end_turn_action if macro == n_macro else cfg.draw_action
+        return int(where[rank(obs, env, padded)])
 
     return choose
 

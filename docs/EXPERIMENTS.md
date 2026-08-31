@@ -80,6 +80,9 @@ commonest move in the game, and no policy inside it could have recovered that.
 | macro space, `--epochs 4` | +7.53 | 50.8% | Reusing a noisy bootstrapped advantage amplifies its error. |
 | macro space, one step per minibatch | -393.95 | 0.0% | Four noisy small-batch steps are far worse than one averaged step. |
 | hybrid space, any recipe | ~-1.0 term. | 0.0% | Collapses to stalling. A macro is on offer in **4.9%** of decisions. |
+| hybrid + held-tile consumption, `--micro-step-cost 0.01` | -441.94 | 0.0% | The finish counter was a false positive: the cost is charged per micro-action, never on committing, so the optimum is "never touch a tile" -- `draw` 4% -> 100% by u40, entropy 0.000, 354 instant passes per update at terminal ~-1.05. |
+| hybrid + held-tile consumption, unshaped control | -441.94 | 0.0% | Fails the opposite way: 98.9% of decisions in the primitive block, turns held open, `END_TURN` chosen ~109 times in 2.4M decisions and 0.000% from u45. |
+| hybrid, warm-started from macro u40 (+30.84) | -442.32 | 0.0% | Transfer exact and inert. Arrives putting 55.9% of its mass on the macro block where one is on offer -- but one is on offer in **1.6%** of decisions, because a policy that draws 0.38% runs every turn to the micro cap. Macro use peaks 27.6% at u20, 0.0% from u70. |
 | self-play A/B control: `--opponent greedy`, 3 seeds | -19.59 / +9.82 / **+30.51** | 33.5-84.6% | A **50-point spread** on one recipe, where the `3 seeds on 713` row above spread 2.6. One seed of three beat `by_value`. |
 | **scored at update 40**, 5 seeds | **+30.84 / +29.20 / +29.76 / +25.25 / +27.04** | 76.5-85.6% | Mean **+28.42** against `by_value`'s +28.01. The same recipe scored at 300 averages +10. **The bar is reached in 40 updates and then training destroys it.** |
 | self-play A/B: `--opponent greedy,self`, 3 seeds | -6.66 / **-72.24** / -17.71 | 9.8-42.5% | Worse on two seeds of three -- and the control's own spread is larger than the gap between the arms, so the sign is not evidence. **Inconclusive.** |
@@ -251,6 +254,44 @@ it. Consistent with that, `--micro-step-cost 0.01` — useless when ending was
 *illegal* — is the first arm where the finish counter ever moved (6–7 finished
 episodes per update against ~1). If this space is picked up again, that is the
 thread to pull, not the consumption rule.
+
+**That thread is pulled, and it was a false positive (three arms, checkpointed
+every 20 and scored to u160).** `micro_step_cost` is charged on every
+`PLACE`/`PICK`/`DISSOLVE`/`ASSIGN` and never on a committing action, so it prices
+playing exactly as it prices dithering -- a macro expands into 5-7 charged
+micro-actions while `DRAW` costs nothing and reverts the turn. The optimum it
+creates is "never touch a tile", and the arm walks straight to it: `draw` 4% ->
+100% by u40, entropy 0.000, and the 354 episodes "finishing" per update are all
+instant passes at terminal ~-1.05. The unshaped control fails the opposite way --
+98.9% of decisions in the primitive block, turns held open to the budget. Every
+checkpoint of both arms scores exactly `random`'s -441.94 at 100% stalemate.
+
+**Warm-starting from a trained macro net is exact, and inert.** `--init-from-macro`
+maps a macro-space pointer checkpoint into the hybrid net -- trunk, query and
+critic whole, the action-shaped tensors by `macro_to_hybrid_actions` -- and the
+warm-started net's logits over all 713 macro-space actions are bitwise the
+source's (a parity test pins it; the softmax denominator, now shared with 2398
+primitives, is the one unavoidable difference). The policy demonstrably arrives
+knowing how to play a macro: 55.9% of its mass sits on the macro block where one
+is on offer. It scores -442.32 at every checkpoint anyway, because **a macro is on
+offer in 1.6% of its decisions** against the 14.7% measured under uniform random:
+uniform play draws ~2.9% of the time and keeps workbenches shallow, while this
+policy draws 0.38%, runs every turn to the 155-micro cap, and a workbench that
+deep fits inside no single macro. The teacher's states stop occurring, the
+untrained primitives are all that is left, and PPO walks the macro preference off
+by u70. A rack-shaping arm keeps the preference alive (57.1% at u60) and still
+scores the floor -- preserving macro competence is not the binding constraint.
+
+**What actually blocks the space is a conjunction the mask makes visible.**
+`end_turn & playable` means a turn that burns its micro budget has `END_TURN`
+masked and can only `DRAW`; the exploration target is clear-the-workbench *and*
+reach 30 points *and* commit, which a near-uniform policy over 2400 primitives
+hits ~0.05% of the time -- too rare to reinforce before the entropy bonus dies.
+Two threads survive, neither yet tried: a term that pays for *committing* rather
+than taxing every tile touched (SPEC section 7's `micro_step_cost` cannot separate
+the two; a trainer-side bonus on `END_TURN` needs no env change), and keeping
+macro-bearing states reachable at all -- a macro spanning more than one set, a
+workbench-clearing move, or a shorter micro budget.
 
 ## Scope: one suite proves one thing
 

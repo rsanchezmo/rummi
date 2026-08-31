@@ -39,7 +39,11 @@ gradient thins out; `--opponent greedy,rearrange` mixes the batch, and `self` se
 frozen copies of the learner. Frozen and *lagging* on purpose: an opponent that is
 the learner itself is a target moving in step with the policy chasing it.
 `--init-from` warm-starts from a run against a weaker opponent, which is the other
-half of the same curriculum.
+half of the same curriculum. `--init-from-macro` is the *cross-space* one:
+`--space hybrid` from scratch has never trained, because a near-uniform policy over
+2400 primitives lifts tiles onto the workbench and out of reach of every macro, so
+a hybrid run can start from a macro-space checkpoint instead and spend its
+exploration on the block that space did not have.
 
 Three things make that member behave, all of them things a single recent copy gets
 wrong. `--snapshot-pool` holds several past selves at once and refreshes them in
@@ -82,6 +86,7 @@ from rummi.agents.hybrid import (
     HybridAgent,
     hybrid_action_features,
     macro_first,
+    macro_to_hybrid_actions,
     primitives_only,
 )
 from rummi.agents.hybrid import n_actions as n_hybrid_actions
@@ -90,8 +95,10 @@ from rummi.agents.macro import (
     MacroAgent,
     action_features,
     by_value,
+    extend_offset,
     first_legal,
     n_macros,
+    steal_offset,
 )
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
@@ -104,6 +111,12 @@ learner; the rest are bundled agents."""
 HIDDEN, HEAD = 256, "flat"
 """Defaults for the architecture flags, which parse to None so that a flag passed
 alongside `--init-from` can be told apart from one left alone."""
+
+BLOCKS = ("new_set", "extend", "steal", "end", "draw", "prim")
+"""What a decision is counted as. `prim` exists only in the hybrid space, where a
+policy can spend a whole horizon inside the 2400 primitives: pooled end and draw
+rates cannot say where the rest of the mass went, and whether the macro block is
+reached at all is the question that space exists to answer."""
 
 
 class MacroNet(nn.Module):
@@ -245,22 +258,33 @@ def restore(
     path: pathlib.Path, config: str, space: str, macros: int,
     hidden: int | None, head: str | None,
 ) -> tuple[dict, int, str]:
-    """A checkpoint from `--out`, with the architecture *it* was saved with.
+    """A checkpoint from `--out`, in `space` and with the architecture *it* was
+    saved with.
 
     The architecture comes from the file, never from the CLI: `--hidden` and
     `--head` describe tensors that already exist in it, so a flag that disagrees is
     a mistake to report rather than something to reconcile silently. The head's
     width is checked against today's layout for the same reason `eval_macro.py`
-    checks it -- a hybrid-space or older-layout checkpoint indexes different actions
-    with the same ids, and `load_state_dict` would accept the ones that happen to
-    match in size.
+    checks it -- an older-layout checkpoint indexes different actions with the same
+    ids, and `load_state_dict` would accept the ones that happen to match in size.
+
+    `space` is what the caller intends to load *into*, so the two warm starts state
+    it differently: `--init-from` passes the run's own space and a cross-space file
+    is refused, while `--init-from-macro` passes `macro` and hands the result to
+    `transfer_from_macro`.
     """
     checkpoint = torch.load(path, weights_only=True)
     saved_hidden, saved_head = int(checkpoint["hidden"]), str(checkpoint["head"])
     saved_space = str(checkpoint.get("space", "macro"))
+    if space != saved_space:
+        raise SystemExit(
+            f"{path}: a {saved_space!r}-space checkpoint contradicts space={space!r}. "
+            "--init-from resumes within one space; a macro-space checkpoint seeds a "
+            "hybrid run through --init-from-macro, which transfers only the tensors "
+            "the two spaces share"
+        )
     for flag, given, saved in (
         ("--config", config, str(checkpoint["cfg"])),
-        ("--space", space, saved_space),
         ("--hidden", hidden, saved_hidden),
         ("--head", head, saved_head),
     ):
@@ -276,10 +300,90 @@ def restore(
     if width != macros:
         raise SystemExit(
             f"{path}: {width} actions against {macros} in the current {space} layout "
-            f"for '{config}' -- a checkpoint from a different action space, which "
-            "would load into the wrong rows"
+            f"for '{config}' -- a checkpoint from an older layout, which would load "
+            "into the wrong rows"
         )
     return checkpoint, saved_hidden, saved_head
+
+
+def transfer_from_macro(
+    net: MacroNet, state: dict[str, torch.Tensor], cfg: RummiConfig
+) -> None:
+    """Macro-space weights into a fresh hybrid-space `net`, in place.
+
+    The two spaces differ in their action list and in nothing else, so the trunk,
+    the pointer's query and the critic are the same tensors on both sides and copy
+    across whole. The action-shaped tensors -- `action_bias`, or `pi` under the flat
+    head -- have an exact row map, `macro_to_hybrid_actions`, and the rows the macro
+    space has nothing to say about keep the fresh init: zero for a bias, gain 0.01
+    for a `pi` row, both of which mean *near-uniform*.
+
+    The pointer's `key` reads the action description, and `hybrid_action_features`
+    lays the macro columns out first and unchanged, so those columns of `key.weight`
+    carry over and the four new PLACE/PICK/DISSOLVE/ASSIGN flags keep their init.
+    `END_TURN` and `DRAW` are the one place the description itself moves: they share
+    one column of the macro table and have an `ActionKind` flag each here, so that
+    column's weights are copied to both. That is what makes the transfer *exact* --
+    on any observation the warm-started net's logit over each of the 713 macro-space
+    actions equals the source net's, so their whole ranking survives. What cannot
+    survive is the softmax: 2398 further actions now share the denominator, so every
+    probability is scaled down by the mass the primitives take.
+    """
+    where = torch.as_tensor(macro_to_hybrid_actions(cfg))
+    out = dict(net.state_dict())
+    action_shaped = ("action_bias", "key.weight", "pi.weight", "pi.bias")
+    for name, tensor in state.items():
+        # `desc` is a buffer holding the *other* space's action table.
+        if name != "desc" and name not in action_shaped:
+            out[name] = tensor
+
+    if net.head == "pointer":
+        bias = out["action_bias"].clone()
+        bias[where] = state["action_bias"]
+        out["action_bias"] = bias
+        key = out["key.weight"].clone()
+        macro, hybrid = action_features(cfg), hybrid_action_features(cfg)
+        key[:, : macro.shape[1]] = state["key.weight"]
+        shared = np.flatnonzero(macro[n_macros(cfg) - 1])
+        assert len(shared) == 1, "END_TURN and DRAW are one column of the macro table"
+        for action in (cfg.end_turn_action, cfg.draw_action):
+            flag = np.flatnonzero(hybrid[action])
+            assert len(flag) == 1, "a committing primitive describes itself by one flag"
+            key[:, flag[0]] = state["key.weight"][:, shared[0]]
+        out["key.weight"] = key
+    else:
+        for name in ("pi.weight", "pi.bias"):
+            rows = out[name].clone()
+            rows[where] = state[name]
+            out[name] = rows
+    net.load_state_dict(out)
+
+
+def action_blocks(cfg: RummiConfig, hybrid: bool) -> np.ndarray:
+    """`BLOCKS` index of every action id in the space being trained.
+
+    Derived from the layout functions rather than restated, so it cannot drift from
+    the head the net is built with.
+    """
+    total = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
+    offset = cfg.n_actions if hybrid else 0
+    n_macro = total - offset - (0 if hybrid else 2)
+    out = np.full(total, BLOCKS.index("prim"), dtype=np.int64)
+    macro = np.arange(n_macro)
+    out[offset : offset + n_macro] = np.where(
+        macro < extend_offset(cfg), 0, np.where(macro < steal_offset(cfg), 1, 2)
+    )
+    out[cfg.end_turn_action if hybrid else n_macro] = BLOCKS.index("end")
+    out[cfg.draw_action if hybrid else n_macro + 1] = BLOCKS.index("draw")
+    return out
+
+
+def _block_line(names: tuple[str, ...], blocks: np.ndarray) -> str:
+    """Where an update's decisions went, as shares of the decisions counted."""
+    n = max(int(blocks.sum()), 1)
+    return "      " + "  ".join(
+        f"{name} {int(blocks[i]) / n:>5.1%}" for i, name in enumerate(names)
+    )
 
 
 def _by_opponent(names, tally, closed, faced, rewards) -> list[dict]:
@@ -383,9 +487,17 @@ def main() -> None:
     )
     p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
-        help="warm-start from a checkpoint saved by --out. Takes its architecture: "
-             "--hidden and --head describe tensors already in the file, so passing "
-             "one that disagrees is an error",
+        help="warm-start from a checkpoint saved by --out, in this run's own space. "
+             "Takes its architecture: --hidden and --head describe tensors already "
+             "in the file, so passing one that disagrees is an error",
+    )
+    p.add_argument(
+        "--init-from-macro", type=pathlib.Path, default=None,
+        help="seed a --space hybrid run from a macro-space checkpoint. The trunk, "
+             "the critic and every macro's weights transfer exactly -- the hybrid "
+             "action table embeds the macro one -- and the 2400 primitives start "
+             "near-uniform, so the run begins knowing how to play a macro and spends "
+             "its exploration on the block it does not know",
     )
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument(
@@ -456,9 +568,9 @@ def main() -> None:
     )
     p.add_argument(
         "--log-json", type=pathlib.Path, default=None,
-        help="per-update metrics. Its rates are per *decision*, not the per-step "
-             "end_turn/melded that tools/plot_training.py expects, so its panels do "
-             "not read this file",
+        help="per-update metrics. The end, draw and block rates are per *decision*, "
+             "not the per-step end_turn tools/plot_training.py expects, so its panels "
+             "do not read this file",
     )
     args = p.parse_args()
 
@@ -477,9 +589,19 @@ def main() -> None:
     scale = feature_scale(cfg)
     hybrid = args.space == "hybrid"
     macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg)
+    if args.init_from and args.init_from_macro:
+        p.error("--init-from and --init-from-macro are two warm starts; pass one")
+    if args.init_from_macro and not hybrid:
+        p.error("--init-from-macro seeds a hybrid run; within the macro space that is "
+                "--init-from")
     if args.init_from:
         checkpoint, hidden, head = restore(
             args.init_from, args.config, args.space, macros, args.hidden, args.head
+        )
+    elif args.init_from_macro:
+        checkpoint, hidden, head = restore(
+            args.init_from_macro, args.config, "macro", n_macros(cfg),
+            args.hidden, args.head,
         )
     else:
         checkpoint = None
@@ -489,7 +611,9 @@ def main() -> None:
         cfg, macros, hidden, head=head,
         describe=hybrid_action_features(cfg) if hybrid else None,
     )
-    if checkpoint is not None:
+    if args.init_from_macro:
+        transfer_from_macro(net, checkpoint["state"], cfg)
+    elif checkpoint is not None:
         net.load_state_dict(checkpoint["state"])
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
 
@@ -669,6 +793,8 @@ def main() -> None:
     # the last two actions.
     end_action = cfg.end_turn_action if hybrid else macros - 2
     draw_action = cfg.draw_action if hybrid else macros - 1
+    block_of = action_blocks(cfg, hybrid)
+    block_names = BLOCKS if hybrid else BLOCKS[:-1]
 
     open_choice: list[tuple[np.ndarray, np.ndarray, int, float] | None] = [None] * args.envs
     accrued = np.zeros(args.envs, dtype=np.float32)
@@ -679,6 +805,9 @@ def main() -> None:
     # three cannot separate "the learner improved" from "its opponent got worse",
     # which is the whole reason the seating is a fixed split.
     tally = np.zeros((len(opponents), 3), dtype=np.int64)
+    # Pooled, unlike `tally`: this asks what kind of move the policy makes, which is
+    # a property of the policy and not of who it is sitting across from.
+    blocks = np.zeros(len(BLOCKS), dtype=np.int64)
     history: list[dict] = []
 
     def choose(o, e: int, legal: np.ndarray) -> int:
@@ -703,6 +832,7 @@ def main() -> None:
         accrued[e] = 0.0
         open_choice[e] = (x, legal.copy(), macro, behaviour)
         tally[member_of[e]] += (1, int(macro == end_action), int(macro == draw_action))
+        blocks[block_of[macro]] += 1
         return macro
 
     agent = HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
@@ -715,7 +845,8 @@ def main() -> None:
         f"params={sum(q.numel() for q in net.parameters()):,}"
         + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
            f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
-        + (f" init_from={args.init_from}" if args.init_from else ""),
+        + (f" init_from={args.init_from}" if args.init_from else "")
+        + (f" init_from_macro={args.init_from_macro}" if args.init_from_macro else ""),
         flush=True,
     )
     started = time.perf_counter()
@@ -730,9 +861,15 @@ def main() -> None:
                     group["lr"] = scaled
         steps.clear()
         tally[:] = 0
+        blocks[:] = 0
         finished = 0
+        melded = 0.0
 
         for _ in range(args.horizon):
+            # Seat 0 of the rotated flags is the learner, since this is its turn.
+            # A standing flag, not an event: it says how much of the batch has
+            # opened, and it falls only when an episode ends and re-deals.
+            melded += float(np.asarray(obs["melded"])[:, 0].mean()) / args.horizon
             mask = np.asarray(info["action_mask"])
             actions = agent.act(obs, mask)
             rack_before = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
@@ -884,11 +1021,12 @@ def main() -> None:
             f"update {update:>4}{' warm' if warming else ''}{' snap' if refreshed else ''}"
             f"{' held' if held else ''}  "
             f"episodes {finished:>4}  decisions {len(steps):>6,}  "
-            f"end {end_rate:>5.1%}  draw {draw_rate:>5.1%}  "
+            f"end {end_rate:>5.1%}  draw {draw_rate:>5.1%}  meld {melded:>5.1%}  "
             f"terminal {terminal_mean:>+7.3f}  H {mean_entropy:>5.3f}  "
             f"{len(steps) / (time.perf_counter() - started):>5.0f} dec/s",
             flush=True,
         )
+        print(_block_line(block_names, blocks), flush=True)
         if len(opponents) > 1:
             print("      " + "   ".join(_opponent_line(row) for row in by_opponent), flush=True)
         if args.out and args.checkpoint_every and update % args.checkpoint_every == 0:
@@ -900,6 +1038,11 @@ def main() -> None:
                 "decisions": len(steps),
                 "end_rate": end_rate,
                 "draw_rate": draw_rate,
+                "melded": melded,
+                "blocks": {
+                    name: int(blocks[i]) / max(int(blocks.sum()), 1)
+                    for i, name in enumerate(block_names)
+                },
                 "terminal": terminal_mean,
                 "entropy": mean_entropy,
                 "warmup": bool(warming),
@@ -959,6 +1102,9 @@ def main() -> None:
                     "snapshot_pool": len(snapshots) or None,
                     "snapshot_gate": args.snapshot_gate if snapshots else None,
                     "init_from": str(args.init_from) if args.init_from else None,
+                    "init_from_macro": (
+                        str(args.init_from_macro) if args.init_from_macro else None
+                    ),
                     "hidden": hidden,
                     "head": head,
                     "clone": args.clone,
