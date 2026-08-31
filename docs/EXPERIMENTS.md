@@ -154,6 +154,19 @@ and the u40-u100 window is where to look.
 | `--epochs > 1` | +7.53 | See above. Defaults to 1. |
 | `--clone` (macro space) | +22.59 | Helps on the primitive space, hurts here. |
 | `--kl-coef` (macro space) | -0.4 | Mandatory on the primitive space, a constraint here: it pinned entropy to 0.001. |
+| `--lr-decay` | **no effect** | Linear anneal to zero over 300 updates, five seeds against five without: +29.31 vs +29.10 at u40, -19.62 vs -24.71 at u100, -4.83 vs +10.13 at u300. Inside seed noise everywhere, and the collapse happens anyway. Kept because it is the first thing anyone asks of a PPO loop; the schedule is also gentle where it matters (87% of `--lr` still live at u40) so this is weak evidence against step size, not a refutation of it. |
+| `--backend jax` (macro space) | **no effect** | 1332 against NumPy's 1362 dec/s at `--envs 256`. This trainer scores one env per forward pass and `legal_macros` is 28.5% of runtime against the policy's 13%, so the simulator is not what a larger batch waits on. The 1.6x in `CLAUDE.md` is under `train_ppo.py`, whose policy is batched. |
+
+**Three explanations for the collapse, all refuted.** An entropy floor is
+*backwards*: the two seeds that never fall are the ones whose entropy settles
+**lowest** (0.26-0.29 against 0.46-0.69 for the three that do, one spiking to 1.225
+at u200 as its policy comes apart). Step size does nothing, above. And it is not a
+scoring artifact -- sampling the checkpoints instead of argmaxing them scores them
+*worse*. `end_rate` and `draw_rate` are identical across all five seeds to within a
+point, so no behaviour aggregate separates them either; only `terminal` moves, which
+means the trainer can already see the collapse and simply acts on nothing. The
+surviving hypothesis is the advantage's own noise: it is normalised over ~30 closed
+episodes per update.
 
 **The recipes do not transfer between action spaces.** Cloning is mandatory in one
 and harmful in the other; the same inversion holds for the anchor, for exploration

@@ -164,6 +164,7 @@ def gather(
     because every macro leaves the table whole.
     """
     obs, info = env.reset()
+    obs = host(obs)
     xs: list[np.ndarray] = []
     legals: list[np.ndarray] = []
     ys: list[int] = []
@@ -190,6 +191,7 @@ def gather(
     agent.reset(env.num_envs)
     while len(xs) < samples:
         obs, _, _, _, info = env.step(agent.act(obs, np.asarray(info["action_mask"])))
+        obs = host(obs)
 
     # Agreement on whatever states these are: the number to watch when beta is 0.
     with torch.no_grad():
@@ -304,6 +306,17 @@ def _by_opponent(names, tally, closed, faced, rewards) -> list[dict]:
     return rows
 
 
+def host(obs: dict) -> dict:
+    """The observation as NumPy, whatever the backend underneath produced.
+
+    Everything on the learner's side of this trainer is NumPy -- `features`,
+    `MacroAgent`, the rack-shaping term -- so it converts once here rather than at
+    each of the dozen places that index it. A no-op on the NumPy backend, and JAX is
+    CPU-only in this env, so there is nothing to copy off a device either.
+    """
+    return {key: np.asarray(value) for key, value in obs.items()}
+
+
 def _opponent_line(row: dict) -> str:
     """One pool member's slice of an update, for the per-opponent log line."""
     head = f"{row['opponent']}: {row['decisions']:>5,} dec end {row['end_rate']:>5.1%}"
@@ -319,6 +332,14 @@ def main() -> None:
         "--space", default="macro", choices=["macro", "hybrid"],
         help="hybrid adds the 2400 primitives alongside the macros, so any legal "
              "turn is expressible while a safe macro stays on offer",
+    )
+    p.add_argument(
+        "--backend", default="numpy",
+        help="simulator backend under the env. Measured a wash here -- 1362 against "
+             "1332 dec/s at --envs 256 -- because this trainer scores one env per "
+             "forward pass, so the policy dominates and the simulator is not what a "
+             "larger batch is waiting on. `jax` is 1.6x under train_ppo.py, whose "
+             "policy is batched; the flag is here for when this one's is too",
     )
     p.add_argument(
         "--opponent", default="greedy",
@@ -367,6 +388,13 @@ def main() -> None:
              "one that disagrees is an error",
     )
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument(
+        "--lr-decay", action="store_true",
+        help="anneal the learning rate linearly to zero over --updates. The recipe "
+             "reaches by_value's level by update 40 and then three seeds in five "
+             "take themselves apart; the ones that survive are the ones whose "
+             "entropy settles, so the suspect is step size and not exploration",
+    )
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument(
         "--micro-step-cost", type=float, default=0.0,
@@ -570,11 +598,12 @@ def main() -> None:
         return HybridAgent(cfg, choose=choose) if hybrid else MacroAgent(cfg, choose=choose)
 
     env = FixedOpponentEnv(
-        num_envs=args.envs, cfg=cfg, seed=args.seed,
+        num_envs=args.envs, cfg=cfg, seed=args.seed, backend=args.backend,
         opponent=[opponent_member(name) for name in opponents],
     )
     assert np.array_equal(member_of, env.pool_index), "the seating is not what was assumed"
     obs, info = env.reset()
+    obs = host(obs)
 
     teachers = (
         {"by_value": macro_first(cfg), "first_legal": primitives_only(cfg)}
@@ -606,6 +635,7 @@ def main() -> None:
             assert pool is not None
             fit(net, pool, args.clone_epochs, args.lr, generator)
         obs, info = env.reset()
+        obs = host(obs)
         agent_reset_needed = True
         # The self-play opponents start where the learner does, so it is the cloned
         # policy they face at update 1, not the random init they were taken of.
@@ -691,6 +721,13 @@ def main() -> None:
     started = time.perf_counter()
 
     for update in range(1, args.updates + 1):
+        if args.lr_decay:
+            # Both optimisers: the warmup fits the critic through `value_opt`, and a
+            # critic still taking full-size steps late in a run is its own problem.
+            scaled = args.lr * (1.0 - (update - 1) / args.updates)
+            for optimiser in (opt, value_opt):
+                for group in optimiser.param_groups:
+                    group["lr"] = scaled
         steps.clear()
         tally[:] = 0
         finished = 0
@@ -700,6 +737,7 @@ def main() -> None:
             actions = agent.act(obs, mask)
             rack_before = np.asarray(obs["rack"]).sum(-1).astype(np.float32)
             obs, reward, term, trunc, info = env.step(actions)
+            obs = host(obs)
             reward = np.asarray(reward, dtype=np.float32)
             done = np.asarray(term) | np.asarray(trunc)
             if args.rack_shaping:
@@ -927,6 +965,7 @@ def main() -> None:
                     "seed": args.seed,
                     "micro_step_cost": args.micro_step_cost,
                     "rack_shaping": args.rack_shaping,
+                    "lr_decay": bool(args.lr_decay),
                     "history": history,
                     "eval": scores,
                 },
