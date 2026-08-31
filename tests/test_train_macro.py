@@ -14,6 +14,7 @@ macro-space action exactly as the checkpoint did.
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -66,7 +67,13 @@ def test_a_saved_net_comes_back_with_the_same_weights(tmp_path: Path, head: str)
 
 @pytest.mark.parametrize(
     "override",
-    [{"config": "standard"}, {"space": "hybrid"}, {"hidden": 64}, {"head": "pointer"}],
+    [
+        {"config": "standard"},
+        {"space": "hybrid"},
+        {"hidden": 64},
+        {"head": "pointer"},
+        {"memory": "lstm"},
+    ],
 )
 def test_a_flag_that_contradicts_the_checkpoint_is_refused(tmp_path: Path, override: dict):
     path = save(tmp_path / "ck.pt", build().state_dict())
@@ -104,6 +111,84 @@ def test_the_history_block_widens_the_input_and_nothing_else(tmp_path: Path):
     on = trainer.MacroNet(TINY_GROUPS, MACROS, HIDDEN, extra=history_dim(TINY_GROUPS))
     assert on.trunk[0].in_features - plain.trunk[0].in_features == history_dim(TINY_GROUPS)
     assert on.trunk[2].in_features == plain.trunk[2].in_features
+
+
+def _act_with_memory(net, n_envs: int, decisions: int, terminal_rate: float):
+    """Drive the cell exactly as the trainer's `choose` and done-handler do.
+
+    One decision at a time on a randomly chosen env, storing each decision's
+    pre-state, and zeroing the live state after a terminal -- the reference the
+    replay has to reproduce.
+    """
+    rng = np.random.default_rng(3)
+    dim = net.trunk[0].in_features
+    mem = (torch.zeros(n_envs, net.memory_dim), torch.zeros(n_envs, net.memory_dim))
+    rows = {"x": [], "pre_h": [], "pre_c": [], "terminal": [], "logits": []}
+    sequences: dict[int, list[int]] = {}
+    for i in range(decisions):
+        env = int(rng.integers(n_envs))
+        x = torch.as_tensor(rng.normal(size=dim).astype(np.float32))
+        rows["pre_h"].append(mem[0][env].clone())
+        rows["pre_c"].append(mem[1][env].clone())
+        with torch.no_grad():
+            logits, _, after = net(x[None], (mem[0][env : env + 1], mem[1][env : env + 1]))
+        mem[0][env], mem[1][env] = after[0][0], after[1][0]
+        terminal = float(rng.random() < terminal_rate)
+        if terminal:
+            mem[0][env] = 0.0
+            mem[1][env] = 0.0
+        rows["x"].append(x)
+        rows["terminal"].append(terminal)
+        rows["logits"].append(logits[0])
+        sequences.setdefault(env, []).append(i)
+    stacked = {k: torch.stack(v) if k != "terminal" else torch.as_tensor(v) for k, v in rows.items()}
+    return stacked, list(sequences.values())
+
+
+def test_the_replay_recomputes_exactly_what_acting_computed():
+    """The update replays each env's decisions from their stored initial state, so
+    a misalignment -- an off-by-one, a missed terminal reset, a crossed env -- would
+    silently train on logits the policy never produced. Terminal resets included:
+    a sequence spanning a re-deal must not carry one episode into the next."""
+    torch.manual_seed(0)
+    net = trainer.MacroNet(TINY_GROUPS, MACROS, HIDDEN, memory="lstm", memory_dim=8)
+    rows, sequences = _act_with_memory(net, n_envs=3, decisions=40, terminal_rate=0.2)
+
+    rep, _, _ = trainer.replay_features(
+        net, rows["x"], rows["pre_h"], rows["pre_c"], rows["terminal"], sequences
+    )
+    logits, _ = net.heads(rep)
+    assert torch.allclose(logits, rows["logits"], atol=1e-5), (
+        "the replayed logits are not the ones the policy acted on"
+    )
+
+
+def test_the_gradient_reaches_a_write_through_the_decisions_that_read_it():
+    """What full BPTT buys over replaying each step from its stored state: the loss
+    at a late decision must move the *early* decision's input path, or the cell can
+    never learn to store something that is useless now and useful later."""
+    torch.manual_seed(0)
+    net = trainer.MacroNet(TINY_GROUPS, MACROS, HIDDEN, memory="lstm", memory_dim=8)
+    rows, sequences = _act_with_memory(net, n_envs=1, decisions=6, terminal_rate=0.0)
+
+    x = rows["x"].clone().requires_grad_(True)
+    rep, _, _ = trainer.replay_features(
+        net, x, rows["pre_h"], rows["pre_c"], rows["terminal"], sequences
+    )
+    logits, _ = net.heads(rep)
+    logits[-1].sum().backward()
+    assert x.grad is not None
+    assert float(x.grad[0].abs().sum()) > 0, (
+        "the last decision's loss never reached the first decision's input"
+    )
+
+
+def test_memory_is_architecture_the_checkpoint_owns(tmp_path: Path):
+    """The cell is tensors that exist or do not, so resuming with the flag flipped
+    would load one run's weights into a net of another shape."""
+    path = save(tmp_path / "ck.pt", build().state_dict())
+    with pytest.raises(SystemExit, match="contradicts"):
+        trainer.restore(path, CFG, "macro", MACROS, None, None, memory="lstm", memory_dim=8)
 
 
 def test_history_is_architecture_the_checkpoint_owns(tmp_path: Path):

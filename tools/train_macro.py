@@ -127,46 +127,124 @@ class MacroNet(nn.Module):
     to a similar one. `pointer` scores each macro against `macro.action_features`
     -- what the action *does* -- so the scoring function is shared and a per-action
     bias carries whatever is left over.
+
+    `memory="lstm"` puts an LSTM cell between the trunk and the heads, stepped once
+    per decision, so the policy can *learn* what to carry across steps where the
+    engineered history block hands it a fixed summary. The heads read the trunk's
+    output and the cell's side by side rather than the cell's alone: the snapshot
+    path stays intact and memory is strictly additive, which is what makes an arm
+    without it a control.
     """
 
     def __init__(
         self, cfg: RummiConfig, macros: int, hidden: int = 256,
         head: str = "flat", key_dim: int = 64, describe: np.ndarray | None = None,
-        extra: int = 0,
+        extra: int = 0, memory: str = "none", memory_dim: int = 128,
     ) -> None:
         super().__init__()
         self.head = head
+        self.memory = memory
+        self.memory_dim = memory_dim if memory == "lstm" else 0
         # `extra` widens the input alone -- the opponent-history block is appended
         # to the observation features, so at 0 the trunk is the one it always was.
         self.trunk = nn.Sequential(
             nn.Linear(feature_dim(cfg) + extra, hidden), nn.ReLU(),
             nn.Linear(hidden, hidden), nn.ReLU(),
         )
+        self.cell = nn.LSTMCell(hidden, self.memory_dim) if memory == "lstm" else None
+        width = hidden + self.memory_dim
         if head == "pointer":
             desc = torch.as_tensor(
                 action_features(cfg) if describe is None else describe
             )
             self.register_buffer("desc", desc)
             self.key = nn.Linear(desc.shape[1], key_dim, bias=False)
-            self.query = nn.Linear(hidden, key_dim)
+            self.query = nn.Linear(width, key_dim)
             self.action_bias = nn.Parameter(torch.zeros(macros))
             # Small, for the same reason the flat head uses gain 0.01: a fresh
             # policy should be near-uniform over the legal macros.
             nn.init.orthogonal_(self.query.weight, 0.01)
             nn.init.zeros_(self.query.bias)
         else:
-            self.pi = nn.Linear(hidden, macros)
+            self.pi = nn.Linear(width, macros)
             nn.init.orthogonal_(self.pi.weight, 0.01)
             nn.init.zeros_(self.pi.bias)
-        self.v = nn.Linear(hidden, 1)
+        self.v = nn.Linear(width, 1)
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        h = self.trunk(x)
+    def heads(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Logits and value from the representation the heads read -- the trunk's
+        output, with the cell's concatenated when there is one."""
         if self.head == "pointer":
             logits = self.query(h) @ self.key(self.desc).T + self.action_bias
         else:
             logits = self.pi(h)
         return logits, self.v(h).squeeze(-1)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        state: tuple[torch.Tensor, torch.Tensor] | None = None,
+    ):
+        h = self.trunk(x)
+        if self.cell is None:
+            return self.heads(h)
+        hx, cx = self.cell(h, state)
+        logits, v = self.heads(torch.cat([h, hx], -1))
+        return logits, v, (hx, cx)
+
+
+def replay_features(
+    net: MacroNet,
+    x: torch.Tensor,
+    pre_h: torch.Tensor,
+    pre_c: torch.Tensor,
+    terminal: torch.Tensor,
+    sequences: list[list[int]],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The heads' input for every decision, with the cell run in decision order.
+
+    `sequences` lists each env's decision indices into `x`, oldest first. The cell
+    starts from the first decision's *stored* act-time state and steps forward, so
+    every later decision's state is recomputed on the graph -- which is what lets
+    the gradient reach a write through the decisions that read it. Truncated-BPTT-1
+    (replaying every step from its stored state) cannot: information that is
+    useless now and useful later gets no gradient for being stored at all, and
+    "useful later" is the only thing a memory is for.
+
+    A step's `terminal` flag zeroes the state after it, exactly as the rollout
+    zeroes the live state on `done`, so a sequence spanning a re-deal cannot carry
+    one episode's opponent into the next.
+
+    Returns the `(N, width)` representation plus the final `(h, c)` per sequence,
+    in `sequences` order -- the state a bootstrap value for the decision *after*
+    the batch has to start from.
+    """
+    assert net.cell is not None
+    trunk = net.trunk(x)
+    h = torch.stack([pre_h[s[0]] for s in sequences])
+    c = torch.stack([pre_c[s[0]] for s in sequences])
+    put_index: list[torch.Tensor] = []
+    put_value: list[torch.Tensor] = []
+    t = 0
+    while True:
+        rows = np.flatnonzero([len(s) > t for s in sequences])
+        if rows.size == 0:
+            break
+        idx = torch.as_tensor(np.asarray([sequences[r][t] for r in rows]))
+        live = torch.as_tensor(rows)
+        hj, cj = net.cell(trunk[idx], (h[live], c[live]))
+        put_index.append(idx)
+        put_value.append(hj)
+        keep = 1.0 - terminal[idx][:, None]
+        # Clone-then-assign rather than writing in place: the previous state was
+        # saved by the cell's backward, and mutating it would corrupt the graph.
+        h, c = h.clone(), c.clone()
+        h[live] = hj * keep
+        c[live] = cj * keep
+        t += 1
+    out = trunk.new_zeros(x.shape[0], net.memory_dim)
+    out[torch.cat(put_index)] = torch.cat(put_value)
+    return torch.cat([trunk, out], -1), h, c
 
 
 def gather(
@@ -262,6 +340,7 @@ def fit(net: MacroNet, data: dict, epochs: int, lr: float, generator) -> None:
 def restore(
     path: pathlib.Path, config: str, space: str, macros: int,
     hidden: int | None, head: str | None, history: bool = False,
+    memory: str = "none", memory_dim: int = 0,
 ) -> tuple[dict, int, str]:
     """A checkpoint from `--out`, in `space` and with the architecture *it* was
     saved with.
@@ -295,6 +374,9 @@ def restore(
         # The history block widens the trunk's input, so this is architecture too --
         # and a bool has no "left alone" value, hence the explicit comparison.
         ("--history", history, bool(checkpoint.get("history", False))),
+        # The cell is architecture the same way: tensors that exist or do not.
+        ("--memory", memory, str(checkpoint.get("memory", "none"))),
+        ("--memory-dim", memory_dim, int(checkpoint.get("memory_dim", 0))),
     ):
         if given is not None and given != saved:
             raise SystemExit(
@@ -512,6 +594,26 @@ def main() -> None:
              "counter. Evidence about a rack goes stale as the opponent draws",
     )
     p.add_argument(
+        "--memory", default="none", choices=["none", "lstm"],
+        help="an LSTM cell between the trunk and the heads, stepped once per "
+             "decision and zeroed on a re-deal. Where --history hands the net a "
+             "fixed summary of the opponent's turns, this asks it to *learn* what "
+             "is worth carrying -- the other of the two candidate mechanisms for "
+             "the information a snapshot observation cannot hold. The update "
+             "replays each env's decisions in order from their stored initial "
+             "state, so the gradient reaches a write through the later decisions "
+             "that read it: full BPTT over the batch, not the one-step truncation "
+             "that cannot learn to store anything. Like --history it buys nothing "
+             "measured against greedy: converged seeds land at the top of the "
+             "control's range but inside it, sampled ties too, and zeroing the "
+             "trained cell state flips 0.0%% of 9,625 argmax decisions -- the "
+             "policy converges memoryless",
+    )
+    p.add_argument(
+        "--memory-dim", type=int, default=128,
+        help="width of the --memory cell's state; ignored without one",
+    )
+    p.add_argument(
         "--init-from", type=pathlib.Path, default=None,
         help="warm-start from a checkpoint saved by --out, in this run's own space. "
              "Takes its architecture: --hidden and --head describe tensors already "
@@ -614,6 +716,20 @@ def main() -> None:
         # tracker while `extra` widens the net to read it -- a block of stale zeros,
         # silently. Refusing is honest until the hybrid agent carries one.
         p.error("--history is wired for the macro agent only; the hybrid agent has no tracker")
+    recurrent = args.memory != "none"
+    if recurrent and "self" in opponents:
+        # Unlike the tracker this is designable -- a snapshot would carry its own
+        # per-env state, cleared on the same re-deals -- but nothing drives one yet.
+        p.error("--memory has no per-env state for a 'self' snapshot yet; drop one of them")
+    if recurrent and (args.clone or args.kl_coef):
+        # `gather`/`fit` score states one row at a time with no state threaded
+        # through, and the KL reference would need the same replay the update does.
+        p.error("--memory supports neither --clone nor --kl-coef; the recipe here uses neither")
+    if recurrent and args.eval_games:
+        # `argmax_choose` closes over one state per env with nothing resetting it
+        # between the protocol's seat rotations; eval_macro.py builds a fresh state
+        # per rotation, which is what makes its score mean something.
+        p.error("--memory checkpoints are scored with tools/eval_macro.py; drop --eval-games")
 
     cfg = dataclasses.replace(
         CONFIG_BY_NAME[args.config],
@@ -633,7 +749,7 @@ def main() -> None:
     if args.init_from:
         checkpoint, hidden, head = restore(
             args.init_from, args.config, args.space, macros, args.hidden, args.head,
-            args.history,
+            args.history, args.memory, args.memory_dim if recurrent else 0,
         )
     elif args.init_from_macro:
         checkpoint, hidden, head = restore(
@@ -649,6 +765,7 @@ def main() -> None:
         cfg, macros, hidden, head=head,
         describe=hybrid_action_features(cfg) if hybrid else None,
         extra=history_dim(cfg) if tracker is not None else 0,
+        memory=args.memory, memory_dim=args.memory_dim,
     )
     if args.init_from_macro:
         transfer_from_macro(net, checkpoint["state"], cfg)
@@ -835,6 +952,8 @@ def main() -> None:
                 # the same tracker, so the flag travels with the weights: a net
                 # scored with the block zeroed is not the net that was trained.
                 "history": bool(args.history), "history_decay": args.history_decay,
+                # Same contract: the evaluator has to step the same cell.
+                "memory": args.memory, "memory_dim": net.memory_dim,
                 "state": net.state_dict(),
             },
             path,
@@ -851,10 +970,21 @@ def main() -> None:
     block_of = action_blocks(cfg, hybrid)
     block_names = BLOCKS if hybrid else BLOCKS[:-1]
 
-    open_choice: list[tuple[np.ndarray, np.ndarray, int, float] | None] = [None] * args.envs
+    # The live cell state per env, and each decision's copy of it from before the
+    # cell stepped. The copies are what the update replays from: the first decision
+    # of an env's batch starts there, and every later state is recomputed on the
+    # graph so BPTT can reach it.
+    mem = (
+        (torch.zeros(args.envs, net.memory_dim), torch.zeros(args.envs, net.memory_dim))
+        if recurrent else None
+    )
+    Pre = tuple[np.ndarray, np.ndarray] | None
+    open_choice: list[tuple[np.ndarray, np.ndarray, int, float, Pre] | None] = (
+        [None] * args.envs
+    )
     accrued = np.zeros(args.envs, dtype=np.float32)
     steps: list[
-        tuple[np.ndarray, np.ndarray, int, float, float, np.ndarray, float, int]
+        tuple[np.ndarray, np.ndarray, int, float, Pre, float, np.ndarray, float, int]
     ] = []
     # [decisions, END_TURN, DRAW] per pool member. Pooled across a mixed batch these
     # three cannot separate "the learner improved" from "its opponent got worse",
@@ -869,7 +999,15 @@ def main() -> None:
         x = features(o, e)
         # Acting needs no graph, and building one per decision is pure waste.
         with torch.no_grad():
-            logits, _ = net(torch.as_tensor(x)[None])
+            if mem is None:
+                pre: Pre = None
+                logits, _ = net(torch.as_tensor(x)[None])
+            else:
+                pre = (mem[0][e].numpy().copy(), mem[1][e].numpy().copy())
+                logits, _, after = net(
+                    torch.as_tensor(x)[None], (mem[0][e : e + 1], mem[1][e : e + 1])
+                )
+                mem[0][e], mem[1][e] = after[0][0], after[1][0]
         masked = torch.where(
             torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
         )
@@ -880,12 +1018,13 @@ def main() -> None:
         # against this, and the stored mask is what keeps the ratio meaningful.
         behaviour = float(torch.log_softmax(masked[0], -1)[macro])
         if open_choice[e] is not None:
-            prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
+            prev_x, prev_legal, prev_a, prev_lp, prev_pre = open_choice[e]
             steps.append(
-                (prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]), x, 0.0, e)
+                (prev_x, prev_legal, prev_a, prev_lp, prev_pre,
+                 float(accrued[e]), x, 0.0, e)
             )
         accrued[e] = 0.0
-        open_choice[e] = (x, legal.copy(), macro, behaviour)
+        open_choice[e] = (x, legal.copy(), macro, behaviour, pre)
         tally[member_of[e]] += (1, int(macro == end_action), int(macro == draw_action))
         blocks[block_of[macro]] += 1
         return macro
@@ -899,6 +1038,7 @@ def main() -> None:
         f"actions={macros} head={head} micro_cost={args.micro_step_cost} "
         f"params={sum(q.numel() for q in net.parameters()):,}"
         + (f" history={history_dim(cfg)}d decay={args.history_decay}" if tracker else "")
+        + (f" memory={args.memory}:{net.memory_dim}d" if recurrent else "")
         + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
            f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
         + (f" init_from={args.init_from}" if args.init_from else "")
@@ -948,12 +1088,18 @@ def main() -> None:
                 # re-deal. The env re-deals on the *next* step, which is what the
                 # tracker's own one-observation blind spot covers.
                 tracker.clear(done)
+            if mem is not None and done.any():
+                # The cell state is per episode the way the tracker is: the next
+                # decision on this env is a fresh deal against a fresh rack.
+                finished_rows = torch.as_tensor(done)
+                mem[0][finished_rows] = 0.0
+                mem[1][finished_rows] = 0.0
             for e in np.flatnonzero(done):
                 if open_choice[e] is not None:
-                    prev_x, prev_legal, prev_a, prev_lp = open_choice[e]
+                    prev_x, prev_legal, prev_a, prev_lp, prev_pre = open_choice[e]
                     steps.append(
-                        (prev_x, prev_legal, prev_a, prev_lp, float(accrued[e]),
-                         prev_x, 1.0, e)
+                        (prev_x, prev_legal, prev_a, prev_lp, prev_pre,
+                         float(accrued[e]), prev_x, 1.0, e)
                     )
                     open_choice[e] = None
                 accrued[e] = 0.0
@@ -967,17 +1113,45 @@ def main() -> None:
         legal = torch.as_tensor(np.stack([s[1] for s in steps]))
         a = torch.as_tensor(np.asarray([s[2] for s in steps]))
         old_logp = torch.as_tensor(np.asarray([s[3] for s in steps], dtype=np.float32))
-        r = torch.as_tensor(np.asarray([s[4] for s in steps], dtype=np.float32))
-        nxt = torch.as_tensor(np.stack([s[5] for s in steps]))
-        terminal = torch.as_tensor(np.asarray([s[6] for s in steps], dtype=np.float32))
-        faced = torch.as_tensor(member_of[np.asarray([s[7] for s in steps])])
+        r = torch.as_tensor(np.asarray([s[5] for s in steps], dtype=np.float32))
+        nxt = torch.as_tensor(np.stack([s[6] for s in steps]))
+        terminal = torch.as_tensor(np.asarray([s[7] for s in steps], dtype=np.float32))
+        faced = torch.as_tensor(member_of[np.asarray([s[8] for s in steps])])
+        if recurrent:
+            pre_h = torch.as_tensor(np.stack([s[4][0] for s in steps]))
+            pre_c = torch.as_tensor(np.stack([s[4][1] for s in steps]))
+            # Each env's decisions, oldest first -- `steps` is appended in play
+            # order, so per-env order survives the interleaving.
+            by_env: dict[int, list[int]] = {}
+            for i, s in enumerate(steps):
+                by_env.setdefault(s[8], []).append(i)
+            sequences = list(by_env.values())
 
         warming = update <= args.value_warmup
         # Targets and advantages come from the policy that acted, once, and are held
         # fixed across the passes: recomputing them per pass chases a moving critic.
         with torch.no_grad():
-            _, value_old = net(x)
-            _, next_value = net(nxt)
+            if recurrent:
+                rep, fin_h, fin_c = replay_features(
+                    net, x, pre_h, pre_c, terminal, sequences
+                )
+                _, value_old = net.heads(rep)
+                # A non-terminal step's successor is the next decision in its env's
+                # sequence; the last one per env bootstraps through one more cell
+                # step from the replay's final state. A terminal step's successor
+                # is nulled by (1 - terminal) either way.
+                last = torch.as_tensor([s[-1] for s in sequences])
+                tail_trunk = net.trunk(nxt[last])
+                tail_h, _ = net.cell(tail_trunk, (fin_h, fin_c))
+                _, tail_value = net.heads(torch.cat([tail_trunk, tail_h], -1))
+                next_value = torch.zeros_like(value_old)
+                for j, s in enumerate(sequences):
+                    run = torch.as_tensor(s)
+                    next_value[run[:-1]] = value_old[run[1:]]
+                    next_value[run[-1]] = tail_value[j]
+            else:
+                _, value_old = net(x)
+                _, next_value = net(nxt)
             target = r + args.gamma * (1.0 - terminal) * next_value
             advantage = target - value_old
             # Normalised per opponent, not over the pooled batch. The observation
@@ -1000,9 +1174,55 @@ def main() -> None:
         # a memory device, and a quarter of the batch is not what H means.
         entropy_sum, entropy_n = 0.0, 0
         for _ in range(1 if warming else args.epochs):
-            order = torch.randperm(total, generator=generator)
             active = value_opt if warming else opt
             active.zero_grad(set_to_none=True)
+            if recurrent:
+                # Chunked by env, not by decision: a sequence sliced across chunks
+                # would replay from states no chunk computes. Losses are summed and
+                # scaled by the whole batch, because env-sized chunks are unequal
+                # and a per-chunk mean would weight the small ones up. Still one
+                # averaged step per pass, exactly as below.
+                order = torch.randperm(len(sequences), generator=generator)
+                for group in np.array_split(
+                    order.numpy(), min(args.minibatches, len(sequences))
+                ):
+                    if group.size == 0:
+                        continue
+                    picked = [sequences[int(j)] for j in group]
+                    flat = torch.as_tensor(
+                        np.concatenate([np.asarray(s) for s in picked])
+                    )
+                    local: list[list[int]] = []
+                    offset = 0
+                    for s in picked:
+                        local.append(list(range(offset, offset + len(s))))
+                        offset += len(s)
+                    rep, _, _ = replay_features(
+                        net, x[flat], pre_h[flat], pre_c[flat], terminal[flat], local
+                    )
+                    logits, value = net.heads(rep)
+                    logits = torch.where(
+                        legal[flat], logits, torch.full_like(logits, MASKED)
+                    )
+                    logp_all = torch.log_softmax(logits, -1)
+                    logp = logp_all.gather(1, a[flat][:, None])[:, 0]
+                    each = -(logp_all.exp() * logp_all).sum(-1)
+                    entropy_sum += float(each.detach().sum())
+                    entropy_n += len(flat)
+                    value_loss = (value - target[flat]).pow(2).sum()
+                    if warming:
+                        loss = value_loss
+                    else:
+                        ratio = (logp - old_logp[flat]).exp()
+                        adv = advantage[flat]
+                        clipped = torch.clamp(ratio, 1 - args.clip, 1 + args.clip) * adv
+                        loss = -torch.min(ratio * adv, clipped).sum()
+                        loss = loss + 0.5 * value_loss - args.entropy_coef * each.sum()
+                    (loss / total).backward()
+                nn.utils.clip_grad_norm_(net.parameters(), 0.5)
+                active.step()
+                continue
+            order = torch.randperm(total, generator=generator)
             chunks = max((total + size - 1) // size, 1)
             for start in range(0, total, size):
                 idx = order[start : start + size]
@@ -1176,6 +1396,8 @@ def main() -> None:
                     "head": head,
                     "opponent_history": bool(args.history),
                     "opponent_history_decay": args.history_decay if args.history else None,
+                    "memory": args.memory,
+                    "memory_dim": net.memory_dim,
                     "clone": args.clone,
                     "seed": args.seed,
                     "micro_step_cost": args.micro_step_cost,

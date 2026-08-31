@@ -86,6 +86,26 @@ commonest move in the game, and no policy inside it could have recovered that.
 | self-play A/B control: `--opponent greedy`, 3 seeds | -19.59 / +9.82 / **+30.51** | 33.5-84.6% | A **50-point spread** on one recipe, where the `3 seeds on 713` row above spread 2.6. One seed of three beat `by_value`. |
 | **scored at update 40**, 5 seeds | **+30.84 / +29.20 / +29.76 / +25.25 / +27.04** | 76.5-85.6% | Mean **+28.42** against `by_value`'s +28.01. The same recipe scored at 300 averages +10. **The bar is reached in 40 updates and then training destroys it.** |
 | self-play A/B: `--opponent greedy,self`, 3 seeds | -6.66 / **-72.24** / -17.71 | 9.8-42.5% | Worse on two seeds of three -- and the control's own spread is larger than the gap between the arms, so the sign is not evidence. **Inconclusive.** |
+| opponent-history belief features (`--history`), 3 seeds | +27.67 / +24.75 / n.c. | ≤84% | **Null.** The inference is sharp -- a declined lay-off proves the opponent holds zero of that kind, 2,469/2,469 checks -- but entropy-matched at u60 the converged seeds land inside the control's argmax range, and one seed never converged. The 111 extra inputs delay the entropy collapse ~20 updates, so arms of different width must be matched on entropy, never on update count. |
+| LSTM memory (`--memory lstm`, full BPTT), 3 seeds | +29.86 / +30.28 / -61.92 | 20-85% | **Null the same way.** Two seeds converge at the top of the control's same-day range (+22.92 / +29.00 / +27.70, n=240 each); the third hits the known late collapse. Sampled ties too (+11.36/+15.32 vs +9.89-+15.25). Zeroing the trained cell state flips **0.0% of 9,625 argmax decisions**: the policy converges memoryless. |
+
+**The information channel is closed against `greedy`, by both mechanisms.** The
+observation merges the pool and opponents' racks into `unseen` on purpose, so the
+only hidden information is which unseen tiles the opponent holds, and the only path
+to it is cross-step history -- nothing in a snapshot can say what an opponent
+declined to play. Both ways of reading that channel are now measured: engineered
+belief features (`--history`, exact negative evidence against a deterministic
+opponent) and learned memory (`--memory lstm`, an LSTMCell stepped once per
+decision and trained with full BPTT over each env's decision sequence -- the
+one-step truncation cannot learn to *store* anything, so it would not have been a
+test). Both train to policies indistinguishable from the memoryless control under
+argmax and under sampling, and the LSTM's memory is behaviourally inert under a
+direct probe. That is consistent with the delegating result above -- no cross-turn
+strategy was findable at any inner strength -- and with the day's recurring
+scoreboard: capability moves points, information does not. The arena where the
+channel *should* matter is self-play, and neither mechanism is wired for it yet:
+`--history` has no tracker for the snapshot seat, `--memory` no per-env state for
+one. Wire that before concluding anything about information in general.
 
 **The one apparent win did not replicate, now measured across seeds.** +26.72 was
 one seed on the 730-action layout. On the current 713 layout the same recipe scored

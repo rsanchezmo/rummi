@@ -114,6 +114,8 @@ def main() -> None:
         raise SystemExit("--repartition names a macro-space action; this checkpoint is hybrid")
     history = bool(ck.get("history", False))
     decay = float(ck.get("history_decay", 0.8))
+    memory = str(ck.get("memory", "none"))
+    memory_dim = int(ck.get("memory_dim", 0))
     if history and space == "hybrid":
         raise SystemExit("a hybrid checkpoint with a history block has no agent to drive it")
     table, action_count = layout(space, args.repartition)
@@ -132,6 +134,7 @@ def main() -> None:
     net = MacroNet(
         cfg, action_count(cfg), ck["hidden"], head=ck["head"], describe=table(cfg),
         extra=history_dim(cfg) if history else 0,
+        memory=memory, memory_dim=memory_dim,
     )
     net.load_state_dict(ck["state"])
     net.eval()
@@ -145,8 +148,12 @@ def main() -> None:
         """One chooser per agent, closing over that agent's own tracker.
 
         `evaluate` builds an agent per seat rotation, so a tracker shared across
-        them would carry one game's opponent into another's decisions.
+        them would carry one game's opponent into another's decisions. The cell
+        state is per chooser for the same reason -- and it needs no clearing
+        inside a batch, because the protocol plays one game per env slot with no
+        autoreset, so a fresh chooser is a fresh episode.
         """
+        states: dict[int, tuple[torch.Tensor, torch.Tensor]] = {}
 
         def choose(o: dict, e: int, legal: np.ndarray) -> int:
             row = np.concatenate(
@@ -155,7 +162,10 @@ def main() -> None:
             if tracker is not None:
                 row = np.concatenate([row, tracker.row(e)])
             with torch.no_grad():
-                logits, _ = net(torch.as_tensor(row)[None])
+                if net.cell is None:
+                    logits, _ = net(torch.as_tensor(row)[None])
+                else:
+                    logits, _, states[e] = net(torch.as_tensor(row)[None], states.get(e))
             logits = torch.where(
                 torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
             )
@@ -181,7 +191,7 @@ def main() -> None:
     print(
         f"{label}: config {ck['cfg']}, {space} space, {ck['head']} head, "
         f"hidden {ck['hidden']}, {action_count(cfg)} actions, history {history}, "
-        f"{'sampled' if args.sample else 'argmax'}"
+        f"memory {memory}, {'sampled' if args.sample else 'argmax'}"
     )
     for name in args.suites:
         suite: Suite = SUITE_BY_NAME[name]
