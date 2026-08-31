@@ -290,24 +290,35 @@ compared against MPS on equal hardware. On a CUDA box, re-measure.
 
 | backend | B=1024 | B=4096 | vs NumPy |
 |---|---:|---:|---:|
-| NumPy (reference) | 141k | 143k | 1.0x |
-| torch CPU | 71k | 169k | 1.2x |
-| torch MPS | 143k | 288k | 2.0x |
-| JAX CPU | **361k** | **351k** | **2.4x** |
+| NumPy (reference) | 149k | 150k | 1.0x |
+| torch CPU | 74k | 170k | 1.1x |
+| torch CPU + `compile` | 219k | 373k | 2.5x |
+| torch MPS | 153k | 304k | 2.0x |
+| torch MPS + `compile` | **289k** | **679k** | **4.5x** |
+| JAX CPU | 373k | 362k | 2.4x |
 
 `RummiVectorEnv.step`, so the mask, the transition, the observation encoding *and*
 next-step autoreset are all inside the figure. Constant `DRAW` actions in every
 arm, so it measures the env rather than the cost of sampling from a `(B, 2400)`
 mask — that sampling is a real cost for a policy, just not the env's. Data in
 `docs/data/env_throughput.json`; regenerate with
-`python -m rummi.bench.bench_env --json docs/data/env_throughput.json`.
+`python -m rummi.bench.bench_env --compile --json docs/data/env_throughput.json`.
+
+`+compile` is a backend name, not a mode: `RummiVectorEnv(backend="torch-mps+compile")`
+puts the mask, the observation and the transition through `torch.compile`. Action
+validation moves out of the compiled step and runs beside it, because branching on
+a device boolean splits the graph in two — the same reason JAX validates outside
+its jitted step. These are self-play figures: `FixedOpponentEnv` is
+NumPy-only, since its opponents are NumPy agents, so the bundled `train_ppo.py`
+runs on the NumPy row and a device backend is for a loop that drives
+`RummiVectorEnv` itself.
 
 **Why the env numbers are lower than the simulator's**, since the tables invite
-the comparison: the env also encodes an observation every step, it is measured at
-batch 4,096 rather than at each backend's best batch, and **it does not
-`torch.compile` anything** — the simulator's 786k is a `compile`d figure and the
-env has no equivalent yet. Compiling the env's step is the obvious next gain, not
-a discrepancy.
+the comparison: the env encodes an observation every step, keeps next-step
+autoreset, and reads a handful of `(N,)` telemetry vectors back to the host — and
+it is measured at 4,096 rather than at each backend's best batch. Compiled MPS
+puts a number on all of that: **679k against the simulator's 720k at the same
+batch**, so everything the env adds over the simulator costs about 6%.
 
 Conformance is not assumed. Every backend replays recorded trajectories and must
 reproduce 42 state digests per config, and masks and rewards are compared against

@@ -44,6 +44,22 @@ def drive(backend: str, steps: int = 240, seed: int = 3):
         env.close()
 
 
+def test_the_compile_suffix_names_a_backend():
+    """`+compile` is part of the name, so a caller asks for it the way it asks for a
+    device. It stays out of `available()`: compiling costs seconds a graph, and that
+    list is what the sweeps here run by default."""
+    from rummi.env.api import get_backend
+
+    pytest.importorskip("torch")
+    assert not get_backend("torch").compiled
+    assert get_backend("torch+compile").compiled
+    assert get_backend("torch-mps+compile").device == "mps"
+    assert get_backend("torch-mps+compile").name == "torch-mps+compile"
+    assert not any(name.endswith("+compile") for name in available())
+    with pytest.raises(ValueError, match="suffix"):
+        get_backend("torch+fused")
+
+
 @pytest.mark.parametrize("backend", OTHERS)
 def test_the_env_behaves_identically_on_every_backend(backend: str):
     want = drive("numpy")

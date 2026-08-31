@@ -30,13 +30,23 @@ def rate(
     from rummi.env.vector_env import RummiVectorEnv
 
     actions = np.full(batch_size, cfg.draw_action, dtype=np.int64)
+    if backend.endswith("+compile"):
+        import torch
+
+        # Dynamo's recompile limit is per code object and shared across every env
+        # built here, so past it `compile` falls back to eager without saying so and
+        # the cell reports an eager number under a compiled name.
+        torch._dynamo.reset()
     best = 0.0
     for _ in range(repeats):
         # A fresh env each repeat: the state advances while it is timed and the
         # table fills as it goes, so reusing one measures a later, cheaper phase.
         env = RummiVectorEnv(num_envs=batch_size, cfg=cfg, seed=0, backend=backend)
         env.reset()
-        env.step(actions)  # one throwaway step keeps tracing out of the timed region
+        # Two throwaway steps keep tracing out of the timed region: `reset` builds
+        # the observation graph, the first step the transition's.
+        env.step(actions)
+        env.step(actions)
         t0 = time.perf_counter()
         for _ in range(iters):
             env.step(actions)
@@ -53,18 +63,24 @@ def main() -> None:
     p.add_argument("--iters", type=int, default=80)
     p.add_argument("--repeats", type=int, default=3)
     p.add_argument("--json", type=pathlib.Path, default=None)
+    p.add_argument(
+        "--compile", action="store_true", help="also time the torch backends compiled"
+    )
     args = p.parse_args()
 
     cfg = CONFIG_BY_NAME[args.config]
     backends = args.backends or available()
+    if args.compile:
+        backends = backends + [f"{b}+compile" for b in backends if b.startswith("torch")]
     rows: dict[str, dict[int, float]] = {}
 
-    header = "backend".ljust(12) + "".join(f"{b:>12}" for b in args.batch_sizes)
+    width = max(12, max(len(b) for b in backends) + 2)
+    header = "backend".ljust(width) + "".join(f"{b:>12}" for b in args.batch_sizes)
     print(header)
     print("-" * len(header))
     for name in backends:
         rows[name] = {}
-        line = name.ljust(12)
+        line = name.ljust(width)
         for b in args.batch_sizes:
             r = rate(name, cfg, b, args.iters, args.repeats)
             rows[name][b] = r
@@ -78,7 +94,7 @@ def main() -> None:
             speedups = "  ".join(
                 f"{b}: {by_batch[b] / baseline[b]:.1f}x" for b in args.batch_sizes if baseline.get(b)
             )
-            print(f"  {name:<12}{speedups}")
+            print(f"  {name.ljust(width)}{speedups}")
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)

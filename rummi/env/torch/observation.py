@@ -13,7 +13,7 @@ import torch
 
 from rummi.rules.observation import N_SCALARS, SLOT_FEATURES
 from rummi.env.torch.kernel import SlotSummary, summarize
-from rummi.env.torch.sim import TorchState, current_rack, meld_value
+from rummi.env.torch.sim import TorchState, current_rack, legal_actions, meld_value
 
 
 def encode(state: TorchState, summary: SlotSummary | None = None) -> dict[str, torch.Tensor]:
@@ -76,3 +76,9 @@ def encode(state: TorchState, summary: SlotSummary | None = None) -> dict[str, t
         "melded": state.melded.gather(1, rotation).to(torch.int8),
         "scalars": scalars,
     }
+
+
+def observe(state: TorchState) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """The mask and the observation of one state, sharing the table's summary."""
+    summary = summarize(state.cfg, state.table_sets)
+    return legal_actions(state, summary), encode(state, summary)

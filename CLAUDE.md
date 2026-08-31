@@ -16,7 +16,7 @@ python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
 ruff check rummi tests tools && mypy rummi                # what CI's lint job runs
-python -m rummi.bench.bench_env                           # env throughput per backend
+python -m rummi.bench.bench_env --compile                 # env throughput per backend
 ```
 
 `mypy` needs a **3.12+** interpreter: modern numpy stubs use PEP 695 `type`
@@ -237,6 +237,14 @@ design, which is why the eval at the end always uses the unshaped suite.
   torch port applies that factor to the finished block instead. Both are about
   `torch.compile` on MPS, the benchmark's headline figure, so run
   `tests/test_torch_backend.py` after touching that kernel.
+- **`torch+compile` / `torch-mps+compile`** are backend names, not a separate
+  mode: they compile the fused mask-and-observation and the transition, and are
+  kept out of `available()` so the conformance sweep and the benchmarks' default
+  arms stay eager. Two rules hold them up. Action validation runs *beside* the
+  compiled step rather than inside it, because branching on a device boolean
+  splits the graph -- JAX has the same rule for the same reason. And no host read
+  may creep back into `sim.step`: an early-out on `bool(paying.any())` used to sit
+  in `_resolve_terminal`, and deleting it made MPS **faster eager too**.
 - **Every backend** must shuffle decks with NumPy's `SeedSequence`/`Generator`.
   The permutation is part of the contract; a framework-native RNG deals
   different tiles and fails conformance.

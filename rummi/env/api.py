@@ -125,9 +125,13 @@ class TorchBackend:
     name = "torch"
     supports_inline_validation = True
 
-    def __init__(self, device: str = "cpu") -> None:
+    def __init__(self, device: str = "cpu", compiled: bool = False) -> None:
         self.device = device
-        self.name = f"torch-{device}"
+        self.compiled = compiled
+        self.name = f"torch-{device}" + ("+compile" if compiled else "")
+        # Compiled, validation moves out of the step; see `step` below.
+        self.supports_inline_validation = not compiled
+        self._graphs: dict[str, Any] = {}
 
     def _dev(self):
         import torch
@@ -152,34 +156,61 @@ class TorchBackend:
         )
         return state
 
+    def _graph(self, name: str, fn):
+        """``fn``, compiled once and kept.
+
+        ``torch.compile`` caches per callable, so a wrapper made fresh each step
+        would compile fresh each step. ``dynamic=False`` because the batch size of
+        a vector env never changes, and specialising on it is the point.
+        """
+        if not self.compiled:
+            return fn
+        hit = self._graphs.get(name)
+        if hit is None:
+            import torch
+
+            hit = self._graphs[name] = torch.compile(fn, dynamic=False)
+        return hit
+
     def legal_actions(self, cfg, state):
         from rummi.env.torch import sim
+        from rummi.env.torch.observation import observe
 
+        if self.compiled:
+            # Through `observe`, discarding the observation. Only a re-deal asks for
+            # a bare mask, and compiling a second graph for one call in a hundred
+            # costs more than the encode it saves -- inside a benchmark's timed
+            # region, it would also be the only thing measured.
+            return self._graph("observe", observe)(state)[0]
         return sim.legal_actions(state)
 
     def encode(self, cfg, state):
         from rummi.env.torch.observation import encode
 
-        return encode(state)
+        return self._graph("encode", encode)(state)
 
     def observe(self, cfg, state):
-        from rummi.env.torch.kernel import summarize
-        from rummi.env.torch.observation import encode
-        from rummi.env.torch.sim import legal_actions
+        from rummi.env.torch.observation import observe
 
-        summary = summarize(cfg, state.table_sets)
-        return legal_actions(state, summary), encode(state, summary)
+        return self._graph("observe", observe)(state)
 
     def step(self, cfg, state, actions, mask=None, active=None):
         import torch
 
         from rummi.env.torch import sim
 
+        dev = self._dev()
+        actions = torch.as_tensor(np.asarray(actions), device=dev)
         # `active` needs converting as much as `actions` does: a NumPy mask reaching
         # the torch sim makes `state.done |= ...` a byte-into-bool cast and raises.
         if active is not None:
-            active = torch.as_tensor(np.asarray(active), device=self._dev(), dtype=torch.bool)
-        out = sim.step(state, torch.as_tensor(np.asarray(actions), device=self._dev()), mask, active)
+            active = torch.as_tensor(np.asarray(active), device=dev, dtype=torch.bool)
+        if self.compiled and mask is not None:
+            # Validation branches on a device boolean, which would split the graph
+            # around it. Run it here instead, the way the JAX backend does.
+            sim.check_actions(state, actions, mask, active)
+            mask = None
+        out = self._graph("step", sim.step)(state, actions, mask, active)
         return state, StepOut(
             self.to_numpy(out.rewards), self.to_numpy(out.terminated), self.to_numpy(out.truncated)
         )
@@ -256,7 +287,12 @@ class JaxBackend:
 
 
 def available() -> list[str]:
-    """Backend names that can actually be constructed on this machine."""
+    """Backend names that can actually be constructed on this machine.
+
+    The ``+compile`` torch variants are constructible too but are deliberately not
+    listed: compiling costs seconds per graph, and this is the list that
+    benchmarks and the conformance tests sweep by default.
+    """
     names = ["numpy"]
     try:
         import torch
@@ -278,12 +314,21 @@ def available() -> list[str]:
 
 
 def get_backend(name: str = "numpy") -> Backend:
+    """Build a backend by name.
+
+    A torch name may carry a ``+compile`` suffix -- ``torch+compile``,
+    ``torch-mps+compile`` -- which puts the mask, the observation and the step
+    through ``torch.compile``.
+    """
     if name == "numpy":
         return NumpyBackend()
     if name == "jax":
         return JaxBackend()
-    if name == "torch":
-        return TorchBackend("cpu")
-    if name.startswith("torch-"):
-        return TorchBackend(name.removeprefix("torch-"))
+    base, _, suffix = name.partition("+")
+    if suffix not in ("", "compile"):
+        raise ValueError(f"unknown backend suffix {suffix!r} in {name!r}; only '+compile' exists")
+    if base == "torch":
+        return TorchBackend("cpu", compiled=bool(suffix))
+    if base.startswith("torch-"):
+        return TorchBackend(base.removeprefix("torch-"), compiled=bool(suffix))
     raise ValueError(f"unknown backend {name!r}; available: {available()}")

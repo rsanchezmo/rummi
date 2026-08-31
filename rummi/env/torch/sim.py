@@ -353,6 +353,26 @@ def _sort_slot_order(cfg: RummiConfig, table: torch.Tensor) -> torch.Tensor:
     return table.gather(1, order.unsqueeze(-1).expand_as(table))
 
 
+def check_actions(
+    state: TorchState,
+    actions: torch.Tensor,
+    mask: torch.Tensor,
+    active: torch.Tensor | None = None,
+) -> None:
+    """Raise if a live env chose a masked-out action.
+
+    Its own function because it reads one boolean off the device: inside a
+    compiled step that branch splits the graph in two, so the compiled backend
+    calls this itself and hands the step no mask.
+    """
+    actions = actions.to(mask.device, torch.int64)
+    live = ~state.done if active is None else (~state.done & active)
+    bad = ~mask.gather(1, actions.view(-1, 1)).squeeze(1) & live
+    if bool(bad.any()):
+        env = int(torch.argmax(bad.to(torch.int8)))
+        raise ValueError(f"illegal action {int(actions[env])} in env {env}")
+
+
 def step(
     state: TorchState,
     actions: torch.Tensor,
@@ -369,10 +389,7 @@ def step(
     if active is not None:
         live = live & active
     if mask is not None:
-        chosen = mask.gather(1, actions.view(-1, 1)).squeeze(1)
-        if bool((~chosen & live).any()):
-            env = int(torch.argmax((~chosen & live).to(torch.int8)))
-            raise ValueError(f"illegal action {int(actions[env])} in env {env}")
+        check_actions(state, actions, mask, active)
 
     is_place = actions < cfg.pick_offset
     is_pick = (actions >= cfg.pick_offset) & (actions < cfg.dissolve_offset)
@@ -528,9 +545,6 @@ def _resolve_terminal(state: TorchState, committed: torch.Tensor, rewards: torch
     state.truncated |= over_time & ~emptied & ~stalled
 
     paying = newly_done & ~state.truncated
-    if not bool(paying.any()):
-        return
-
     is_winner = torch.zeros_like(state.melded)
     is_winner.scatter_(1, state.winner.clamp(min=0).view(-1, 1), True)
     if cfg.reward_mode is RewardMode.WIN_LOSS:
