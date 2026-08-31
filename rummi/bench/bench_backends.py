@@ -63,6 +63,12 @@ def bench_torch(
     from rummi.env.torch import sim
 
     dev = torch.device(device)
+    if compile_it:
+        # Dynamo's recompile limit is per code object and shared across every cell
+        # of the sweep, so past the eighth shape `compile` silently falls back to
+        # eager -- publishing an eager number under a compiled name. Resetting
+        # gives each cell its own cache.
+        torch._dynamo.reset()
     legal = torch.compile(sim.legal_actions, dynamic=False) if compile_it else sim.legal_actions
 
     def sync():
