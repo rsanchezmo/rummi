@@ -54,6 +54,46 @@ class Scripted:
         return np.full(mask.shape[0], self.cfg.draw_action, dtype=np.int64)
 
 
+class Watcher:
+    """Wraps an opponent and checks the observation it is handed is this state's."""
+
+    name = "watcher"
+
+    def __init__(self, inner, state_of) -> None:
+        self.inner = inner
+        self.state_of = state_of
+        self.calls = 0
+
+    def reset(self, n_envs: int) -> None:
+        self.inner.reset(n_envs)
+
+    def act(self, obs, mask, active=None):
+        from rummi.env.observation import encode
+
+        fresh = encode(self.state_of())
+        for key, value in fresh.items():
+            np.testing.assert_array_equal(obs[key], value, err_msg=key)
+        self.calls += 1
+        return self.inner.act(obs, mask, active)
+
+
+def test_the_opponents_see_the_state_they_are_acting_on():
+    """The opponents read the observation the env encoded when the last advance
+    left the state, instead of encoding one per seat. A stale one would be silent:
+    the mask is built separately, so every action would still come out legal."""
+    env = FixedOpponentEnv(num_envs=4, cfg=C, seed=3)
+    watcher = Watcher(build("greedy", C), lambda: env.state)
+    env._seats = [None if seat is None else watcher for seat in env._seats]
+    rng = np.random.default_rng(0)
+    try:
+        obs, info = env.reset()
+        for _ in range(120):
+            obs, r, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+        assert watcher.calls, "the opponent never played, so nothing was checked"
+    finally:
+        env.close()
+
+
 @pytest.mark.parametrize("cfg,seat", [(C, 0), (FOUR, 0), (FOUR, 2), (FOUR, 3)])
 def test_the_learner_is_always_the_one_on_turn(cfg: RummiConfig, seat: int):
     """The whole point of the wrapper: every observation handed back is a

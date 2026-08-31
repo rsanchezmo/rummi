@@ -241,6 +241,33 @@ def test_the_reused_mask_always_matches_a_freshly_computed_one():
     env.close()
 
 
+def test_the_reused_observation_always_matches_a_freshly_encoded_one():
+    """`step` hands back the observation built alongside the mask rather than
+    encoding a second time, which is only sound while the two are identical --
+    including on the step after an autoreset re-deals, the one case that
+    invalidates it."""
+    from rummi.env.observation import encode
+
+    env = RummiVectorEnv(num_envs=6, cfg=C, seed=11)
+    rng = np.random.default_rng(0)
+    obs, info = env.reset()
+
+    def same_as_fresh(seen):
+        fresh = encode(env.state)
+        assert seen.keys() == fresh.keys()
+        for key, value in fresh.items():
+            np.testing.assert_array_equal(seen[key], value, err_msg=key)
+
+    same_as_fresh(obs)
+    resets_seen = 0
+    for _ in range(700):
+        obs, r, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+        same_as_fresh(obs)
+        resets_seen += int((term | trunc).sum())
+    assert resets_seen, "no episode ended, so the re-deal path was never exercised"
+    env.close()
+
+
 def test_gymnasiums_own_conversion_wrapper_drives_the_env():
     """The sanctioned interop path, and the reason this env does not grow a
     tensor-returning mode of its own: Gymnasium ships `NumpyToTorch`, `JaxToTorch`
