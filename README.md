@@ -248,30 +248,37 @@ what a training loop actually gets. Same units, different work.
 
 | backend | peak env-steps/s | vs NumPy | at batch |
 |---|---:|---:|---:|
-| NumPy (reference) | 67k | 1.0x | 4,096 |
-| torch CPU | 68k | 1.0x | 16,384 |
-| torch CPU + `compile` | 296k | 4.4x | 16,384 |
-| torch MPS | 252k | 3.8x | 16,384 |
-| torch MPS + `compile` | **349k** | **5.2x** | 1,024 |
-| JAX (`lax.scan`) | 223k | 3.3x | 4,096 |
+| NumPy (reference) | 166k | 1.0x | 4,096 |
+| torch CPU | 233k | 1.4x | 16,384 |
+| torch CPU + `compile` | 312k | 1.9x | 16,384 |
+| torch MPS | 420k | 2.5x | 16,384 |
+| torch MPS + `compile` | **786k** | **4.7x** | 16,384 |
+| JAX (`lax.scan`) | 347k | 2.1x | 16,384 |
 
 Standard config, best of three, peak over batch sizes up to 16,384, with the
 action choice held to the cheapest possible so the figure measures the *simulator*
 and not a policy. Numbers from `docs/data/backends.json`; regenerate with
 `python -m rummi.bench.bench_backends --compile --json docs/data/backends.json`.
+The sweep resets Dynamo before each compiled cell: its recompile limit is per code
+object and shared across the whole sweep, and past it `compile` falls back to eager
+silently — which publishes an eager number under a compiled name.
 
 Read the shape of the curves rather than the top row:
 
-- **Fusion is the whole story, not the framework.** Uncompiled torch CPU sits
-  exactly on the NumPy line until `compile` fuses it, then it is 4.4x.
-- **The GPU wins in the middle and gives it back.** `torch-mps+compile` peaks at
-  349k around a thousand environments and settles near 250k at sixteen thousand,
-  where `torch-cpu+compile` overtakes it at 296k. Past a few thousand envs this
-  workload stops being compute-bound.
-- **Both frameworks agree on CPU** (4.4x and 3.3x). Two implementations written
-  independently landing in the same band is decent evidence that 3–4x is the real
-  headroom over NumPy rather than a tuning artefact.
-- **JAX is fastest at small batch** — 2.2x at 64 envs, where torch is still
+- **NumPy saturates at 256 envs.** It reaches 157k there and is flat from a
+  thousand on. The reference runs out of one core's memory bandwidth long before
+  it runs out of batch, and that plateau is what everything else is measured
+  against.
+- **The GPU needs a batch to be worth having.** `torch-mps` is *six times slower
+  than NumPy* at 64 envs, where the launch overhead per step dwarfs the step, and
+  only overtakes it past a thousand.
+- **Fusion multiplies the GPU, not the CPU.** `compile` is worth 1.8x on MPS at
+  4,096 (720k against 399k) and 1.3x on torch CPU (312k against 233k at 16,384).
+  What it removes is per-kernel overhead, and the CPU has less of it to remove.
+- **Both frameworks agree on CPU** (1.9x and 2.1x). Two implementations written
+  independently landing in the same band is decent evidence that ~2x is the real
+  headroom over a vectorised NumPy reference rather than a tuning artefact.
+- **JAX is fastest at small batch** — 1.4x at 64 envs, where torch is still
   paying fixed per-call costs — and flattest thereafter. `lax.scan` buys almost
   nothing over the fused version: the per-step work already dominates, so the
   Python loop was never the bottleneck.
@@ -283,10 +290,10 @@ compared against MPS on equal hardware. On a CUDA box, re-measure.
 
 | backend | B=1024 | B=4096 | vs NumPy |
 |---|---:|---:|---:|
-| NumPy (reference) | 43k | 43k | 1.0x |
-| torch CPU | 26k | 37k | 0.9x |
-| torch MPS | 105k | 156k | 3.6x |
-| JAX CPU | **187k** | **187k** | **4.3x** |
+| NumPy (reference) | 141k | 143k | 1.0x |
+| torch CPU | 71k | 169k | 1.2x |
+| torch MPS | 143k | 288k | 2.0x |
+| JAX CPU | **361k** | **351k** | **2.4x** |
 
 `RummiVectorEnv.step`, so the mask, the transition, the observation encoding *and*
 next-step autoreset are all inside the figure. Constant `DRAW` actions in every
@@ -298,7 +305,7 @@ mask — that sampling is a real cost for a policy, just not the env's. Data in
 **Why the env numbers are lower than the simulator's**, since the tables invite
 the comparison: the env also encodes an observation every step, it is measured at
 batch 4,096 rather than at each backend's best batch, and **it does not
-`torch.compile` anything** — the simulator's 349k is a `compile`d figure and the
+`torch.compile` anything** — the simulator's 786k is a `compile`d figure and the
 env has no equivalent yet. Compiling the env's step is the obvious next gain, not
 a discrepancy.
 

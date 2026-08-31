@@ -7,242 +7,242 @@
     {
       "backend": "numpy",
       "batch_size": 64,
-      "env_steps_per_sec": 58347.35669948483,
+      "env_steps_per_sec": 123409.84486583972,
       "speedup": 1.0
     },
     {
       "backend": "numpy",
       "batch_size": 256,
-      "env_steps_per_sec": 65374.15103666658,
+      "env_steps_per_sec": 156650.10921150426,
       "speedup": 1.0
     },
     {
       "backend": "numpy",
       "batch_size": 1024,
-      "env_steps_per_sec": 66675.0227489715,
+      "env_steps_per_sec": 165763.29627203,
       "speedup": 1.0
     },
     {
       "backend": "numpy",
       "batch_size": 4096,
-      "env_steps_per_sec": 67119.78834496804,
+      "env_steps_per_sec": 165904.71178905893,
       "speedup": 1.0
     },
     {
       "backend": "numpy",
       "batch_size": 16384,
-      "env_steps_per_sec": 66499.4791758814,
+      "env_steps_per_sec": 163074.875352266,
       "speedup": 1.0
     },
     {
       "backend": "torch-cpu",
       "batch_size": 64,
-      "env_steps_per_sec": 21817.14872598309,
-      "speedup": 0.3739183736865962
+      "env_steps_per_sec": 33171.960384387785,
+      "speedup": 0.26879509021706827
     },
     {
       "backend": "torch-cpu",
       "batch_size": 256,
-      "env_steps_per_sec": 32953.75965688655,
-      "speedup": 0.504079351461156
+      "env_steps_per_sec": 55490.711223298706,
+      "speedup": 0.35423346656194676
     },
     {
       "backend": "torch-cpu",
       "batch_size": 1024,
-      "env_steps_per_sec": 44350.993141881,
-      "speedup": 0.6651815224549756
+      "env_steps_per_sec": 79120.26771841418,
+      "speedup": 0.4773087257421081
     },
     {
       "backend": "torch-cpu",
       "batch_size": 4096,
-      "env_steps_per_sec": 64009.96961937634,
-      "speedup": 0.9536676321205229
+      "env_steps_per_sec": 174860.3397667182,
+      "speedup": 1.05398055233685
     },
     {
       "backend": "torch-cpu",
       "batch_size": 16384,
-      "env_steps_per_sec": 67540.96363666993,
-      "speedup": 1.0156615431232772
+      "env_steps_per_sec": 232788.17935157762,
+      "speedup": 1.4274926094453269
     },
     {
       "backend": "torch-mps",
       "batch_size": 64,
-      "env_steps_per_sec": 19915.772876337476,
-      "speedup": 0.3413311930977898
+      "env_steps_per_sec": 19539.341303575093,
+      "speedup": 0.15832887015469907
     },
     {
       "backend": "torch-mps",
       "batch_size": 256,
-      "env_steps_per_sec": 83158.169713562,
-      "speedup": 1.272034411076648
+      "env_steps_per_sec": 79630.77449468,
+      "speedup": 0.508335263189411
     },
     {
       "backend": "torch-mps",
       "batch_size": 1024,
-      "env_steps_per_sec": 188986.45389760073,
-      "speedup": 2.834441536062557
+      "env_steps_per_sec": 235800.04202442226,
+      "speedup": 1.4225105757878795
     },
     {
       "backend": "torch-mps",
       "batch_size": 4096,
-      "env_steps_per_sec": 247751.65523908776,
-      "speedup": 3.6911864793992852
+      "env_steps_per_sec": 399001.84596769843,
+      "speedup": 2.4050061126353843
     },
     {
       "backend": "torch-mps",
       "batch_size": 16384,
-      "env_steps_per_sec": 251914.29249116807,
-      "speedup": 3.7882145185662526
+      "env_steps_per_sec": 419861.0991136056,
+      "speedup": 2.5746522767939766
     },
     {
       "backend": "torch-cpu+compile",
       "batch_size": 64,
-      "env_steps_per_sec": 37157.1850551012,
-      "speedup": 0.6368272216079547
+      "env_steps_per_sec": 43836.283990748096,
+      "speedup": 0.35520897087588943
     },
     {
       "backend": "torch-cpu+compile",
       "batch_size": 256,
-      "env_steps_per_sec": 82026.1965826512,
-      "speedup": 1.254719109646945
+      "env_steps_per_sec": 96758.4958967527,
+      "speedup": 0.6176726999028919
     },
     {
       "backend": "torch-cpu+compile",
       "batch_size": 1024,
-      "env_steps_per_sec": 126586.69019401832,
-      "speedup": 1.8985623847570563
+      "env_steps_per_sec": 156333.1267179401,
+      "speedup": 0.9431106296377317
     },
     {
       "backend": "torch-cpu+compile",
       "batch_size": 4096,
-      "env_steps_per_sec": 245208.58719066143,
-      "speedup": 3.653297980178221
+      "env_steps_per_sec": 261660.07984749915,
+      "speedup": 1.577170877341864
     },
     {
       "backend": "torch-cpu+compile",
       "batch_size": 16384,
-      "env_steps_per_sec": 295691.2795820694,
-      "speedup": 4.446520232136092
+      "env_steps_per_sec": 312148.2406321906,
+      "speedup": 1.914140605399231
     },
     {
       "backend": "torch-mps+compile",
       "batch_size": 64,
-      "env_steps_per_sec": 28858.944393826423,
-      "speedup": 0.49460585751061503
+      "env_steps_per_sec": 28695.67314976886,
+      "speedup": 0.23252337105653328
     },
     {
       "backend": "torch-mps+compile",
       "batch_size": 256,
-      "env_steps_per_sec": 123469.52449532223,
-      "speedup": 1.888659700163013
+      "env_steps_per_sec": 135116.21525081628,
+      "speedup": 0.8625350849158135
     },
     {
       "backend": "torch-mps+compile",
       "batch_size": 1024,
-      "env_steps_per_sec": 348646.3493403937,
-      "speedup": 5.229039825798511
+      "env_steps_per_sec": 413944.34591127664,
+      "speedup": 2.4972014626926993
     },
     {
       "backend": "torch-mps+compile",
       "batch_size": 4096,
-      "env_steps_per_sec": 247700.65187571204,
-      "speedup": 3.690426593758503
+      "env_steps_per_sec": 719953.4223889548,
+      "speedup": 4.339559826994824
     },
     {
       "backend": "torch-mps+compile",
       "batch_size": 16384,
-      "env_steps_per_sec": 251829.73138965224,
-      "speedup": 3.7869429130955963
+      "env_steps_per_sec": 786348.0696108019,
+      "speedup": 4.822006258856081
     },
     {
       "backend": "jax-step",
       "batch_size": 64,
-      "env_steps_per_sec": 120684.82605027212,
-      "speedup": 2.068385491254614
+      "env_steps_per_sec": 172727.23347022742,
+      "speedup": 1.399622806900059
     },
     {
       "backend": "jax-step",
       "batch_size": 256,
-      "env_steps_per_sec": 184507.46104004566,
-      "speedup": 2.822330510059862
+      "env_steps_per_sec": 280345.2568649275,
+      "speedup": 1.7896269480821987
     },
     {
       "backend": "jax-step",
       "batch_size": 1024,
-      "env_steps_per_sec": 214465.54460259245,
-      "speedup": 3.2165799989307193
+      "env_steps_per_sec": 367266.0591409706,
+      "speedup": 2.215605428950082
     },
     {
       "backend": "jax-step",
       "batch_size": 4096,
-      "env_steps_per_sec": 214220.61952082952,
-      "speedup": 3.191616433887185
+      "env_steps_per_sec": 341519.31146890396,
+      "speedup": 2.0585268964701364
     },
     {
       "backend": "jax-step",
       "batch_size": 16384,
-      "env_steps_per_sec": 211132.07444901366,
-      "speedup": 3.17494327873757
+      "env_steps_per_sec": 338831.1689179695,
+      "speedup": 2.0777643900450253
     },
     {
       "backend": "jax-fused",
       "batch_size": 64,
-      "env_steps_per_sec": 124444.35111563485,
-      "speedup": 2.132819002522759
+      "env_steps_per_sec": 160925.87360351667,
+      "speedup": 1.3039954290394016
     },
     {
       "backend": "jax-fused",
       "batch_size": 256,
-      "env_steps_per_sec": 175278.60511149102,
-      "speedup": 2.68116070850667
+      "env_steps_per_sec": 249163.2349126598,
+      "speedup": 1.590571728081256
     },
     {
       "backend": "jax-fused",
       "batch_size": 1024,
-      "env_steps_per_sec": 211257.98041843734,
-      "speedup": 3.1684725660134267
+      "env_steps_per_sec": 336394.5640171642,
+      "speedup": 2.0293670045334733
     },
     {
       "backend": "jax-fused",
       "batch_size": 4096,
-      "env_steps_per_sec": 214623.63685113576,
-      "speedup": 3.197620882653246
+      "env_steps_per_sec": 330586.25695474184,
+      "speedup": 1.9926272942450771
     },
     {
       "backend": "jax-fused",
       "batch_size": 16384,
-      "env_steps_per_sec": 204459.79100500568,
-      "speedup": 3.0746074035292734
+      "env_steps_per_sec": 335186.56845009996,
+      "speedup": 2.0554151442768056
     },
     {
       "backend": "jax-scan",
       "batch_size": 64,
-      "env_steps_per_sec": 129365.15597454607,
-      "speedup": 2.217155382733701
+      "env_steps_per_sec": 176369.27317123802,
+      "speedup": 1.4291345505131385
     },
     {
       "backend": "jax-scan",
       "batch_size": 256,
-      "env_steps_per_sec": 179880.54808847498,
-      "speedup": 2.7515546318541846
+      "env_steps_per_sec": 263102.67599252186,
+      "speedup": 1.6795562883220756
     },
     {
       "backend": "jax-scan",
       "batch_size": 1024,
-      "env_steps_per_sec": 216896.30703859762,
-      "speedup": 3.2530368659220796
+      "env_steps_per_sec": 343307.0321626552,
+      "speedup": 2.0710678412141528
     },
     {
       "backend": "jax-scan",
       "batch_size": 4096,
-      "env_steps_per_sec": 222672.09548208598,
-      "speedup": 3.317532742171999
+      "env_steps_per_sec": 330192.95239551214,
+      "speedup": 1.9902566288493302
     },
     {
       "backend": "jax-scan",
       "batch_size": 16384,
-      "env_steps_per_sec": 214608.31143797768,
-      "speedup": 3.227217928585126
+      "env_steps_per_sec": 347422.84368214116,
+      "speedup": 2.1304498496881026
     }
   ]
 }

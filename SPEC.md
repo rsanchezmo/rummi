@@ -230,12 +230,12 @@ than a hope.
 
 | backend | state | peak env-steps/s | vs NumPy | at batch |
 |---|---|---:|---:|---:|
-| NumPy (`rummi/env/numpy/`) | reference | 67k | 1.0x | 4,096 |
-| torch CPU | conformant | 68k | 1.0x | 16,384 |
-| torch CPU + `compile` | conformant | 296k | 4.4x | 16,384 |
-| torch MPS | conformant | 252k | 3.8x | 16,384 |
-| torch MPS + `compile` | conformant | **349k** | **5.2x** | 1,024 |
-| JAX CPU (`lax.scan`) | conformant | 223k | 3.3x | 4,096 |
+| NumPy (`rummi/env/numpy/`) | reference | 166k | 1.0x | 4,096 |
+| torch CPU | conformant | 233k | 1.4x | 16,384 |
+| torch CPU + `compile` | conformant | 312k | 1.9x | 16,384 |
+| torch MPS | conformant | 420k | 2.5x | 16,384 |
+| torch MPS + `compile` | conformant | **786k** | **4.7x** | 16,384 |
+| JAX CPU (`lax.scan`) | conformant | 347k | 2.1x | 16,384 |
 
 Standard config, `A=2400`, best of three, action choice held to the cheapest
 possible so the figure measures the simulator. Data in `docs/data/backends.json`;
@@ -247,18 +247,22 @@ constant across a run. Every timed repeat therefore builds a fresh state and
 advances it to the same point before the clock starts, with compilation warmed
 outside the timed region. Reusing one state across repeats measures a later phase
 of the game each time; an earlier version of this table did exactly that and
-overstated the MPS figure by roughly a factor of two.
+overstated the MPS figure by roughly a factor of two. Dynamo is reset before each
+compiled cell for the same kind of reason: its recompile limit is per code object
+and shared across the sweep, and past it `compile` falls back to eager without
+saying so.
 
 Read the shape rather than the top row:
 
-* **Fusion is the story, not the framework.** Uncompiled torch CPU sits exactly
-  on the NumPy line; compiled it is 4.4x.
-* **The GPU wins in the middle and gives it back.** MPS peaks near a thousand
-  environments and is overtaken by compiled CPU at sixteen thousand — past a few
-  thousand envs this stops being compute-bound.
-* **Both frameworks agree on CPU** (4.4x, 3.3x), which is decent evidence that
-  3–4x is the real headroom over NumPy.
-* **JAX leads at small batch** (2.2x at 64 envs) and is flattest thereafter.
+* **NumPy saturates at 256 envs** and is flat from a thousand on: the reference
+  runs out of one core's bandwidth before it runs out of batch.
+* **The GPU needs a batch.** MPS is six times slower than NumPy at 64 envs and
+  only overtakes it past a thousand.
+* **Fusion multiplies the GPU, not the CPU** — 1.8x on MPS at 4,096, 1.3x on
+  torch CPU at 16,384. It removes per-kernel overhead, and the CPU has less.
+* **Both frameworks agree on CPU** (1.9x, 2.1x), which is decent evidence that
+  ~2x is the real headroom over a vectorised NumPy reference.
+* **JAX leads at small batch** (1.4x at 64 envs) and is flattest thereafter.
   `lax.scan` buys almost nothing over a fused step.
 * JAX is CPU-only here — no production Metal backend — so it cannot be compared
   against MPS on equal hardware. Re-measure on CUDA.
@@ -268,8 +272,21 @@ Read the shape rather than the top row:
 - The NumPy reference mutates buffers to avoid per-step allocation. Arithmetic is
   index-and-mask only, so the JAX port is the same expressions written
   functionally with `.at[]`.
-- Duplicate-real-kind detection sorts reals to the front of each slot; `torch.sort`
-  and `jnp.sort` substitute directly. No popcount is required anywhere.
+- A slot's whole summary comes from one gather of a packed per-kind code and two
+  reductions over it, a bitwise OR and a sum (`rules/encoding.SlotCode`). The
+  fields — colours present, numbers present, count of real tiles — are padded so a
+  slot's sum can never carry out of its own field, which is what makes `sum == or`
+  exactly "no duplicate": no sort, no popcount. Keep the packing under 31 bits, as
+  the builder asserts: JAX is 32-bit unless x64 is enabled globally.
+- Reading a bit index out of those masks is the exponent of a float, via `frexp`.
+  MPS has no `frexp`, so the torch port counts thresholds instead — same value,
+  one small pass over a static, tiny axis.
+- The ASSIGN predicate factors: a numbered kind *is* a (colour, number) pair, and
+  every term constrains only one of the two. So the halves are `(S, C)` and
+  `(S, N)`, only their product is `(S, K)`, and the product can be written
+  straight into the kind-major action ids without ever building the `(S, K)` form.
+  Inductor's MPS backend fails codegen if the per-slot factor is selected into a
+  code before the product, so the torch port applies it to the finished block.
 - `counts_of` uses an offset-`bincount` scatter; use `scatter_add` / `bincount`
   equivalents rather than a Python loop over the batch.
 - Effects should be applied as masked whole-batch updates, not by selecting the
@@ -298,6 +315,6 @@ Read the shape rather than the top row:
 - `jnp.lexsort` exists, so the JAX port expresses canonical slot order directly;
   the torch port needed the packed-integer-key workaround instead.
 - `max_sets` is the dominant throughput knob — it drives `A` and the `(B, S, K)`
-  ASSIGN predicate. Measured: `S=16` → 133k, `S=24` → 91k, `S=35` → 63k
+  ASSIGN predicate. Measured: `S=16` → 317k, `S=24` → 226k, `S=35` → 164k
   env-steps/s in NumPy. The default is the provable bound `n_tiles // min_set`;
   real games peak near 20 occupied slots.
