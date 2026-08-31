@@ -77,6 +77,72 @@ class Watcher:
         return self.inner.act(obs, mask, active)
 
 
+def test_the_opponents_play_the_same_games_either_way():
+    """A planner replaying a turn it already decided cannot be told anything by a
+    fresh mask, so the env stops building one mid-turn -- and the games have to come
+    out identical to the ones where it did.
+
+    Both arms are the same agent; only its answer to `needs_mask_per_action`
+    differs. The mask count is asserted too: without it the comparison would still
+    pass with nothing skipped.
+    """
+    def drive(per_action: bool, steps: int = 150):
+        agent = build("greedy", C)
+        agent.needs_mask_per_action = per_action
+        env = FixedOpponentEnv(num_envs=8, cfg=C, seed=7, opponent=agent)
+        masks = 0
+        legal_actions, observe = env.backend.legal_actions, env.backend.observe
+
+        def count_legal(*a, **kw):
+            nonlocal masks
+            masks += 1
+            return legal_actions(*a, **kw)
+
+        def count_observe(*a, **kw):
+            nonlocal masks
+            masks += 1
+            return observe(*a, **kw)
+
+        advances = 0
+        step_backend = env.backend.step
+
+        def count_step(*a, **kw):
+            nonlocal advances
+            advances += 1
+            return step_backend(*a, **kw)
+
+        env.backend.legal_actions, env.backend.observe = count_legal, count_observe
+        env.backend.step = count_step
+        rng = np.random.default_rng(0)
+        seen = []
+        try:
+            obs, info = env.reset()
+            for _ in range(steps):
+                actions = sample_legal(info["action_mask"], rng)
+                obs, r, term, trunc, info = env.step(actions)
+                seen.append(
+                    (r.copy(), term.copy(), info["current_player"].copy(),
+                     info["action_mask"].copy(), env.state.digest())
+                )
+        finally:
+            env.close()
+        return seen, masks, advances
+
+    checked, checked_masks, advances = drive(True)
+    trusted, trusted_masks, _ = drive(False)
+
+    # Absolute, not relative: comparing the two arms to each other passes for free
+    # if a bug makes the reference arm skip masks as well.
+    assert checked_masks >= advances, "the checked arm skipped a mask it needs"
+    assert trusted_masks < advances, "nothing was skipped, so nothing was tested"
+    for i, (a, b) in enumerate(zip(checked, trusted, strict=True)):
+        np.testing.assert_array_equal(a[0], b[0], err_msg=f"reward at step {i}")
+        np.testing.assert_array_equal(a[1], b[1], err_msg=f"terminated at step {i}")
+        np.testing.assert_array_equal(a[2], b[2], err_msg=f"current_player at step {i}")
+        np.testing.assert_array_equal(a[3], b[3], err_msg=f"mask at step {i}")
+        assert a[4] == b[4], f"state digest differs at step {i}"
+
+
 def test_the_opponents_see_the_state_they_are_acting_on():
     """The opponents read the observation the env encoded when the last advance
     left the state, instead of encoding one per seat. A stale one would be silent:

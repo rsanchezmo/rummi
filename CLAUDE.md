@@ -123,6 +123,17 @@ backend's array type and the official wrapper converts at the boundary. They are
 lazily imported behind `array_api_compat`, which is why they do not show up in
 `dir(gymnasium.wrappers)`.
 
+**A planning opponent gets a mask only where it decides.** The seats answer for
+themselves through `needs_mask_per_action`, and where every one of them plans a
+whole turn `FixedOpponentEnv` rebuilds the mask only at a turn boundary — worth
+**+17%** on a PPO step, since a mask is the most expensive thing in one. The trap,
+if you touch this: a stale mask is worse than no mask. Handing a planner the mask
+from one action ago makes it abandon nearly every plan, because an `ASSIGN` is
+illegal until its own `PLACE` has happened — so the replay steps are handed an
+all-true view (`np.broadcast_to`, free) that says *unchecked*, and the engine
+validates nothing on them. `test_the_opponents_play_the_same_games_either_way`
+holds the two paths to identical games, and fails if either arm drifts.
+
 `FixedOpponentEnv` is a **subclass, not a wrapper**, and that is not a style
 choice. An opponent's whole turn must run inside one `step`, but the base env
 re-deals a finished episode on the *following* step -- driving it from outside

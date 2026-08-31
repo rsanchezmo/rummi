@@ -162,41 +162,52 @@ class RummiVectorEnv(VectorEnv):
             self._obs = None
         return just_reset
 
-    def _advance(self, actions: np.ndarray, active: np.ndarray):
+    def _advance(self, actions: np.ndarray, active: np.ndarray, mask: bool = True):
         """Apply one micro-action to every ``active`` env.
 
         The mask an advance leaves behind is the mask its successor needs, so this
         recomputes one only after a re-deal. Doing it unconditionally costs a
         second :func:`legal_actions` per step, which measures **83% slower** on the
         standard config, for a value already in hand.
+
+        ``mask=False`` skips the mask on both sides of the step and validates
+        nothing, for a caller that has undertaken its actions are legal and wants
+        no mask until it asks for one. The observation is still refreshed; only the
+        most expensive half is dropped. :class:`~rummi.env.fixed_opponent.FixedOpponentEnv`
+        uses it while a planning opponent replays a turn it already planned.
         """
-        if self.wants_mask and not self._mask_fresh:
+        if self.wants_mask and mask and not self._mask_fresh:
             self._mask = self.backend.legal_actions(self.cfg, self.state)
             self._mask_fresh = True
         self.state, result = self.backend.step(
             self.cfg,
             self.state,
             actions,
-            self._mask if self.validate_actions else None,
+            self._mask if self.validate_actions and self._mask_fresh else None,
             active,
         )
         self._steps += 1
-        self._observe()
+        self._observe(mask)
         self._render()
         return result
 
-    def _observe(self) -> None:
-        """Refresh the mask and the observation together.
+    def _observe(self, mask: bool = True) -> None:
+        """Refresh the observation, and the mask beside it unless told not to.
 
         Both describe the state as it now stands and both are built on the same
         summary of the table, so a backend computing them in one call does that
         work once. The step that follows consumes the mask this leaves behind.
         """
-        if self.wants_mask:
+        if self.wants_mask and mask:
             self._mask, self._obs = self.backend.observe(self.cfg, self.state)
-        else:
-            self._mask, self._obs = None, self.backend.encode(self.cfg, self.state)
-        self._mask_fresh = True
+            self._mask_fresh = True
+            return
+        if not self.wants_mask:
+            self._mask = None
+        self._obs = self.backend.encode(self.cfg, self.state)
+        # What `_mask` holds now describes an older state; the next caller to need
+        # one recomputes it.
+        self._mask_fresh = not self.wants_mask
 
     def _encode(self) -> dict[str, Any]:
         """The observation in the backend's own array type.

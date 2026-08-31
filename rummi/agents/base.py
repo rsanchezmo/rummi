@@ -183,6 +183,12 @@ class PlanningAgent:
 
     name = "planning"
 
+    needs_mask_per_action = False
+    """A plan is decided at the turn boundary, and :meth:`act` reads the mask after
+    that only to abandon one that has gone stale. So a caller driving this agent may
+    skip rebuilding the mask mid-turn -- which is the most expensive thing in a step.
+    A subclass that overrides :meth:`act` to *choose* from the mask must set this."""
+
     def __init__(self, cfg: RummiConfig) -> None:
         self.cfg = cfg
         self._plans: dict[int, list[int]] = {}

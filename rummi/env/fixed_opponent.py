@@ -50,6 +50,9 @@ class _Pool:
         self, members: Sequence[Agent], assignment: np.ndarray, draw_action: int
     ) -> None:
         self.members = tuple(members)
+        self.needs_mask_per_action = any(
+            getattr(member, "needs_mask_per_action", True) for member in members
+        )
         self.assignment = assignment
         self.draw_action = draw_action
 
@@ -92,6 +95,17 @@ class FixedOpponentEnv(RummiVectorEnv):
 
     Note that ``optimal`` costs a CP-SAT solve per opponent turn per env and cannot
     batch, which makes it an evaluation opponent rather than a training one.
+
+    *What the opponents cost.* A mask is the most expensive thing in a step, and an
+    opponent that plans whole turns cannot learn anything from one built mid-plan --
+    it decided at the turn boundary and is replaying. So when every seat says so
+    (:attr:`~rummi.agents.base.PlanningAgent.needs_mask_per_action`), the mask is
+    rebuilt only where a seat takes over, and the actions between are taken on
+    trust: nothing checks them, and ``opponent_illegal`` counts only what a current
+    mask covers. Every bundled planner is exact mid-turn -- nobody else touches the
+    table during a turn -- and `test_the_opponents_play_the_same_games_either_way`
+    holds the two paths to identical games. An opponent that chooses per action,
+    such as the learned one or a pool holding it, keeps a mask before each action.
     """
 
     def __init__(
@@ -122,6 +136,15 @@ class FixedOpponentEnv(RummiVectorEnv):
             None if seat == learner_seat else self._seat_agent()
             for seat in range(self.cfg.n_players)
         ]
+        # Rebuilding the mask before every opponent action is the most expensive
+        # thing in the loop, and an opponent that plans whole turns cannot learn
+        # anything from one built mid-plan. Each seat answers for itself; anything
+        # that does not answer is taken to choose per action.
+        self._mask_per_action = any(
+            getattr(agent, "needs_mask_per_action", True)
+            for agent in self._seats
+            if agent is not None
+        )
         self._illegal = 0
 
     def _seat_agent(self) -> Agent:
@@ -185,6 +208,10 @@ class FixedOpponentEnv(RummiVectorEnv):
         Returns the ``(N, P)`` reward accumulated over the advance, which the
         caller adds to the learner's own -- a macro step pays out for everything
         that happened inside it.
+
+        Where every seat plans, the mask is rebuilt only where a seat takes over --
+        which is where a planner decides; the rest of a turn is the plan it already
+        made, replayed. See the class docstring for what that gives up.
         """
         cfg = self.cfg
         total = np.zeros((self.num_envs, cfg.n_players), np.float32)
@@ -196,20 +223,42 @@ class FixedOpponentEnv(RummiVectorEnv):
         for _ in range(budget):
             waiting = ~self.state.done & (self.state.current != self.learner_seat)
             if not waiting.any():
+                # The learner is up next and chooses from the mask, so it must be
+                # the mask of this state.
+                self._refresh_mask()
                 return total
+            deciding = self._mask_per_action or bool(
+                (waiting & (self.state.micro_count == 0)).any()
+            )
+            if deciding:
+                self._refresh_mask()
+                mask = self.required_mask
+            else:
+                # No seat decides this step -- every acting env is mid-plan -- so the
+                # mask is only what a planner abandons a stale plan against. The one
+                # in hand describes the state before the last action, where an ASSIGN
+                # is still illegal because its PLACE had not happened yet: it would
+                # abandon nearly every plan. Say "unchecked" rather than something
+                # false, which is what a planning opponent asked for.
+                mask = np.broadcast_to(np.True_, self.required_mask.shape)
             # The env encoded this state when the last advance left it; the
             # opponents read the same observation the learner would.
-            actions, illegal = act_by_seat(
-                self._seats, self.state, self.required_mask, obs=self._encode()
-            )
-            self._illegal += illegal
-            total += self._advance(actions, active=waiting).rewards
+            actions, illegal = act_by_seat(self._seats, self.state, mask, obs=self._encode())
+            # An illegal proposal is only visible against a mask of this state.
+            self._illegal += illegal if deciding else 0
+            total += self._advance(actions, active=waiting, mask=deciding).rewards
 
         raise RuntimeError(
             f"seat {self.learner_seat} did not get control back within {budget} "
             f"actions: {self.opponent!r} is not committing its turn. DRAW is never "
             "masked, so a well-behaved agent always ends one."
         )
+
+    def _refresh_mask(self) -> None:
+        """Bring the mask up to date if an advance was told to leave it behind."""
+        if not self._mask_fresh:
+            self._mask = self.backend.legal_actions(self.cfg, self.state)
+            self._mask_fresh = True
 
     def _info(self, rewards_all: np.ndarray) -> dict[str, Any]:
         info = super()._info(rewards_all)
