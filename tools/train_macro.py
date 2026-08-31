@@ -402,6 +402,30 @@ def restore(
     return checkpoint, saved_hidden, saved_head
 
 
+def transfer_to_memory(net: MacroNet, state: dict[str, torch.Tensor]) -> None:
+    """Memory-less weights into a fresh `--memory` net of the same architecture.
+
+    Every tensor whose shape survives copies whole; the heads' input grew by the
+    cell's width, so their weight matrices take the source in their first columns
+    and ZERO in the new ones. Zero, not small: with the memory columns at zero the
+    warm-started net's forward equals the source's exactly, whatever the cell
+    emits, and the cell earns gradient only as those columns move off zero -- the
+    same gating that makes a zero-init residual branch safe.
+    """
+    out = dict(net.state_dict())
+    hidden = net.trunk[0].out_features
+    grown = ("query.weight", "v.weight", "pi.weight")
+    for name, tensor in state.items():
+        if name in grown and name in out:
+            wide = out[name].clone()
+            wide.zero_()
+            wide[:, :hidden] = tensor
+            out[name] = wide
+        elif name in out and out[name].shape == tensor.shape:
+            out[name] = tensor
+    net.load_state_dict(out)
+
+
 def transfer_from_macro(
     net: MacroNet, state: dict[str, torch.Tensor], cfg: RummiConfig
 ) -> None:
@@ -669,6 +693,24 @@ def main() -> None:
              "near-uniform, so the run begins knowing how to play a macro and spends "
              "its exploration on the block it does not know",
     )
+    p.add_argument(
+        "--explore-eps", type=float, default=0.0,
+        help="mix this much uniform-over-legal into the ROLLOUT sampler, storing "
+             "the mixture's log-prob so PPO's ratio importance-corrects it. The "
+             "entropy bonus cannot reopen a converged policy -- its gradient on a "
+             "suppressed action scales with that action's probability, so it "
+             "vanishes exactly where it is needed (measured: 33x the recipe's "
+             "coefficient moved H 0.134 -> 0.143 in 40 updates). Forcing the "
+             "*behaviour* to explore has no such corner",
+    )
+    p.add_argument(
+        "--init-memory-from", type=pathlib.Path, default=None,
+        help="warm-start a --memory net from a memory-less checkpoint of the same "
+             "space and architecture. The heads' new memory columns start at ZERO, "
+             "so the first forward is bitwise the source net's and the cell grows "
+             "in from nothing -- gradient reaches the cell only once its columns "
+             "move off zero",
+    )
     p.add_argument("--lr", type=float, default=3e-4)
     p.add_argument(
         "--lr-decay", action="store_true",
@@ -806,11 +848,13 @@ def main() -> None:
     scale = feature_scale(cfg)
     hybrid = args.space == "hybrid"
     macros = n_hybrid_actions(cfg) if hybrid else n_macros(cfg, args.repartition)
-    if args.init_from and args.init_from_macro:
-        p.error("--init-from and --init-from-macro are two warm starts; pass one")
+    if sum(x is not None for x in (args.init_from, args.init_from_macro, args.init_memory_from)) > 1:
+        p.error("--init-from, --init-from-macro and --init-memory-from are warm starts; pass one")
     if args.init_from_macro and not hybrid:
         p.error("--init-from-macro seeds a hybrid run; within the macro space that is "
                 "--init-from")
+    if args.init_memory_from and not recurrent:
+        p.error("--init-memory-from seeds a --memory net; pass --memory lstm")
     if args.init_from:
         checkpoint, hidden, head = restore(
             args.init_from, args.config, args.space, macros, args.hidden, args.head,
@@ -821,6 +865,13 @@ def main() -> None:
         checkpoint, hidden, head = restore(
             args.init_from_macro, args.config, "macro", n_macros(cfg),
             args.hidden, args.head,
+        )
+    elif args.init_memory_from:
+        # Validated as a memory-LESS checkpoint of this run's own space and
+        # architecture; the cell and the heads' new columns are this run's to grow.
+        checkpoint, hidden, head = restore(
+            args.init_memory_from, args.config, args.space, macros, args.hidden,
+            args.head, args.history, "none", 0, args.oracle_rack, args.repartition,
         )
     else:
         checkpoint = None
@@ -844,6 +895,8 @@ def main() -> None:
     )
     if args.init_from_macro:
         transfer_from_macro(net, checkpoint["state"], cfg)
+    elif args.init_memory_from:
+        transfer_to_memory(net, checkpoint["state"])
     elif checkpoint is not None:
         net.load_state_dict(checkpoint["state"])
     opt = torch.optim.Adam(net.parameters(), lr=args.lr)
@@ -1109,12 +1162,22 @@ def main() -> None:
         masked = torch.where(
             torch.as_tensor(legal)[None], logits, torch.full_like(logits, MASKED)
         )
-        macro = int(
-            torch.multinomial(torch.softmax(masked[0], -1), 1, generator=generator)
-        )
-        # The log-prob under the policy that *acted*: reusing a batch means scoring
-        # against this, and the stored mask is what keeps the ratio meaningful.
-        behaviour = float(torch.log_softmax(masked[0], -1)[macro])
+        if args.explore_eps > 0.0:
+            # The behaviour policy is the MIXTURE, and its log-prob is what gets
+            # stored: the PPO ratio then importance-corrects the forced exploration
+            # instead of mistaking it for the policy's own preference.
+            legal_row = torch.as_tensor(legal, dtype=torch.float32)
+            probs = (1.0 - args.explore_eps) * torch.softmax(masked[0], -1)
+            probs = probs + args.explore_eps * legal_row / legal_row.sum()
+            macro = int(torch.multinomial(probs, 1, generator=generator))
+            behaviour = float(torch.log(probs[macro]))
+        else:
+            macro = int(
+                torch.multinomial(torch.softmax(masked[0], -1), 1, generator=generator)
+            )
+            # The log-prob under the policy that *acted*: reusing a batch means
+            # scoring against this, and the stored mask keeps the ratio meaningful.
+            behaviour = float(torch.log_softmax(masked[0], -1)[macro])
         if open_choice[e] is not None:
             prev_x, prev_legal, prev_a, prev_lp, prev_pre = open_choice[e]
             steps.append(
@@ -1139,6 +1202,8 @@ def main() -> None:
         + (f" memory={args.memory}:{net.memory_dim}d" if recurrent else "")
         + (" oracle_rack" if args.oracle_rack else "")
         + (" repartition" if args.repartition else "")
+        + (f" explore_eps={args.explore_eps}" if args.explore_eps else "")
+        + (f" init_memory_from={args.init_memory_from}" if args.init_memory_from else "")
         + (f" snapshot_every={args.snapshot_every} pool={len(snapshots)}"
            f" gate={args.snapshot_gate:+.2f}" if snapshots else "")
         + (f" init_from={args.init_from}" if args.init_from else "")
@@ -1544,6 +1609,10 @@ def main() -> None:
                     "memory_dim": net.memory_dim,
                     "oracle_rack": bool(args.oracle_rack),
                     "repartition": bool(args.repartition),
+                    "explore_eps": args.explore_eps,
+                    "init_memory_from": (
+                        str(args.init_memory_from) if args.init_memory_from else None
+                    ),
                     "diagnostic": diagnostic,
                     "clone": args.clone,
                     "seed": args.seed,

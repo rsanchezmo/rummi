@@ -198,6 +198,31 @@ def test_the_gradient_reaches_a_write_through_the_decisions_that_read_it():
     )
 
 
+@pytest.mark.parametrize("head", ["flat", "pointer"])
+def test_a_memoryless_checkpoint_seeds_a_memory_net_exactly(head: str):
+    """The claim --init-memory-from rests on: with the heads' memory columns at
+    zero, the warm-started net's forward equals the source's bitwise, whatever the
+    fresh cell emits."""
+    torch.manual_seed(0)
+    source = build(head)
+    with torch.no_grad():
+        for parameter in source.parameters():
+            parameter.add_(torch.randn_like(parameter) * 0.1)
+
+    target = trainer.MacroNet(
+        TINY_GROUPS, MACROS, HIDDEN, head=head, memory="lstm", memory_dim=8
+    )
+    trainer.transfer_to_memory(target, source.state_dict())
+
+    x = torch.randn(6, feature_dim(TINY_GROUPS))
+    state = (torch.randn(6, 8), torch.randn(6, 8))
+    with torch.no_grad():
+        theirs, their_value = source(x)
+        mine, my_value, _ = target(x, state)
+    assert torch.allclose(mine, theirs, atol=1e-6), "a memory column moved the logits"
+    assert torch.allclose(my_value, their_value, atol=1e-6), "the critic moved"
+
+
 def test_memory_is_architecture_the_checkpoint_owns(tmp_path: Path):
     """The cell is tensors that exist or do not, so resuming with the flag flipped
     would load one run's weights into a net of another shape."""
