@@ -120,6 +120,10 @@ class HybridAgent:
 
     name = "hybrid"
 
+    needs_mask_per_action = True
+    """The primitives are offered straight out of the mask, so unlike `MacroAgent`
+    this one cannot be handed a stale or unchecked view: it would choose from it."""
+
     def __init__(self, cfg: RummiConfig, choose: Choose | None = None) -> None:
         self.cfg = cfg
         self.macro = MacroAgent(cfg)
@@ -139,8 +143,10 @@ class HybridAgent:
         # The workbench goes to `legal_macros`, which offers a macro only if its
         # expansion lays every held tile down. That is what keeps a way out of a
         # half-built turn on offer instead of only before one starts.
+        # `can_end` is dead here: the slice stops below the END_TURN macro, because
+        # in this space ending the turn is the primitive at its own id.
         out[self.macro_offset :] = self.macro.legal_macros(
-            obs, env, mask, held=np.asarray(obs["workbench"])[env]
+            obs, env, held=np.asarray(obs["workbench"])[env], can_end=False
         )[: self.n_macro]
         return out
 

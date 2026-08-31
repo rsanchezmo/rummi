@@ -337,7 +337,7 @@ def test_touching_the_table_is_illegal_until_the_opening_meld():
         obs = encode(state)
         melded = has_melded(obs)
         for env in range(16):
-            legal = agent.legal_macros(obs, env, mask)
+            legal = agent.legal_macros(obs, env)
             # extend_offset..end_macro spans EXTEND and STEAL, the two that touch it.
             offered = bool(legal[agent.extend_offset : agent.end_macro].any())
             if melded[env]:
@@ -428,7 +428,7 @@ def test_a_macro_plays_a_set_without_ending_the_turn():
     # No expansion of a set may commit the turn.
     obs = encode(state)
     for env in range(16):
-        legal = agent.legal_macros(obs, env, legal_actions(state))
+        legal = agent.legal_macros(obs, env)
         for macro in np.flatnonzero(legal[:n_templates])[:3]:
             assert cfg.end_turn_action not in agent.expand(obs, env, int(macro))
 

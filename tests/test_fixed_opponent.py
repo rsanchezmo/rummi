@@ -13,6 +13,7 @@ gym = pytest.importorskip("gymnasium")
 from dataclasses import replace
 
 from rummi.agents import build
+from rummi.agents.macro import MacroAgent, by_value
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.rules.config import STANDARD_4P, TINY_GROUPS, RummiConfig
 
@@ -77,7 +78,12 @@ class Watcher:
         return self.inner.act(obs, mask, active)
 
 
-def test_the_opponents_play_the_same_games_either_way():
+@pytest.mark.parametrize(
+    "make_agent",
+    [lambda: build("greedy", C), lambda: MacroAgent(C, choose=by_value(C))],
+    ids=["greedy", "macro"],
+)
+def test_the_opponents_play_the_same_games_either_way(make_agent):
     """A planner replaying a turn it already decided cannot be told anything by a
     fresh mask, so the env stops building one mid-turn -- and the games have to come
     out identical to the ones where it did.
@@ -85,9 +91,14 @@ def test_the_opponents_play_the_same_games_either_way():
     Both arms are the same agent; only its answer to `needs_mask_per_action`
     differs. The mask count is asserted too: without it the comparison would still
     pass with nothing skipped.
+
+    `MacroAgent` is the harder case and the reason this is parametrised: it decides
+    again *mid-turn*, every time an expansion runs out, where a planner decides only
+    at the boundary. It may skip the mask anyway because `can_end_turn` reads the one
+    bit it wanted from the observation -- and this is what holds that claim.
     """
     def drive(per_action: bool, steps: int = 150):
-        agent = build("greedy", C)
+        agent = make_agent()
         agent.needs_mask_per_action = per_action
         env = FixedOpponentEnv(num_envs=8, cfg=C, seed=7, opponent=agent)
         masks = 0
@@ -141,6 +152,36 @@ def test_the_opponents_play_the_same_games_either_way():
         np.testing.assert_array_equal(a[2], b[2], err_msg=f"current_player at step {i}")
         np.testing.assert_array_equal(a[3], b[3], err_msg=f"mask at step {i}")
         assert a[4] == b[4], f"state digest differs at step {i}"
+
+
+def test_a_macro_opponent_commits_its_turn_with_the_micro_budget_spent():
+    """The mask a caller skips is also the one that used to say "budget spent".
+
+    At `max_micro_per_turn` the env masks everything but DRAW. A `MacroAgent`
+    replaying an expansion against an unchecked mask kept proposing actions the
+    engine ignored, so the seat never committed and `_run_opponents` ran out of its
+    own budget -- a crash 25 updates into a training run, not a slow game. It reads
+    the cap out of the observation now.
+
+    The cap is lowered so a turn can actually reach it: at the standard 155 this
+    took a particular trained opponent in a particular state to find.
+    """
+    cfg = replace(C, max_micro_per_turn=6)
+    agent = MacroAgent(cfg, choose=by_value(cfg))
+    assert not agent.needs_mask_per_action, "this is about the mask being skipped"
+    env = FixedOpponentEnv(num_envs=8, cfg=cfg, seed=4, opponent=agent)
+    rng = np.random.default_rng(0)
+    peak = 0
+    try:
+        obs, info = env.reset()
+        for _ in range(200):
+            obs, r, term, trunc, info = env.step(sample_legal(info["action_mask"], rng))
+            peak = max(peak, int(np.asarray(env.state.micro_count).max()))
+    finally:
+        env.close()
+    assert peak == cfg.max_micro_per_turn, (
+        f"the budget was never spent (peak {peak}), so nothing was tested"
+    )
 
 
 def test_the_opponents_see_the_state_they_are_acting_on():

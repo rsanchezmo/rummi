@@ -74,10 +74,14 @@ commonest move in the game, and no policy inside it could have recovered that.
 | macro space, pointer, 300 updates | **+26.72** | 80.8% | **Beat `by_value` once. Did not replicate — see below.** |
 | macro space, same recipe, 3 seeds on 713 | +22.48 / +25.06 / +24.12 | 74–79% | Every seed below `by_value`'s +25.23. |
 | + jokers (`45287a7`), same recipe, 1 seed | +17.38 | 62.9% | The capability that lifted the heuristic +4.4 cost the fixed-budget learner ~8: `EXTEND` is legal far more often, every decision is wider, and 300 updates were tuned on the narrower space. Below `first_legal`. |
+| + jokers, pre-joker weights **zero-shot**, seeds 0/1 | **+32.99** / +22.11 | **89.2%** / 74.2% | Transfer is a seed coin-toss decided in states neither net ever saw: s0 ranks the new joker appends above `DRAW` (takes 41% of them), s1 below (draws past 36%). **s0 zero-shot sits above `rearrange`** — the strongest agent produced, and the two nets were one point apart on the space they were trained on. |
+| + jokers, s0 warm-started, 300 more updates vs `greedy` | +20.17 | 68.3% | Finetuning destroyed the transfer bonus: 13 points below the same weights untouched. Unanchored RL walks off the lucky extrapolation ridge, and the sampled-policy terminal reward (~0.0) never shows it. |
 | macro space, cloned from `by_value` | +22.59 | 80.0% | Cloning **hurts** here: it arrives confident, so RL settles near the teacher. |
 | macro space, `--epochs 4` | +7.53 | 50.8% | Reusing a noisy bootstrapped advantage amplifies its error. |
 | macro space, one step per minibatch | -393.95 | 0.0% | Four noisy small-batch steps are far worse than one averaged step. |
 | hybrid space, any recipe | ~-1.0 term. | 0.0% | Collapses to stalling. A macro is on offer in **4.9%** of decisions. |
+| self-play A/B control: `--opponent greedy`, 3 seeds | -19.59 / +9.82 / **+30.51** | 33.5-84.6% | A **50-point spread** on one recipe, where the `3 seeds on 713` row above spread 2.6. One seed of three beat `by_value`. |
+| self-play A/B: `--opponent greedy,self`, 3 seeds | -6.66 / **-72.24** / -17.71 | 9.8-42.5% | Worse on two seeds of three -- and the control's own spread is larger than the gap between the arms, so the sign is not evidence. **Inconclusive.** |
 
 **The one apparent win did not replicate, now measured across seeds.** +26.72 was
 one seed on the 730-action layout. On the current 713 layout the same recipe scored
@@ -91,6 +95,35 @@ tweak. Note also that a layout change re-baselines everything — scores are not
 comparable across it. The checkpoints behind these rows load with
 `tools/eval_macro.py`; `by_value` reproducing its published +25.23 / 80.8% inside
 every training eval is the check that the harness did not move under them.
+
+**Self-play is unresolved, and 300 updates is why.** Six runs, three seeds per arm,
+matched on everything but `--opponent`, scored on `standard-greedy` at n=480 with
+`by_value` measured in the same run at **+28.01 / 82.1%** -- the same agent as the
+published +29.60 / 85.4% (n=240), on twice the deals. The A/B answers nothing,
+because the curves say neither arm was still training by the time it was scored:
+
+```bash
+python tools/plot_league.py runs/*.json --out league.png
+```
+
+Every run rises to a terminal reward of ~+0.05 against `greedy` by **update 60-80
+and then degrades** -- five of six end between -0.02 and -0.12, and the only seed
+that stayed flat is the only one that beat `by_value`. Entropy collapses 1.2 -> 0.35
+by update 100 in both arms. **A 300-update score is the far side of the peak**,
+which is a caveat on every 300-update row above this one as much as on these two:
+they record where a run ended up, not what the recipe reaches. Checkpoint and score
+every ~20 updates before reading any of them as a ceiling.
+
+The league panel is its own result. Promotions cluster in updates ~25-75 and every
+later one is refused, because `--snapshot-gate` will not promote a learner that has
+stopped improving against its pool. That is the gate working, and it means the self
+arm spent three quarters of training against a frozen early snapshot rather than
+against itself -- so this A/B is not yet a fair test of self-play either.
+
+One methodological check worth recording, since the whole table rests on it:
+`eval_macro.py` argmaxes, and sampling the same checkpoints instead scores them
+**worse** (-19.59 -> -32.24, +30.51 -> +16.62). The spread between seeds is real
+policy quality, not an artifact of taking the mode.
 
 ## Settings measured as harmful
 

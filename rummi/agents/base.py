@@ -20,7 +20,13 @@ from typing import Protocol, runtime_checkable
 import numpy as np
 
 from rummi.rules.config import RummiConfig
-from rummi.rules.observation import MICRO_COUNT
+from rummi.rules.observation import (
+    F_GROUP_VALID,
+    F_LEN,
+    F_RUN_VALID,
+    MELD_REMAINING,
+    MICRO_COUNT,
+)
 
 Observation = dict[str, np.ndarray]
 """Batched observation as produced by :func:`rummi.env.observation.encode`.
@@ -166,6 +172,31 @@ def has_melded(obs: Observation) -> np.ndarray:
     Per-seat fields are seat-rotated, so column 0 is always the actor.
     """
     return obs["melded"][:, 0].astype(bool)
+
+
+def can_end_turn(cfg: RummiConfig, obs: Observation) -> np.ndarray:
+    """``(n_envs,)`` whether ``END_TURN`` is legal, read from the observation alone.
+
+    The same conjunction the env's mask builds: the workbench empty, every slot
+    valid or empty, something played out of the rack, the opening meld met, and
+    micro-budget left. It exists so an agent that decides *mid-turn* can answer
+    that question without asking for a freshly built mask, which is the most
+    expensive thing in a step.
+
+    It cannot read ``done``, which the mask also ands in. That costs nothing where
+    it is used: an opponent seat never acts on a finished env, and a caller that
+    passes a current mask still abandons the action against it.
+    """
+    slots = obs["slot_features"]
+    valid = (slots[..., F_RUN_VALID] | slots[..., F_GROUP_VALID]).astype(bool)
+    whole = (valid | (slots[..., F_LEN] == 0)).all(-1)
+    return (
+        (obs["workbench"].sum(-1) == 0)
+        & whole
+        & (obs["placed_this_turn"].sum(-1) > 0)
+        & (obs["scalars"][:, MELD_REMAINING] == 0)
+        & (obs["scalars"][:, MICRO_COUNT] < cfg.max_micro_per_turn)
+    )
 
 
 class PlanningAgent:
