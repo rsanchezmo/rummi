@@ -127,10 +127,18 @@ the ranking that separates the rungs lives below the outcome's per-episode noise
 (`first_legal` -> `rearrange` spans 0.012 normalized units against 0.073 noise per
 episode), so the regression finds the band in ~80 updates and cannot lock the last
 three points; annealing exploration from 0.10 to 0.02 over 600 updates does not
-close the gap. The oscillation, not the level, is the open problem, and the
-untried levers are a target network or slower bootstrap lr, and Polyak-averaged
-checkpoints. `--repartition` runs (145 dec/s against ~1,100 without, CP-SAT) and
-is off in these rows so the `by_value` comparison stays like-for-like.
+close the gap. The oscillation itself is solved for free: averaging each seed's
+sixteen u300-u600 checkpoints (plain weight averaging -- the net has no
+normalisation layers) scores **+28.37 / +27.59 / +25.16 at n=240** against
+endpoints of +27.02 / +22.23 / +27.13, seed 1 gaining five points over its own
+endpoint. So the band is noise around a mean the averaging extracts -- and the
+mean is ~+27, not `by_value`'s +29.60. **The residual gap is level, not
+instability**, which is what retires a target network as the next lever and
+leaves lookahead: a single afterstate is myopic about what the rest of the turn
+can still play, and search over turn completions consults V where it is asked to
+discriminate least. `--repartition` runs (145 dec/s against ~1,100 without,
+CP-SAT) and is off in these rows so the `by_value` comparison stays
+like-for-like.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
