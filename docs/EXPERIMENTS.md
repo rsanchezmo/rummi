@@ -98,6 +98,8 @@ commonest move in the game, and no policy inside it could have recovered that.
 
 | `by_value+repartition` on the multiplayer ladders (no training) | +91.67 / +140.78 | 99.0% / 100.0% | **The per-turn ceiling holds in multiplayer.** On standard-3p and standard-4p the heuristic lands at `optimal`'s published level (+93.97 / +139.43) and erases the stalemate mass (90-98% -> 0.0%), exactly as in 2p. Head-to-head against two `optimal` seats at 3p (ad-hoc suite, seed_base 90k, n=180): **33.9% where even is 33.3%**. So multiplayer does not, by itself, open a gap that per-turn play misses -- whatever room 3p/4p hold lives in information or in play the heuristic family cannot express. |
 
+| oracle at 3p: BOTH opponents' racks as input, 2 seeds + 2 control | 63.5% / 65.8% vs ctrl 55.8-69.8%, in-env | -- | **The information bound is null where the hidden mass is largest.** At 3p, `unseen` hides roughly twice the tiles, and `--oracle-rack` now hands the net one block per opponent. On identical deals the oracle seeds land inside the control's checkpoint range, and zeroing the blocks flips **0.0% of 8,409 argmax decisions** -- handed every hidden rack in the game, the policy still learns to discard them. (One control seed's u100 hit the known late collapse; its u040/u060 stand in.) |
+
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
 n=600). Cross-turn strategy is null three ways (the delegate at every inner
