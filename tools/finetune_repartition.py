@@ -88,6 +88,10 @@ covered, so a decode cannot emit an invalid repartition -- it either covers or
 returns nothing, and `NeuralRepartition` falls through to `DRAW`. What the
 fine-tune moves is the other direction: the arm answers 14.9% of the gate's firings
 against the clone's 12.8%, both under CP-SAT's 20.9%.
+
+`tools/finetune_two_phase.py` runs this same recipe over the break-then-cover space,
+importing `run_decode`, `score_sequences` and `Starts` from here so phase B *is* this
+decode. It measures how much of the +8.1pp above survives a shorter sequence.
 """
 
 from __future__ import annotations
@@ -158,9 +162,18 @@ class Starts:
     need: np.ndarray
     avail: np.ndarray
     present: np.ndarray
+    base: np.ndarray | None = None
+    """`(B,)` sets standing outside the construction, or `None` where it covers the
+    whole table. `tools/finetune_two_phase.py` sets it to the slots phase A kept, so
+    `max_sets` and `build`'s `reserved` are measured against the whole table."""
 
     def take(self, index: np.ndarray) -> Starts:
-        return Starts(self.need[index], self.avail[index], self.present[index])
+        return Starts(
+            self.need[index],
+            self.avail[index],
+            self.present[index],
+            None if self.base is None else self.base[index],
+        )
 
     def __len__(self) -> int:
         return len(self.need)
@@ -191,6 +204,9 @@ class Trajectories:
     """Mean per-decision `KL(pi || pi_clone)` over the same steps."""
     steps: int
     credited: int
+    diverged: np.ndarray | None = None
+    """`(B,)` which rows had left the baseline arm by the end, so a second phase
+    decoded after this one can go on crediting from where this one departed."""
 
 
 def run_decode(
@@ -206,6 +222,7 @@ def run_decode(
     baseline: list[tuple[int, ...]] | None = None,
     temperature: float = 1.0,
     forced: list[tuple[int, ...]] | None = None,
+    diverged: np.ndarray | None = None,
 ) -> Trajectories:
     """Construct one repartition per state, all of them in lockstep.
 
@@ -228,6 +245,10 @@ def run_decode(
     `forced` replays decisions already taken and returns their log-probability with
     a tape attached. That is how the best of several samples is scored: holding a
     tape per sample would cost K times the memory to produce one gradient.
+
+    `diverged` carries a divergence state in from a phase decoded before this one:
+    a row that already left the baseline arm keeps crediting here, because every
+    decision after a departure is conditioned on it.
     """
     stop = stop_action(cfg)
     size = len(starts)
@@ -235,11 +256,18 @@ def run_decode(
     avail = starts.avail.astype(np.int64)
     present = starts.present.astype(np.float32)
     last = np.full(size, 0 if monotone else -1, dtype=np.int64)
-    n_sets = np.zeros(size, dtype=np.int64)
+    n_sets = (
+        np.zeros(size, dtype=np.int64) if starts.base is None else starts.base.astype(np.int64)
+    )
     alive = np.ones(size, dtype=bool)
     sequences: list[list[int]] = [[] for _ in range(size)]
     actions: list[list[int]] = [[] for _ in range(size)]
-    diverged = np.zeros(size, dtype=bool) if baseline is not None else np.ones(size, dtype=bool)
+    if baseline is None:
+        left = np.ones(size, dtype=bool)
+    elif diverged is None:
+        left = np.zeros(size, dtype=bool)
+    else:
+        left = np.asarray(diverged).copy()
 
     picked_rows: list[torch.Tensor] = []
     picked_logp: list[torch.Tensor] = []
@@ -297,8 +325,8 @@ def run_decode(
             taken = np.array(
                 [baseline[row][depth] if depth < len(baseline[row]) else -1 for row in rows]
             )
-            diverged[rows] |= chosen != taken
-        credit = diverged[rows]
+            left[rows] |= chosen != taken
+        credit = left[rows]
         if credit.any():
             keep = torch.from_numpy(np.flatnonzero(credit))
             picked_rows.append(torch.from_numpy(rows[credit]))
@@ -328,6 +356,7 @@ def run_decode(
         kl=kl_sum / divisor,
         steps=steps,
         credited=credited,
+        diverged=left,
     )
 
 
@@ -351,7 +380,13 @@ def score_sequences(
     valid = np.zeros(len(sequences), dtype=bool)
     played = np.zeros(len(sequences), dtype=np.int64)
     for i, sequence in enumerate(sequences):
-        found = build(cfg, starts.need[i].astype(np.int64), starts.avail[i].astype(np.int64), list(sequence))
+        found = build(
+            cfg,
+            starts.need[i].astype(np.int64),
+            starts.avail[i].astype(np.int64),
+            list(sequence),
+            reserved=0 if starts.base is None else int(starts.base[i]),
+        )
         if found is None:
             continue
         valid[i] = True

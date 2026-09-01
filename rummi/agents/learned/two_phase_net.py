@@ -44,6 +44,7 @@ from rummi.agents.learned.repartition_net import (
     build,
     expand,
     present_counts,
+    stop_action,
 )
 from rummi.agents.macro import set_templates
 from rummi.rules.config import RummiConfig
@@ -250,6 +251,25 @@ def freed_counts(
         for kind in board[slot][board[slot] >= 0]:
             need[int(kind)] += 1
     return need, need + np.asarray(rack).astype(np.int64)
+
+
+def slot_present(cfg: RummiConfig, boards: np.ndarray) -> np.ndarray:
+    """`(B, S, T)` -- `present_counts` of each slot on its own.
+
+    A subset's `present` is the sum of its slots' rows, so a caller that scores many
+    subsets of the same table pays the template lookup once per slot instead of once
+    per subset. Empty slots contribute nothing and are skipped.
+    """
+    boards = np.asarray(boards)
+    b, s, _ = boards.shape
+    out = np.zeros((b, s, stop_action(cfg)), dtype=np.float32)
+    for i in range(b):
+        for slot in range(s):
+            row = boards[i, slot]
+            if not (row >= 0).any():
+                continue
+            out[i, slot] = present_counts(cfg, row[None])
+    return out
 
 
 # --- the network ----------------------------------------------------------
@@ -515,6 +535,7 @@ __all__ = [
     "freed_counts",
     "n_break_actions",
     "slot_counts",
+    "slot_present",
     "slot_static",
     "stop_break",
 ]

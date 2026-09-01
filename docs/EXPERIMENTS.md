@@ -114,6 +114,7 @@ because the observation widens with the table (570 / 572 / 574).
 | turn-completion search over the SWA nets (`tools/search_afterstate.py`, eval-only) | paired vs myopic: **+0.71 +-2.07** over 3 seeds | -- | **Null: search inherits its evaluator's resolution.** Per seed +4.66 / -0.15 / -2.37 on identical deals; the between-seed spread triples (3.2 -> 10.2 points) while the mean stands still, `--beam 3` buys nothing over beam 1, and the one seed that cleared `by_value` on score is *worse* than `by_value` on `standard-optimal` (2.0% vs 4.0%). |
 | solver-free repartition: template picker cloned from CP-SAT (`tools/train_repartition.py`), beam 16 / beam 4 / greedy | **+47.51** / +45.26 / +42.31 | 99.8% / 99.8% / 98.5% | **99% / 88% / 73% of the repartition gap recovered with no solver in the loop.** All arms in one n=240 run with `by_value` (+28.01) and CP-SAT (+47.71) beside them; zero illegal actions; where it plays it plays 1.57 tiles against CP-SAT's 1.58 -- the same turn by a different construction. Greedy decodes at **8.5x** CP-SAT's speed, beam 16 at parity (0.98x). (`by_value` reads +28.01 rather than the published +29.60 because n=240 runs past the frozen suite's 200 deals; every arm here shares the same 240.) |
 | RL fine-tune of the one-phase picker, self-critical PG best-of-4 (`tools/finetune_repartition.py`), greedy decode | **+44.05** | 99.2% | **Stage two of the AlphaStar recipe, and it moves the cheap arm.** Holdout playable 27.8% -> **35.9%** at greedy and 46.5% -> **55.4%** at beam 4 -- 43% of the greedy-to-beam-4 gap, at the greedy decode's own cost. On the suite the move is real but unresolvable (paired +1.75, 95% CI [-0.66, +4.22] at n=240): the offline metric resolves what 240 deals cannot. |
+| **two-phase + RL fine-tune, composed** (`tools/finetune_two_phase.py`), greedy decode | **+45.63** | 99.8% | **89.4% of the solver's points at 1.7ms against its 20.7ms.** Holdout playable 39.7% greedy / 59.6% beam 4 -- the strongest greedy decode in the repo, from parents at 35.5% and 35.9%. The two fixes **partially overlap**: the fine-tune is worth +8.1pp alone and +4.2pp here, so 52% survives; adding would have predicted 43.6%. |
 | two-phase: break slots, then cover the freed tiles (`tools/train_two_phase.py`), beam 16 / beam 4 / greedy | **+48.31** / +45.86 / +43.88 | 99.4% / 99.8% / 99.2% | **103% / 91% / 81% of the gap, and every arm is faster than the one-phase arm it replaces.** 8.88 decisions (3.89 of ~12 slots, 4.99 of ~330 templates) against ~13.6 of ~330: whole-sequence exact match goes 2.0% -> 38.2% and holdout playable 27.8 / 46.5 / 66.4% -> 35.5 / 56.2 / 72.4%. The >=90% claim moves from beam 16 to **beam 4** -- 5.2ms against 24.6ms, a 4.7x cost cut for the same result -- and beam 16 at 12.4ms *exceeds* CP-SAT's 17.4ms and its score. |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
@@ -238,13 +239,36 @@ nothing in this repo has ever deliberately set. That is the cheapest standing
 test of whether anything above per-turn maximisation exists at all: same tiles
 shed, different table left behind.
 
-**The two fixes are orthogonal and land in the same place, which is the standing
-lead.** Shortening the sequence (two-phase) and improving selection (RL best-of-4)
-were designed against different diagnoses, and each independently takes the greedy
-decode from 72.6% of the gap to ~81% -- 35.5% and 35.9% holdout playable
-respectively. Neither has been applied to the other: the RL fine-tune ran on the
-one-phase picker, and the two-phase net is imitation-only. Composing them is the
-one cheap experiment with both tools already written.
+**Composed, the two fixes partially overlap -- and the cheap decode arrives.**
+Shortening the sequence and improving selection were designed against different
+diagnoses, and each independently took the greedy decode from 72.6% of the gap to
+~81%. Fine-tuning the two-phase net (`tools/finetune_two_phase.py`, phase B
+*importing* the one-phase differentiable decode rather than restating it, so the
+reward, advantage and anchor are the same code) reaches **39.7% holdout playable
+at greedy and +45.63 on the suite: 89.4% of CP-SAT's points at 1.7ms against its
+20.7ms.** That is the claim beam 4 used to carry, at a twelfth of the solver's
+cost, and it is the strongest greedy decode the project has.
+
+The gains do not add: the fine-tune is worth +8.1pp on the one-phase picker and
++4.2pp here, so **52% survives**, where adding would have predicted 43.6%. The
+headroom barely narrowed -- best-of-4 still beats its own greedy arm on 19.9% of
+states against 22.6% before -- so what shrank is how much a shorter sequence had
+left to collect, not the method's reach.
+
+Two things worth recording because they contradict what the design expected.
+**There is no phase asymmetry.** The reward is the cover's, so the break head
+looked likely to starve; instead it is credited on 67% of its decisions against
+the cover's 83%, carries a comparable gradient, and frozen one at a time the heads
+are worth +2.4pp and +2.0pp of the composed +4.2pp -- nearly additive *within* the
+composition. They differ in *what* they move, not how much: the cover head lifts
+validity 49.7% -> 56.2% while the break head barely touches it (51.3%) and moves
+playability just as far. **And the break-nothing trap never fired** -- zero times
+in 1.15M greedy rollouts. It moved the other way, greedy break count 2.29 -> 2.79
+toward the teacher's own 2.89, with 4-or-more breaks going 14.2% -> 25.8%: nothing
+paid for validity and validity rose anyway, as a by-product of shedding more.
+Imitation accuracy meanwhile *falls* (break 71.3% -> 70.4%, cover 82.7% -> 81.9%),
+which is the same signature the one-phase augmentation left -- fitting the
+teacher's next set and constructing a good repartition are not the same skill.
 
 ## Board shaping: the axis the oracle never bounded, and why it has no sign
 
