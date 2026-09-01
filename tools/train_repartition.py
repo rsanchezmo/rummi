@@ -73,6 +73,7 @@ from rummi.agents.learned.repartition_net import (
     initial_counts,
     n_actions,
     present_counts,
+    relabel_rows,
     state_dim,
     state_features,
     stop_action,
@@ -153,8 +154,6 @@ class Steps:
             [[0], np.cumsum([len(s) + 1 for s in sequences])]
         ).astype(np.int64)
         self.kind_to, self.template_to = colour_relabellings(cfg)
-        self.kind_back = np.argsort(self.kind_to, axis=1)
-        self.template_back = np.argsort(self.template_to, axis=1)
 
     def __len__(self) -> int:
         return len(self.target)
@@ -180,14 +179,9 @@ class Steps:
         sizes, last = self.n_sets[index], self.last[index]
         target = self.target[index]
         if relabel is not None:
-            rows = np.arange(len(index))[:, None]
-            need = need[rows, self.kind_back[relabel]]
-            avail = avail[rows, self.kind_back[relabel]]
-            present = present[rows, self.template_back[relabel]]
-            stop = stop_action(cfg)
-            moved = self.template_to[relabel, np.minimum(target, stop - 1)]
-            target = np.where(target == stop, stop, moved)
-            last = np.where(last >= 0, self.template_to[relabel, np.maximum(last, 0)], last)
+            need, avail, present, last, target = relabel_rows(
+                cfg, relabel, need, avail, present, last, target
+            )
         dynamic, short = candidate_features(cfg, need, avail, present, last)
         legal = feasible(cfg, need, avail, sizes, last, short, monotone)
         state = state_features(cfg, need, avail, sizes, last, present)

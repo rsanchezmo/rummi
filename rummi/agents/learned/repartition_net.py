@@ -156,6 +156,42 @@ def colour_relabellings(cfg: RummiConfig) -> tuple[np.ndarray, np.ndarray]:
     return np.stack(kinds), np.stack(templates)
 
 
+@cache
+def colour_relabellings_back(cfg: RummiConfig) -> tuple[np.ndarray, np.ndarray]:
+    """`colour_relabellings` inverted, which is the direction a *gather* needs."""
+    kinds, templates = colour_relabellings(cfg)
+    return np.argsort(kinds, axis=1), np.argsort(templates, axis=1)
+
+
+def relabel_rows(
+    cfg: RummiConfig,
+    relabel: np.ndarray,
+    need: np.ndarray,
+    avail: np.ndarray,
+    present: np.ndarray,
+    last: np.ndarray,
+    target: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One construction row per relabelling of the colours, by gathering.
+
+    Applied to the *rows* rather than by re-deriving the label sequence, which is
+    what makes 24 readings of a dataset cost two gathers -- and it is why it needs
+    free order: the label order is by template index, and a relabelling permutes it.
+    """
+    kind_back, template_back = colour_relabellings_back(cfg)
+    _, template_to = colour_relabellings(cfg)
+    rows = np.arange(len(relabel))[:, None]
+    stop = stop_action(cfg)
+    moved = template_to[relabel, np.minimum(target, stop - 1)]
+    return (
+        need[rows, kind_back[relabel]],
+        avail[rows, kind_back[relabel]],
+        present[rows, template_back[relabel]],
+        np.where(last >= 0, template_to[relabel, np.maximum(last, 0)], last),
+        np.where(target == stop, stop, moved),
+    )
+
+
 def n_actions(cfg: RummiConfig) -> int:
     """Templates, then `STOP`."""
     return len(set_templates(cfg)) + 1
@@ -368,13 +404,20 @@ class Repartition:
 
 
 def build(
-    cfg: RummiConfig, need: np.ndarray, avail: np.ndarray, templates: list[int] | tuple[int, ...]
+    cfg: RummiConfig,
+    need: np.ndarray,
+    avail: np.ndarray,
+    templates: list[int] | tuple[int, ...],
+    reserved: int = 0,
 ) -> Repartition | None:
     """Replay a template sequence, or `None` if it is not a legal repartition.
 
     Legality here is the construction's own: every step affordable, no more sets
     than slots, and -- the constraint the whole space exists to honour -- nothing
     left on the table uncovered when the sequence ends.
+
+    `reserved` counts sets that stay on the table untouched, so a caller that
+    covers only part of the table still measures `max_sets` against the whole of it.
     """
     tt = template_table(cfg)
     table_counts = np.asarray(need).astype(np.int64)
@@ -383,7 +426,7 @@ def build(
     sets: list[tuple[int, ...]] = []
 
     for template in templates:
-        if len(sets) >= cfg.max_sets:
+        if reserved + len(sets) >= cfg.max_sets:
             return None
         counts = tt.counts[template].astype(np.int64)
         gap = np.maximum(counts - remaining, 0)
@@ -529,7 +572,13 @@ class Scorer:
 
 @dataclass(frozen=True, slots=True)
 class _Partial:
-    """One live construction: the sequence so far and the state it leaves."""
+    """One live construction: the sequence so far and the state it leaves.
+
+    `base` and `tag` are what a caller that has already committed part of the
+    table carries through the loop -- how many sets are standing outside the
+    construction, and which ones -- so `max_sets` is measured against the whole
+    table and a finished sequence can be read back to the commitment it came from.
+    """
 
     logp: float
     sequence: tuple[int, ...]
@@ -537,6 +586,69 @@ class _Partial:
     avail: np.ndarray
     present: np.ndarray
     last: int
+    base: int = 0
+    tag: tuple[int, ...] = ()
+
+
+def expand(
+    cfg: RummiConfig,
+    score,
+    live: list[_Partial],
+    beam: int,
+    monotone: bool,
+    finished: list[tuple[float, tuple[int, ...], tuple[int, ...]]],
+) -> list[_Partial]:
+    """One round of the construction: score every live partial, keep the best `beam`.
+
+    Finished sequences are appended to `finished` as `(logp, sequence, tag)` rather
+    than returned, because a beam that reaches `STOP` at different depths would
+    otherwise have to be threaded back through every caller.
+    """
+    stop = stop_action(cfg)
+    needs = np.stack([row.need for row in live])
+    avails = np.stack([row.avail for row in live])
+    presents = np.stack([row.present for row in live])
+    sizes = np.array([row.base + len(row.sequence) for row in live])
+    lasts = np.array([row.last for row in live])
+
+    dynamic, short = candidate_features(cfg, needs, avails, presents, lasts)
+    legal = feasible(cfg, needs, avails, sizes, lasts, short, monotone)
+    logits = score(
+        state_features(cfg, needs, avails, sizes, lasts, presents), dynamic, legal
+    )
+    # Log-probabilities, so beams of different lengths compare on one scale.
+    logits = logits - logits.max(-1, keepdims=True)
+    logp = logits - np.log(np.exp(logits).sum(-1, keepdims=True))
+
+    proposals: list[_Partial] = []
+    for row, partial in enumerate(live):
+        options = np.flatnonzero(legal[row])
+        if options.size == 0:
+            continue
+        for action in options[np.argsort(-logp[row, options])][:beam].tolist():
+            total = partial.logp + float(logp[row, action])
+            if action == stop:
+                finished.append((total, partial.sequence, partial.tag))
+                continue
+            after_need, after_avail = apply_template(
+                cfg, partial.need, partial.avail, action
+            )
+            after_present = partial.present.copy()
+            after_present[action] = max(after_present[action] - 1.0, 0.0)
+            proposals.append(
+                _Partial(
+                    total,
+                    (*partial.sequence, action),
+                    after_need,
+                    after_avail,
+                    after_present,
+                    action,
+                    partial.base,
+                    partial.tag,
+                )
+            )
+    proposals.sort(key=lambda row: -row.logp)
+    return proposals[:beam]
 
 
 def decode(
@@ -558,8 +670,7 @@ def decode(
     settled on tiles played rather than on likelihood. Imitation only ever aimed
     the model at the solver's answer; the turn is worth what it sheds.
     """
-    stop = stop_action(cfg)
-    finished: list[tuple[float, tuple[int, ...]]] = []
+    finished: list[tuple[float, tuple[int, ...], tuple[int, ...]]] = []
     live = [
         _Partial(
             0.0,
@@ -573,53 +684,12 @@ def decode(
     for _ in range(cfg.max_sets + 1):
         if not live:
             break
-        needs = np.stack([row.need for row in live])
-        avails = np.stack([row.avail for row in live])
-        presents = np.stack([row.present for row in live])
-        sizes = np.array([len(row.sequence) for row in live])
-        lasts = np.array([row.last for row in live])
-
-        dynamic, short = candidate_features(cfg, needs, avails, presents, lasts)
-        legal = feasible(cfg, needs, avails, sizes, lasts, short, monotone)
-        logits = score(
-            state_features(cfg, needs, avails, sizes, lasts, presents), dynamic, legal
-        )
-        # Log-probabilities, so beams of different lengths compare on one scale.
-        logits = logits - logits.max(-1, keepdims=True)
-        logp = logits - np.log(np.exp(logits).sum(-1, keepdims=True))
-
-        proposals: list[_Partial] = []
-        for row, partial in enumerate(live):
-            options = np.flatnonzero(legal[row])
-            if options.size == 0:
-                continue
-            for action in options[np.argsort(-logp[row, options])][:beam].tolist():
-                total = partial.logp + float(logp[row, action])
-                if action == stop:
-                    finished.append((total, partial.sequence))
-                    continue
-                after_need, after_avail = apply_template(
-                    cfg, partial.need, partial.avail, action
-                )
-                after_present = partial.present.copy()
-                after_present[action] = max(after_present[action] - 1.0, 0.0)
-                proposals.append(
-                    _Partial(
-                        total,
-                        (*partial.sequence, action),
-                        after_need,
-                        after_avail,
-                        after_present,
-                        action,
-                    )
-                )
-        proposals.sort(key=lambda row: -row.logp)
-        live = proposals[:beam]
+        live = expand(cfg, score, live, beam, monotone, finished)
 
     # Most likely first, so a tie on tiles played keeps the model's own preference.
     finished.sort(key=lambda row: -row[0])
     best: Repartition | None = None
-    for _, sequence in finished[: 4 * beam]:
+    for _, sequence, _tag in finished[: 4 * beam]:
         found = build(cfg, need, avail, list(sequence))
         if found is not None and (best is None or found.tiles_played > best.tiles_played):
             best = found

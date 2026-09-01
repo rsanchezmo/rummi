@@ -7,10 +7,17 @@ is arithmetic over count vectors, and legality is the env's own kernel. So both 
 checked against the things that own them -- the mask against what the multiset can
 actually pay for, and every construction against `legal_actions` on a real state,
 replayed micro-action by micro-action.
+
+`learned/two_phase_net.py` splits the same construction into break-then-cover, and
+is checked here rather than beside it because the states it needs are the same ones
+and reaching them costs a real game. Both decoders are driven by a scorer that
+returns the label -- an untrained net produces a valid repartition too rarely to
+assert anything about the loop it came out of.
 """
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -28,6 +35,7 @@ from rummi.agents.learned.repartition_net import (
     RepartitionNet,
     build,
     candidate_features,
+    decode,
     feasible,
     initial_counts,
     label_sequence,
@@ -38,6 +46,21 @@ from rummi.agents.learned.repartition_net import (
     state_features,
     stop_action,
     template_table,
+)
+from rummi.agents.learned.two_phase_net import (
+    BREAK_DYNAMIC,
+    BreakNet,
+    break_dynamic,
+    break_feasible,
+    break_state_features,
+    break_static_dim,
+    decode_two_phase,
+    decompose,
+    freed_counts,
+    n_break_actions,
+    slot_counts,
+    slot_static,
+    stop_break,
 )
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.env.numpy.deal import reset
@@ -183,7 +206,9 @@ def test_a_generated_repartition_replays_through_the_env_mask():
         assert found is not None and found.tiles_played >= 1
         assert evaluate_slots(cfg, padded_sets(cfg, found.sets)).is_valid.all()
 
-        probe = row.probe
+        # Cloned, because a replay commits the turn and the states are built once
+        # for the module.
+        probe = row.probe.clone()
         actions = plan(cfg, row.board, list(found.sets), found.played)
         if len(actions) > cfg.max_micro_per_turn - int(probe.micro_count[0]):
             continue
@@ -230,6 +255,237 @@ def test_the_network_never_ranks_an_illegal_template_above_a_legal_one():
         logits = net(
             torch.from_numpy(state_features(cfg, need[None], avail[None], zero, zero, present)),
             torch.from_numpy(dynamic),
+            torch.from_numpy(legal),
+        ).numpy()
+    assert (logits[0, ~legal[0]] == MASKED).all()
+    assert logits[0, legal[0]].min() > MASKED
+    assert int(np.argmax(logits[0])) in np.flatnonzero(legal[0]).tolist()
+
+
+# --- break, then cover ----------------------------------------------------
+
+
+class _Teacher:
+    """A scorer that answers with the label, so a decode is deterministic.
+
+    Both loops are best-first over log-probabilities, so at `beam=1` naming one
+    action per step drives them exactly along the sequence -- which is what makes
+    the *loop* testable rather than whatever a network happens to prefer.
+    """
+
+    def __init__(self, breaks, covers, cfg) -> None:
+        self.breaks = list(breaks)
+        self.covers = list(covers)
+        self.cfg = cfg
+
+    @staticmethod
+    def _pick(legal: np.ndarray, wanted: int) -> np.ndarray:
+        out = np.where(legal, 0.0, MASKED).astype(np.float32)
+        assert legal[0, wanted], f"the label names {wanted}, which the mask refuses"
+        out[0, wanted] = 10.0
+        return out
+
+    def brk(self, state, static, dynamic, legal):
+        return self._pick(legal, self.breaks.pop(0) if self.breaks else stop_break(self.cfg))
+
+    def cover(self, state, dynamic, legal):
+        return self._pick(legal, self.covers.pop(0) if self.covers else stop_action(self.cfg))
+
+
+def _labelled(cfg, row) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """`(kept, broken, cover sequence)` for one stuck state, or `()` three times."""
+    kept, broken, to_build = decompose(cfg, row.board, row.sets)
+    need, avail = freed_counts(cfg, row.board, broken, row.rack)
+    sequence, verdict = label_sequence(cfg, need, avail, to_build)
+    return (kept, broken, sequence) if verdict != "none" else ((), (), ())
+
+
+def test_the_break_and_cover_split_accounts_for_every_tile_on_the_table():
+    """The decomposition is a partition of the solve, not an approximation of it.
+
+    Kept slots plus built sets have to be the solver's answer exactly, and the
+    tiles have to balance both ways -- what the broken slots free plus what leaves
+    the rack is what the built sets consume. If that ever drifted, phase B would be
+    trained to cover a multiset the decode is not handed.
+    """
+    cfg = STANDARD
+    split = 0
+    breaks = covers = 0
+    for row in stuck_states():
+        kept, broken, to_build = decompose(cfg, row.board, row.sets)
+        contents = [tuple(sorted(int(k) for k in r if k >= 0)) for r in row.board]
+        occupied = {s for s, c in enumerate(contents) if c}
+        assert set(kept) | set(broken) == occupied
+        assert not set(kept) & set(broken)
+
+        rebuilt = Counter(contents[s] for s in kept) + Counter(
+            tuple(sorted(s)) for s in to_build
+        )
+        assert rebuilt == Counter(tuple(sorted(int(k) for k in s)) for s in row.sets)
+
+        need, avail = freed_counts(cfg, row.board, broken, row.rack)
+        consumed = np.zeros(cfg.n_kinds, dtype=np.int64)
+        for content in to_build:
+            for kind in content:
+                consumed[int(kind)] += 1
+        assert (need + row.played == consumed).all(), "the freed tiles do not balance"
+        assert (row.played <= avail - need).all(), "played more of a kind than the rack holds"
+
+        sequence, verdict = label_sequence(cfg, need, avail, to_build)
+        assert verdict != "none", "the cover is not expressible in template space"
+        replayed = build(cfg, need, avail, list(sequence), reserved=len(kept))
+        assert replayed is not None
+        assert int(replayed.played.sum()) == int(row.played.sum())
+        split += 1
+        breaks += len(broken)
+        covers += len(sequence)
+
+    assert split > 40, f"only split {split} solves"
+    assert breaks < covers < 2 * breaks + split, "the split is not the shape it claims"
+
+
+def test_the_break_mask_offers_only_an_occupied_slot_above_the_last_one():
+    """Phase A's whole mask, walked along the label it has to admit.
+
+    An empty slot has nothing to dissolve and a slot already broken cannot be
+    broken twice; both fall out of one comparison because the subset is emitted in
+    slot order, and this is where that shortcut is held to what it stands for.
+    """
+    cfg = STANDARD
+    checked = 0
+    for row in stuck_states():
+        kept, broken, _ = _labelled(cfg, row)
+        if not kept and not broken:
+            continue
+        counts = slot_counts(cfg, row.board[None]).astype(np.int64)
+        occupied = np.flatnonzero(counts[0].sum(-1) > 0)
+        static = slot_static(cfg, counts)
+        assert static.shape == (1, cfg.max_sets + 1, break_static_dim(cfg))
+        assert static[0, cfg.max_sets, -1] == 1.0, "STOP does not describe itself"
+        assert not static[0, :-1, -1].any(), "a slot claims to be STOP"
+
+        freed = np.zeros((1, cfg.n_kinds), dtype=np.int64)
+        last = -1
+        for position in range(len(broken) + 1):
+            before = np.array([last])
+            legal = break_feasible(cfg, counts, before)
+            dynamic = break_dynamic(cfg, counts, row.rack[None], freed, before)
+            assert dynamic.shape == (1, n_break_actions(cfg), BREAK_DYNAMIC)
+            assert break_state_features(
+                cfg, row.rack[None], counts.sum(1), freed, np.array([len(occupied)]),
+                np.array([position]), before
+            ).shape == (1, 3 * cfg.n_kinds + 8)
+
+            assert legal[0, stop_break(cfg)], "STOP is never masked"
+            offered = np.flatnonzero(legal[0, :-1])
+            assert set(offered) <= set(occupied.tolist()), "an empty slot was offered"
+            assert not set(offered) & set(broken[:position]), "a broken slot was offered again"
+            assert (offered > last).all()
+            checked += 1
+            if position == len(broken):
+                break
+            slot = broken[position]
+            assert legal[0, slot], "the label breaks a slot the mask refuses"
+            freed = freed + counts[:, slot]
+            last = slot
+
+    assert checked > 150, f"only {checked} break steps were checked"
+
+
+def test_a_two_phase_decode_replays_through_the_env_mask():
+    """Break, cover, expand, play -- the whole path, on a state a real game reached.
+
+    The scorer answers with the label, so what is under test is the decode: that it
+    threads phase A's subset into phase B's `need`/`avail`, puts the kept slots back
+    into the finished repartition, and comes out as a turn `legal_actions` accepts
+    micro-action by micro-action.
+    """
+    from rummi.solver.to_actions import plan
+
+    cfg = STANDARD
+    replayed = 0
+    for row in stuck_states():
+        kept, broken, sequence = _labelled(cfg, row)
+        if not sequence and not broken:
+            continue
+        teacher = _Teacher(broken, sequence, cfg)
+        found = decode_two_phase(cfg, teacher, row.rack, row.board, beam=1, monotone=True)
+        assert found is not None, "the labelled split did not decode"
+        assert int(found.played.sum()) == int(row.played.sum())
+        assert len(found.sets) == len(kept) + len(sequence)
+        assert evaluate_slots(cfg, padded_sets(cfg, found.sets)).is_valid.all()
+
+        probe = row.probe.clone()
+        actions = plan(cfg, row.board, list(found.sets), found.played)
+        if len(actions) > cfg.max_micro_per_turn - int(probe.micro_count[0]):
+            continue
+        seat = int(probe.current[0])
+        before = int(probe.racks[0, seat].sum())
+        for action in actions:
+            probe_mask = legal_actions(probe)
+            assert probe_mask[0, action], f"the expansion emitted {action}, illegal"
+            step(probe, np.array([action]), probe_mask)
+        probe.check_invariants()
+        assert probe.workbench.sum() == 0, "left tiles held"
+        after = evaluate_slots(cfg, probe.table_sets)
+        assert (after.is_valid | after.is_empty).all(), "left a broken set"
+        assert int(probe.racks[0, seat].sum()) < before
+        replayed += 1
+
+    assert replayed > 40, f"only replayed {replayed} two-phase repartitions"
+
+
+def test_the_one_phase_decode_still_follows_a_named_sequence():
+    """The shared construction round, driven along a label the one-phase space owns.
+
+    `expand` is what both decoders run, so a change to it that broke the whole-table
+    path would otherwise only show up as a score.
+    """
+    cfg = STANDARD
+    followed = 0
+    for row in stuck_states():
+        need, avail = initial_counts(cfg, row.rack, row.board)
+        sequence, verdict = label_sequence(cfg, need, avail, row.sets)
+        if verdict == "none":
+            continue
+        teacher = _Teacher((), sequence, cfg)
+        found = decode(
+            cfg, teacher.cover, need, avail, present_counts(cfg, row.board), beam=1
+        )
+        assert found is not None and found.templates == tuple(sequence)
+        assert int(found.played.sum()) == int(row.played.sum())
+        followed += 1
+    assert followed > 40, f"only followed {followed} sequences"
+
+
+def test_the_break_head_never_ranks_a_masked_slot_above_a_legal_one():
+    """The same `MASKED` dominance the template head needs, for the slot pointer:
+    a decode that dissolved an empty slot would hand `to_actions.plan` a target the
+    table cannot reach."""
+    cfg = STANDARD
+    board = np.full((cfg.max_sets, cfg.max_set_len), -1, dtype=np.int16)
+    board[0, :3] = [kind_of(cfg, 0, n) for n in (1, 2, 3)]
+    board[2, :3] = [kind_of(cfg, c, 7) for c in (0, 1, 2)]
+    rack = np.zeros(cfg.n_kinds, dtype=np.int64)
+    rack[kind_of(cfg, 0, 4)] = 1
+
+    counts = slot_counts(cfg, board[None]).astype(np.int64)
+    freed = np.zeros((1, cfg.n_kinds), dtype=np.int64)
+    start = np.array([-1])
+    legal = break_feasible(cfg, counts, start)
+    assert np.flatnonzero(legal[0]).tolist() == [0, 2, stop_break(cfg)]
+
+    torch.manual_seed(0)
+    net = BreakNet(cfg, hidden=32, key=16)
+    with torch.no_grad():
+        logits = net(
+            torch.from_numpy(
+                break_state_features(
+                    cfg, rack[None], counts.sum(1), freed, np.array([2]), np.array([0]), start
+                )
+            ),
+            torch.from_numpy(slot_static(cfg, counts)),
+            torch.from_numpy(break_dynamic(cfg, counts, rack[None], freed, start)),
             torch.from_numpy(legal),
         ).numpy()
     assert (logits[0, ~legal[0]] == MASKED).all()

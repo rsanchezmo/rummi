@@ -113,6 +113,7 @@ because the observation widens with the table (570 / 572 / 574).
 | value net over afterstates, TD(0), 3 seeds x 600 updates | +27.02 / +22.23 / +27.13 at u600, n=240 | 76-81% | **The first learner in this file with no policy head, no imitation and no collapse.** Greedy over `V(afterstate)` from outcomes alone -- the teacher drives only a 5-update critic warmup -- reaches the heuristic band by u80 on two seeds of three and every late checkpoint stays in it: twelve samples over u260-u600 span **+18.6 to +30.9** around `first_legal`'s +26.79, touching `by_value`'s +29.60 (+29.75 / +30.59 / +30.93) without holding it. Mid-run troughs (+7.3, -24.1, one seed opening at -138) all recover, unlike the macro trainer's collapse. |
 | turn-completion search over the SWA nets (`tools/search_afterstate.py`, eval-only) | paired vs myopic: **+0.71 +-2.07** over 3 seeds | -- | **Null: search inherits its evaluator's resolution.** Per seed +4.66 / -0.15 / -2.37 on identical deals; the between-seed spread triples (3.2 -> 10.2 points) while the mean stands still, `--beam 3` buys nothing over beam 1, and the one seed that cleared `by_value` on score is *worse* than `by_value` on `standard-optimal` (2.0% vs 4.0%). |
 | solver-free repartition: template picker cloned from CP-SAT (`tools/train_repartition.py`), beam 16 / beam 4 / greedy | **+47.51** / +45.26 / +42.31 | 99.8% / 99.8% / 98.5% | **99% / 88% / 73% of the repartition gap recovered with no solver in the loop.** All arms in one n=240 run with `by_value` (+28.01) and CP-SAT (+47.71) beside them; zero illegal actions; where it plays it plays 1.57 tiles against CP-SAT's 1.58 -- the same turn by a different construction. Greedy decodes at **8.5x** CP-SAT's speed, beam 16 at parity (0.98x). (`by_value` reads +28.01 rather than the published +29.60 because n=240 runs past the frozen suite's 200 deals; every arm here shares the same 240.) |
+| two-phase: break slots, then cover the freed tiles (`tools/train_two_phase.py`), beam 16 / beam 4 / greedy | **+48.31** / +45.86 / +43.88 | 99.4% / 99.8% / 99.2% | **103% / 91% / 81% of the gap, and every arm is faster than the one-phase arm it replaces.** 8.88 decisions (3.89 of ~12 slots, 4.99 of ~330 templates) against ~13.6 of ~330: whole-sequence exact match goes 2.0% -> 38.2% and holdout playable 27.8 / 46.5 / 66.4% -> 35.5 / 56.2 / 72.4%. The >=90% claim moves from beam 16 to **beam 4** -- 5.2ms against 24.6ms, a 4.7x cost cut for the same result -- and beam 16 at 12.4ms *exceeds* CP-SAT's 17.4ms and its score. |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
 Every macro's afterstate is deterministic and computable without stepping the env
@@ -178,8 +179,39 @@ measured with it off -- the macro eats its own opportunities -- and the mean
 solve re-cuts nearly the whole table (12.6 sets) to absorb 1.59 tiles. What
 separates greedy from beam is sequence length, not capacity: 68% of the chosen
 sets are already on the table, so a two-phase space (slots to break, then covers
-for the freed tiles) is ~9 decisions where this one takes 13x330, and that is
-the lever if the greedy arm's 8.5x speed is to keep more of the gap.
+for the freed tiles) is ~9 decisions where this one takes 13x330.
+
+**Sequence length was the right diagnosis, and the fix pays where the cost is.**
+Splitting the construction -- pick slots to dissolve, then cover what they freed
+-- decomposes **100%** of the same 48,002 solutions (92.4% tile-for-tile), which
+is what the 68% figure predicted: 8.71 of 11.60 occupied slots are kept
+untouched, so the real decision is 2.89 breaks and 3.99 builds. The shorter
+sequence is worth 19x on whole-sequence exact match (2.0% -> 38.2%) and lifts
+every decode width's playable rate, per the row above. Two consequences worth
+separating. The **cheap arm improves but does not arrive**: greedy goes 72.6% ->
+80.6% of the gap, and the >=90% threshold moves from beam 16 to beam 4, which is
+a **4.7x cost cut for the same claim** rather than a free greedy decode. And
+where the cheap arm still loses is the **cover, not the break** -- the break
+head's holdout accuracy is 58.8%, `--weight-decay 1e-4` repairs its overfitting
+exactly (59.7% held instead of decaying to 52.8%) and moves the deliverable not
+at all, while widening phase A alone buys 1.4pp for 3.2x the time. The
+decomposition itself is most of the gain: trained from scratch, with no warm
+start from the one-phase weights, it still reaches 30.2% / 48.3%. One asymmetry
+to note, because it inverts a metric: two-phase greedy has a slightly *lower*
+valid rate than one-phase greedy and a much higher playable one, since a decode
+that dissolves nothing is trivially valid and worth nothing -- validity is the
+guardrail, playability is the objective.
+
+**And beam 16 scores above CP-SAT, which is a lead rather than a result.**
++48.31 against +47.71 at n=480 is inside the noise this suite affords, and the
+arm answers fewer asks than the solver does (19.0% against 20.9%), so it is not
+a claim that the network out-solves CP-SAT. What is not noise is the mechanism
+available to it: the two decode the *same* set of optima and rank them
+differently -- the beam by tiles played, the solver by its own keep-weight
+tie-break -- so choosing among equal-tile repartitions is a free parameter that
+nothing in this repo has ever deliberately set. That is the cheapest standing
+test of whether anything above per-turn maximisation exists at all: same tiles
+shed, different table left behind.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
