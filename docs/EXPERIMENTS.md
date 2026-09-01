@@ -112,6 +112,7 @@ because the observation widens with the table (570 / 572 / 574).
 | value net over afterstates, Monte Carlo target (u200) | +4.69 | 61.3% | **The estimator, not the idea.** Every decision of an episode shares one target, so only between-episode variance is explainable, and there is almost none to explain: train EV +0.94 against episode-split holdout EV **-0.35** (112k rows) -- memorised episodes, not ranked afterstates. Weight decay buys generalisation only by flattening to the mean. |
 | value net over afterstates, TD(0), 3 seeds x 600 updates | +27.02 / +22.23 / +27.13 at u600, n=240 | 76-81% | **The first learner in this file with no policy head, no imitation and no collapse.** Greedy over `V(afterstate)` from outcomes alone -- the teacher drives only a 5-update critic warmup -- reaches the heuristic band by u80 on two seeds of three and every late checkpoint stays in it: twelve samples over u260-u600 span **+18.6 to +30.9** around `first_legal`'s +26.79, touching `by_value`'s +29.60 (+29.75 / +30.59 / +30.93) without holding it. Mid-run troughs (+7.3, -24.1, one seed opening at -138) all recover, unlike the macro trainer's collapse. |
 | turn-completion search over the SWA nets (`tools/search_afterstate.py`, eval-only) | paired vs myopic: **+0.71 +-2.07** over 3 seeds | -- | **Null: search inherits its evaluator's resolution.** Per seed +4.66 / -0.15 / -2.37 on identical deals; the between-seed spread triples (3.2 -> 10.2 points) while the mean stands still, `--beam 3` buys nothing over beam 1, and the one seed that cleared `by_value` on score is *worse* than `by_value` on `standard-optimal` (2.0% vs 4.0%). |
+| solver-free repartition: template picker cloned from CP-SAT (`tools/train_repartition.py`), beam 16 / beam 4 / greedy | **+47.51** / +45.26 / +42.31 | 99.8% / 99.8% / 98.5% | **99% / 88% / 73% of the repartition gap recovered with no solver in the loop.** All arms in one n=240 run with `by_value` (+28.01) and CP-SAT (+47.71) beside them; zero illegal actions; where it plays it plays 1.57 tiles against CP-SAT's 1.58 -- the same turn by a different construction. Greedy decodes at **8.5x** CP-SAT's speed, beam 16 at parity (0.98x). (`by_value` reads +28.01 rather than the published +29.60 because n=240 runs past the frozen suite's 200 deals; every arm here shares the same 240.) |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
 Every macro's afterstate is deterministic and computable without stepping the env
@@ -153,6 +154,32 @@ the apparent winner does not survive a change of opponent. A maximum over more o
 V's outputs is a maximum over more of V's noise -- with explained variance at
 ~0.00 there is nothing at the leaf to propagate. Search is not the lever until an
 evaluator has resolution, and that is a training problem, not a search one.
+
+**The NP-hard construction amortises.** A repartition decomposes into one
+~330-way template choice at a time over the rack-plus-table multiset -- `STOP`
+legal once every table tile is re-covered -- and each step is maskable by plain
+feasibility, so the sequence is legal by construction where a whole-repartition
+head is intractable at mask time -- the same wall that rightly kept whole-turn
+macros out of `rummi/agents/macro.py`.
+Trained by imitation on 48,002 CP-SAT solutions from 6,183 games (100%
+representable in template space, 79.3% tile-for-tile), the picker's holdout
+numbers say the learned skill is *construction*, not mimicry: step accuracy 77%
+and exact-match 2%, while beam-16 decoding emits a fully valid repartition in
+92.1% of held-out stuck states and one that plays in 66.4%. Two settings carried
+it, both measured against controls. Colour relabelling (24 free readings per
+state) *lowers* step accuracy 80.6% -> 77.0% and doubles the greedy playable
+rate 14.2% -> 27.8% -- predicting the teacher's next set and constructing a
+legal repartition are different skills, and only the second survives thirteen
+steps. And the beam ranks finished candidates by tiles played, not likelihood:
+every finished beam is legal, so likelihood is the wrong tie-break. Two
+corrections to the record while measuring it: with the REPARTITION macro **on**,
+CP-SAT plays in **20.9%** of the states the gate asks about, not the 47.7%
+measured with it off -- the macro eats its own opportunities -- and the mean
+solve re-cuts nearly the whole table (12.6 sets) to absorb 1.59 tiles. What
+separates greedy from beam is sequence length, not capacity: 68% of the chosen
+sets are already on the table, so a two-phase space (slots to break, then covers
+for the freed tiles) is ~9 decisions where this one takes 13x330, and that is
+the lever if the greedy arm's 8.5x speed is to keep more of the gap.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
