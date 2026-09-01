@@ -667,7 +667,7 @@ def main() -> None:
              "LSTM both measured null against greedy, and either null could be "
              "blamed on the mechanism failing to extract the signal. An arm handed "
              "the answer outright bounds what any mechanism could have extracted. "
-             "Two seats only; score it with --diagnostic-games",
+             "One block per opponent, in seat order; score it with --diagnostic-games",
     )
     p.add_argument(
         "--diagnostic-games", type=int, default=0,
@@ -817,8 +817,6 @@ def main() -> None:
     if recurrent and args.diagnostic_games:
         p.error("--diagnostic-games drives argmax_choose, which threads no cell state; "
                 "score --memory checkpoints with tools/eval_macro.py")
-    if args.oracle_rack and CONFIG_BY_NAME[args.config].n_players != 2:
-        p.error("--oracle-rack reads THE opponent's rack; this config seats more than one")
     if args.oracle_rack and (args.clone or args.eval_games):
         # `gather` steps the env itself, so the trainer's per-step refresh would go
         # stale under it -- and the frozen protocol hands an agent the observation
@@ -878,11 +876,11 @@ def main() -> None:
         hidden = HIDDEN if args.hidden is None else args.hidden
         head = HEAD if args.head is None else args.head
     tracker = OpponentHistory(cfg, decay=args.history_decay) if args.history else None
-    # The opponent's true rack, scaled like `rack`, refreshed from the raw state
+    # Every opponent's true rack, scaled like `rack`, refreshed from the raw state
     # each step so it always describes the observation beside it. Appended last,
     # after any history block -- the order is architecture the checkpoint owns.
     oracle_block = (
-        np.zeros((args.envs, cfg.n_kinds), dtype=np.float32)
+        np.zeros((args.envs, (cfg.n_players - 1) * cfg.n_kinds), dtype=np.float32)
         if args.oracle_rack else None
     )
     net = MacroNet(
@@ -890,7 +888,7 @@ def main() -> None:
         describe=hybrid_action_features(cfg) if hybrid
         else action_features(cfg, args.repartition),
         extra=(history_dim(cfg) if tracker is not None else 0)
-        + (cfg.n_kinds if oracle_block is not None else 0),
+        + (0 if oracle_block is None else oracle_block.shape[1]),
         memory=args.memory, memory_dim=args.memory_dim,
     )
     if args.init_from_macro:
@@ -1036,9 +1034,10 @@ def main() -> None:
         if oracle_block is None:
             return
         racks = source.backend.to_numpy(source.state.racks)
-        oracle_block[:] = racks[:, 1 - source.learner_seat].astype(np.float32) / max(
-            cfg.n_copies, 1
-        )
+        others = [s for s in range(cfg.n_players) if s != source.learner_seat]
+        oracle_block[:] = racks[:, others].reshape(len(racks), -1).astype(
+            np.float32
+        ) / max(cfg.n_copies, 1)
 
     obs, info = env.reset()
     obs = host(obs)
