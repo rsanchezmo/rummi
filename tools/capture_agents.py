@@ -18,13 +18,14 @@ from rummi.evaluate.protocol import PROTOCOL_VERSION, SUITE_BY_NAME, evaluate
 
 # Weakest to strongest. The order is the chart's ordinal axis, so it is asserted
 # rather than assumed -- see the check at the end.
-LADDER = ["random", "weighted-random", "greedy", "rearrange", "frugal", "optimal"]
+LADDER = ["random", "weighted-random", "greedy", "rearrange", "learned", "frugal", "optimal"]
 
 TIE = 0.02
 """How far a rung may dip below its predecessor before the ladder is out of
-order. Strict order stopped being assertable when `frugal` landed: it is
-statistically even with `optimal` (48.7% head-to-head at n=600), so which of
-the two tops a given suite is that suite's sampling noise."""
+order. Strict order stopped being assertable when `frugal` landed: `frugal`,
+`learned` and `optimal` are statistically even with each other (48.7%
+head-to-head at n=600), so which of the three tops a given suite is that
+suite's sampling noise."""
 
 
 def main() -> None:

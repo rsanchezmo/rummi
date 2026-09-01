@@ -224,10 +224,27 @@ holds it to that, and it fails on a one-line leak between envs.
 concept existed here once and was removed; a network is not a second kind of
 agent, it is an agent with weights.
 
-**It is not in `REGISTRY`.** The bundled ladder is `random` through `optimal`, and
-a rung carrying weights has to earn its place by landing between `rearrange` (85%)
-and `optimal` (100%) first. Promoting it is cheap when it does — `evaluate` takes
-`build_agent`, so nothing in the package has to change to score one.
+**One of them is in `REGISTRY`, and the rest are not.** A rung carrying weights has
+to earn its place by landing between `rearrange` (85%) and `optimal` (100%) first,
+and `clone.py` did: +47.32 / 99.6% on `standard-greedy`, even with `optimal`
+head-to-head (48.7%, n=600). It is registered as `learned`, and it is the only
+bundled agent built from a file rather than from code. Three consequences:
+
+- **Weights are package data**, `rummi/agents/learned/weights/<preset>.pt`, one per
+  bundled preset, listed in `pyproject.toml` so an installed copy has them. Seat
+  count widens the observation (570 / 572 / 574), so a net cannot be moved between
+  presets; a config with no file is refused by name rather than reshaped.
+- **Torch is imported when a rung is built, not when the package is**, the same
+  rule `optimal` follows for OR-Tools. `import rummi.agents` must work on a
+  checkout without the extras, so anything iterating `REGISTRY` and *constructing*
+  needs an `importorskip`.
+- **The rung is a `MacroAgent`**, not a new kind of agent: the net is its `choose`
+  and `repartition=True` is on. That is the whole idea — the net decides *when* a
+  turn is worth a solve, CP-SAT decides *how* — and it is why the rung is even
+  with `optimal` at a fraction of the solves.
+
+Anything else here stays out of `REGISTRY` until it clears the same bar. Promoting
+it is cheap — `evaluate` takes `build_agent`, so nothing has to change to score one.
 
 The split, and why:
 
@@ -242,6 +259,11 @@ The split, and why:
 - `torch_net.py`, `jax_net.py` — the two forward passes.
 - `agent.py` — the `Agent` adapter. Deterministic by default: a score has to be
   reproducible.
+- `macro_net.py` — the macro-space net. It lives here rather than in
+  `tools/train_macro.py`, where it grew, because `clone.py` loads a state dict
+  into it and a package cannot import from `tools/`; the trainer and
+  `tools/eval_macro.py` now read the one definition.
+- `clone.py` — the `learned` rung, above.
 
 **`MASKED` is `-1e8`, not `-inf`.** With `-inf` an illegal action's probability is
 exactly zero and the entropy term computes `0 * -inf` = NaN, which ends a run. At

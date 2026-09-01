@@ -90,6 +90,17 @@ def test_agent_chart_covers_every_bundled_agent():
     assert wins == sorted(wins), "the ladder must be plotted weakest to strongest"
 
 
+@pytest.mark.parametrize("name", ["throughput", "agents"])
+def test_every_colour_the_chart_reaches_for_is_defined(charts, name):
+    """An undefined `var()` paints black in both themes and nothing else notices --
+    the palette check only sees literal hexes, and the theme check only sees
+    definitions. A ladder longer than the ordinal ramp did exactly this."""
+    svg = charts[name]
+    used = set(re.findall(r"var\(--([\w-]+)\)", svg))
+    defined = set(re.findall(r"--([\w-]+):", svg))
+    assert used <= defined, f"{name}: {sorted(used - defined)} used but never defined"
+
+
 def test_series_colours_come_from_the_validated_palette(charts):
     """Colours are validated by the palette script, so the chart must not invent
     any of its own."""

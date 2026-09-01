@@ -2,10 +2,12 @@
 
 Under `rummi/agents/` rather than in a package of its own, because a parallel
 "policies" concept existed here once and was deliberately removed -- an agent is
-an agent, and this one is not privileged either. It is **not** in
-:data:`rummi.agents.REGISTRY`: the bundled ladder is `random` through `optimal`,
-and a rung with weights in it has to earn its place by landing between
-`rearrange` and `optimal` first.
+an agent, and this one is not privileged either.
+
+One thing built here *is* privileged, and had to earn it: `clone.py` is the
+ladder's `learned` rung, registered in :data:`rummi.agents.REGISTRY` because it
+landed between `rearrange` and the solver tier -- the bar a rung carrying weights
+has to clear. Everything else here is scaffolding for the next attempt.
 
 Score one the same way you would score your own::
 

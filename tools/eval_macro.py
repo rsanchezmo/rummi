@@ -22,9 +22,6 @@ and under argmax only when their entropies are comparably low.
 Nothing here writes `docs/data/`: a training run is one seed of one recipe, and the
 capture rule (`capture_experiments.py`) is that only reproducible agents are
 captured.
-
-Run as `python tools/eval_macro.py` from the repo root -- `MacroNet` is imported
-from the sibling script, which relies on `tools/` being `sys.path[0]`.
 """
 
 from __future__ import annotations
@@ -35,12 +32,12 @@ import pathlib
 import numpy as np
 import torch
 
-from train_macro import MacroNet
 from rummi.agents.base import Agent
 from rummi.agents.hybrid import HybridAgent, hybrid_action_features
 from rummi.agents.hybrid import n_actions as n_hybrid_actions
 from rummi.agents.learned.features import FEATURE_FIELDS, feature_dim, feature_scale
 from rummi.agents.learned.history import HistoryMacroAgent, OpponentHistory, history_dim
+from rummi.agents.learned.macro_net import MacroNet
 from rummi.agents.learned.torch_net import MASKED
 from rummi.agents.macro import MacroAgent, action_features, n_macros
 from rummi.evaluate.protocol import SUITES, SUITE_BY_NAME, Suite, evaluate

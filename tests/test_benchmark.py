@@ -642,11 +642,16 @@ def test_a_holding_threshold_holds_turns_and_keeps_playing_legally():
     assert held[3] > 0, "a threshold of 3 tiles never held a turn, so it proved nothing"
 
 
-def test_every_reference_agent_satisfies_the_protocol():
-    for name in REGISTRY:
-        agent = build(name, TINY_GROUPS)
-        assert isinstance(agent, Agent), name
-        assert agent.name
+@pytest.mark.parametrize("name", sorted(REGISTRY))
+def test_every_reference_agent_satisfies_the_protocol(name: str):
+    """On `standard`, because `learned` is built from weights bundled per preset
+    and `tiny_groups` has none -- which is itself asserted, in
+    `tests/test_learned_clone.py`."""
+    if name == "learned":
+        pytest.importorskip("torch")
+    agent = build(name, STANDARD)
+    assert isinstance(agent, Agent), name
+    assert agent.name
 
 
 @pytest.mark.parametrize("name", ["greedy", "weighted-random"])

@@ -45,6 +45,16 @@
       "disqualified": false
     },
     {
+      "name": "learned",
+      "win_rate": 1.0,
+      "mean_score": 48.46666666666667,
+      "mean_turns": 64.95,
+      "mean_final_rack": 0.0,
+      "stalemate_rate": 0.0,
+      "games": 120,
+      "disqualified": false
+    },
+    {
       "name": "frugal",
       "win_rate": 1.0,
       "mean_score": 49.0,

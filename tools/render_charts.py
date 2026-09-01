@@ -212,10 +212,14 @@ def agents_chart(data: dict, width=900, height=364) -> str:
     reporting, seen from the other side.
 
     An ordinal ramp rather than categorical hues, because the agents are ordered
-    by strength -- categorical colour would assert they are merely different.
+    by strength -- categorical colour would assert they are merely different. The
+    ramp has five stops and the ladder outgrew them, so a rung takes the nearest:
+    monotone, and every colour still comes from the validated palette, which
+    interpolating a sixth would not be.
     """
     agents = data["agents"]
     rows = len(agents)
+    stop = [round(i * (len(ORDINAL_LIGHT) - 1) / max(rows - 1, 1)) for i in range(rows)]
     # `value_w` reserves room for a value printed beside a full-width bar; without
     # it a 100% bar pushes its own label off the edge.
     left, gap, top, bottom, value_w = 136, 44, 96, 46, 52
@@ -278,7 +282,10 @@ def agents_chart(data: dict, width=900, height=364) -> str:
                 # Ink on the darkest ordinal steps, which are dark in light mode
                 # and light in dark mode.
                 "on-bar": ("#ffffff", "#0b0b0b"),
-                **{f"o{i + 1}": (ORDINAL_LIGHT[i], ORDINAL_DARK[i]) for i in range(5)},
+                **{
+                    f"o{i + 1}": (ORDINAL_LIGHT[stop[i]], ORDINAL_DARK[stop[i]])
+                    for i in range(rows)
+                },
             }
         ),
         "Agent win rate and stalemate rate, weakest to strongest",

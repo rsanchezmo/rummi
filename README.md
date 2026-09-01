@@ -92,7 +92,7 @@ to anything that does not search.
 
 ## The opponents
 
-Three strengths, all playable out of the box and all usable as opponents in your
+Four strengths, all playable out of the box and all usable as opponents in your
 own training loop. Scored here on the `standard-greedy` suite over 120
 games; `score` is official Rummikub scoring from the agent's side.
 
@@ -104,6 +104,7 @@ games; `score` is official Rummikub scoring from the agent's side.
 | `weighted-random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
 | `greedy` | 50.0% | +0.0 | 124.7 | 48.2 | 98.3% |
 | `rearrange` | 85.0% | +31.9 | 129.3 | 21.7 | 80.0% |
+| `learned` (net + CP-SAT) | **100.0%** | +48.5 | 65.0 | 0.0 | 0.0% |
 | `frugal` | **100.0%** | **+49.0** | 64.9 | 0.0 | 0.0% |
 | `optimal` (CP-SAT) | **100.0%** | +44.6 | 65.7 | 0.0 | 0.0% |
 
@@ -121,10 +122,18 @@ from its rack it just draws — which is why it stalls out in 98% of games.
 and that alone is worth 35 points of win rate. `frugal` plays template sets and
 single-tile steals, and repartitions the whole table **only where nothing else
 plays** — one CP-SAT solve at exactly the states that need one. `optimal`
-repartitions every turn. That the last two are statistically even (48.7%
+repartitions every turn. That the two are statistically even (48.7%
 head-to-head over 600 games) at an order of magnitude apart in compute is a
 measured fact about the game: per-turn play above `frugal` buys nothing the
 stuck-state solve does not already deliver.
+
+`learned` is the same question answered by a network instead of a rule. It sees
+one repartition among all the ordinary moves and picks — **the net decides *when*
+to spend a solve, CP-SAT decides *how*** — and it lands even with the other two,
+which is how a rung carrying weights earned a place here. It is a 233k-parameter
+DAgger clone of a heuristic that scores +29.6, so it is not imitating the
+ceiling; it needs the `torch` extra (`pip install -e '.[torch]'`) and ships one
+file of weights per seat count, since the observation widens with the table.
 
 ## Writing an agent
 
@@ -175,6 +184,7 @@ baseline to beat.
 |---|---:|---:|---:|---:|---:|---:|
 | `greedy` | 50.0% | 33.3% | 25.0% | +0.0 | +0.0 | +0.0 |
 | `rearrange` | 85.0% | 64.8% | 54.1% | +31.9 | +49.9 | +60.1 |
+| `learned` | 100.0% | 99.4% | 100.0% | +48.5 | +94.5 | +140.2 |
 | `frugal` | 100.0% | 99.4% | 100.0% | +49.0 | +93.6 | +140.8 |
 | `optimal` | 100.0% | 100.0% | 99.5% | +44.6 | +94.0 | +139.4 |
 
@@ -184,6 +194,11 @@ number is *exact* rather than close is the rotation check working, not a
 coincidence. And `optimal` stops being perfect at four seats: with three
 opponents taking turns between yours, playing every turn perfectly is no longer
 quite enough, which finally makes the top rung something a submission can aim at.
+
+`learned` is one net per seat count, trained by the same recipe and nothing else
+— the observation widens with the table, so a 2p net cannot be pointed at a 3p
+suite and is refused rather than reshaped. That all three land on their teacher
+is the point of the column: the recipe transfers, the weights do not.
 
 ## Scoring yourself
 
