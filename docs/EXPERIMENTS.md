@@ -323,21 +323,82 @@ Three measurements explain it, and the third is the one that generalises:
   which no amount of search or learning removes, and it is why the axis has no sign
   to find.
 
-What this does *not* touch is the asymmetric half of the same idea. A rack is
-private, so improving one's own finishing potential costs an opponent nothing in
-return -- and every agent here maximises rack *size* while the win condition is
-emptying the rack *first*. Seven combining tiles are closer to done than five that
-do not; a held joker guarantees a finish that spending it forfeits. That premise
-remains untested, and unlike denial there is no symmetry argument against it.
+## Rack potential: the asymmetric half, and why a recurring decision closes it
+
+The symmetry above does not reach a rack, because a rack is **private** -- improving
+one's own finishing potential costs an opponent nothing in return. And the premise
+is real: every agent here maximises rack *size* while the win condition is emptying
+the rack *first*. Seven combining tiles are closer to done than five that do not; a
+held joker guarantees a finish that spending it forfeits.
+
+Tested as a **weighted objective** rather than a tie-break, deliberately -- the
+section above bounds the whole indifference set at ~1.6pp, so the hypothesis only
+has teeth where it *overrides* the ranking and sheds fewer tiles on purpose:
+`score(play) = by_value's rank + w * potential(rack left behind)`, with **`w = 0`
+exactly `by_value`** down to `argmax`'s first-maximum order (pinned by test, and the
+`w=0` arm mirrors to exactly 50.00%). Potential comes off `shortfall` two ways:
+`ready`, the largest set the remaining rack could still lay -- which prices the
+joker inside the definition, since holding one makes every one-away template
+playable and spending it collapses `ready` from 3 to 0 -- and `reach`, the
+probability the next draw completes a set, deduplicated by kind (red 5*6*7*8 has two
+real doors, not five) and gated on unseen availability. Two-away templates are
+excluded on measurement, not taste: a rack at a turn boundary is 8.1 tiles with 5.7
+templates one away and **35.3 two away**, and 63.3% of unseen copies complete *some*
+two-away set, so the term cannot separate two candidates. Five arms (`ready`,
+`reach`, `both`, `stop` -- which offers `END_TURN` at rank 0 -- and a hard
+`joker`-holding rule), each against a twin that keeps the arm's own potential values
+and **permutes them across the candidates**: same magnitude, same firing rate, wrong
+owners.
+
+| arm, head to head vs `by_value`, 1600 deals both seats | win | vs its OWN null, paired |
+|---|---|---|
+| `ready` | 50.41% +-0.53 | +0.28pp +-0.79 |
+| `reach` | 49.84% +-1.13 | -0.06pp +-1.36 |
+| `both` | 50.25% +-1.19 | +0.62pp +-1.48 |
+| `stop` | 50.31% +-1.46 | +1.09pp +-1.75 |
+| `joker` | **50.75% +-0.76** | +0.53pp +-1.02 |
+| `base` (`w=0`) mirrored | exactly 50.00% +-0.00 | -- |
+
+**Null at n=1600, and the axis is bounded at ~1.8pp.** No arm beats its own control,
+every paired interval covers zero, and on `standard-greedy` three of five nulls sit
+*ahead* of their arm. The sweep's best cell -- `both` at `w=0.5`, 51.75% on 400
+deals -- reads **49.78% +-1.15** on 1600 disjoint deals at another `seed_base`, which
+is why the sweep was required to confirm on a held-out seed: a maximum over a grid of
+noisy cells is selection on noise, not a finding.
+
+Three mechanisms, and the third is the one that generalises:
+
+- **The residue is already the residue.** Mean `ready` of the rack at a decision is
+  **0.83 tiles against a rack of 8.1** -- usually no complete set remains, because
+  `by_value` has already played whatever it could. There is very little to protect.
+- **The candidates barely differ on it.** `reach` sits at 0.15 with a spread of
+  **0.01** across candidate plays -- the same shape as denial's zero-spread ties,
+  arrived at from the private side of the game.
+- **The "lookahead" is inside the turn, so it is not a lookahead at all.** A
+  decision recurs after *every set*, not once per turn, so a set "kept" in the rack
+  is simply played later in the same turn: replaying both picks forward, **83.7% of
+  the first-of-turn decisions the arm moves end that turn with the identical rack
+  and the identical table**. What actually survives to the next turn is what no
+  partition could place -- and choosing among tiles that are all stuck is choosing
+  nothing. `stop` is the proof by exaggeration: handed `END_TURN` at rank 0 it takes
+  it in 1.42% of decisions and changes **75.8% of deals**, and still scores even.
+
+So per-turn maximisation is **self-correcting** on this axis: the game re-asks after
+every set, which is what leaves rack shaping nothing to do. What stays open is
+narrow and config-shaped -- rack potential is an axis only where a turn boundary
+*forces* the residue to be kept: a tight micro budget, a one-set-per-turn cap, or a
+rack too large to drain in one turn.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
 n=600). Cross-turn strategy is null three ways (the delegate at every inner
 strength, self-play from the clone, best-response against `optimal` with forced
 exploration). Information is null three ways and bounded above by the oracle arm;
-memory stays behaviourally inert in every arena it was given. Board shaping is
-null by *mechanism* -- the section above -- and that one is not a resolution
-limit: a shared table makes any restriction symmetric. At the resolution
+memory stays behaviourally inert in every arena it was given. **Both hand-written
+strategy axes are null by *mechanism*, not by resolution** -- board shaping because
+a shared table makes any restriction symmetric, rack shaping because a decision
+recurs after every set, so what a turn "keeps" it plays before ending. At the
+resolution
 these suites afford (~+-2pp at n=600), two-player standard Rummikub behaves as a
 per-turn game: play the best turn available, every turn, and nothing measurable
 remains above that. What this does NOT close: an edge smaller than the noise
@@ -345,10 +406,17 @@ floor, and search behind a better evaluator -- turn-completion search over the
 afterstate value nets ties (the rows above), and the measurement narrows the
 opening rather than shutting it: search inherits its evaluator's resolution, so
 the axis stays open only behind a leaf evaluator with non-zero explained
-variance. Nor does it close **rack potential**: every agent maximises how many
-tiles leave the rack, never how well what remains combines, and that is the one
-candidate the board-shaping symmetry argument does not reach, because a rack is
-private. The 3p/4p suites, once the promising unknown, are half-measured now:
+variance. And **adaptation against a population**, which is the one reading of
+"history" the oracle arm never bounded: knowing what an opponent *holds* is not
+knowing how they *play*, and against a single fixed deterministic opponent there
+is nothing to adapt to at all -- a best response to a fixed policy is itself a
+fixed policy, which is the setting every history, memory and oracle arm ran in.
+`tools/train_macro.py` refuses all three flags alongside a `self` opponent
+(L725/L735/L764), so the arena is not merely untested but unimplemented. The
+cheap precondition to measure first is whether adaptation has anywhere to go: if
+the best response to `greedy` and to `optimal` are the same policy, identifying
+which one you face is worth nothing. The 3p/4p suites, once the promising
+unknown, are half-measured now:
 the per-turn ceiling holds there and the information bound is null at 3p (the
 two rows above).
 
