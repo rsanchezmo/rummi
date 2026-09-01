@@ -109,6 +109,29 @@ because the observation widens with the table (570 / 572 / 574).
 
 | oracle at 3p: BOTH opponents' racks as input, 2 seeds + 2 control | 63.5% / 65.8% vs ctrl 55.8-69.8%, in-env | -- | **The information bound is null where the hidden mass is largest.** At 3p, `unseen` hides roughly twice the tiles, and `--oracle-rack` now hands the net one block per opponent. On identical deals the oracle seeds land inside the control's checkpoint range, and zeroing the blocks flips **0.0% of 8,409 argmax decisions** -- handed every hidden rack in the game, the policy still learns to discard them. (One control seed's u100 hit the known late collapse; its u040/u060 stand in.) |
 
+| value net over afterstates, Monte Carlo target (u200) | +4.69 | 61.3% | **The estimator, not the idea.** Every decision of an episode shares one target, so only between-episode variance is explainable, and there is almost none to explain: train EV +0.94 against episode-split holdout EV **-0.35** (112k rows) -- memorised episodes, not ranked afterstates. Weight decay buys generalisation only by flattening to the mean. |
+| value net over afterstates, TD(0), 3 seeds x 600 updates | +27.02 / +22.23 / +27.13 at u600, n=240 | 76-81% | **The first learner in this file with no policy head, no imitation and no collapse.** Greedy over `V(afterstate)` from outcomes alone -- the teacher drives only a 5-update critic warmup -- reaches the heuristic band by u80 on two seeds of three and every late checkpoint stays in it: twelve samples over u260-u600 span **+18.6 to +30.9** around `first_legal`'s +26.79, touching `by_value`'s +29.60 (+29.75 / +30.59 / +30.93) without holding it. Mid-run troughs (+7.3, -24.1, one seed opening at -138) all recover, unlike the macro trainer's collapse. |
+
+**Afterstate value learning works, and its ceiling is the outcome's noise floor.**
+Every macro's afterstate is deterministic and computable without stepping the env
+(`rummi/agents/learned/afterstate.py`; the drift test replays real games and holds
+the analytic afterstate to the env's own encoding, 409/409 field-exact, and an
+injected off-by-one is caught 409/409). `tools/train_afterstate.py` scores the ~20
+legal afterstates and plays the argmax, so the whole policy-side machinery this
+file fights disappears: no 713-way head, no argmax-vs-sampled gap (the agent is
+deterministic by construction), and `END_TURN` is a value comparison rather than a
+starved logit. What stops it at the band is measured on both sides. Monte Carlo
+fails in the data, not the fit, per the row above. TD(0) plays at heuristic level
+while its explained variance sits at ~0.00 -- which is the diagnosis in one line:
+the ranking that separates the rungs lives below the outcome's per-episode noise
+(`first_legal` -> `rearrange` spans 0.012 normalized units against 0.073 noise per
+episode), so the regression finds the band in ~80 updates and cannot lock the last
+three points; annealing exploration from 0.10 to 0.02 over 600 updates does not
+close the gap. The oscillation, not the level, is the open problem, and the
+untried levers are a target network or slower bootstrap lr, and Polyak-averaged
+checkpoints. `--repartition` runs (145 dec/s against ~1,100 without, CP-SAT) and
+is off in these rows so the `by_value` comparison stays like-for-like.
+
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
 n=600). Cross-turn strategy is null three ways (the delegate at every inner
@@ -118,9 +141,11 @@ memory stays behaviourally inert in every arena it was given. At the resolution
 these suites afford (~+-2pp at n=600), two-player standard Rummikub behaves as a
 per-turn game: play the best turn available, every turn, and nothing measurable
 remains above that. What this does NOT close: an edge smaller than the noise
-floor, search-based methods (MCTS-style planning was never tried), and -- most
-promising -- the 3p/4p suites, where more racks are hidden, turn order matters
-differently, and none of these axes has been measured at all.
+floor, and search-based methods -- MCTS-style planning was never tried, and the
+afterstate value net above is exactly the leaf evaluator a shallow expectimax
+would want. The 3p/4p suites, once the promising unknown, are half-measured now:
+the per-turn ceiling holds there and the information bound is null at 3p (the two
+rows above), leaving search the one untouched axis at any seat count.
 
 **The information channel is closed against `greedy` -- twice by mechanism, once
 by bound.** The observation merges the pool and opponents' racks into `unseen` on
