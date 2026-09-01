@@ -246,12 +246,74 @@ respectively. Neither has been applied to the other: the RL fine-tune ran on the
 one-phase picker, and the two-phase net is imitation-only. Composing them is the
 one cheap experiment with both tools already written.
 
+## Board shaping: the axis the oracle never bounded, and why it has no sign
+
+Every agent here ranks candidate plays by points before the opening meld and tile
+count after, and **none of them has ever considered what the table it leaves gives
+the opponent** -- a blue 5*6*7 hands over two lay-off doors, a group of three 7s
+exactly one, for the same three tiles shed. That is not the information channel
+the oracle arm closed: those arms asked whether a policy can *read* an opponent
+(handed the true racks it flips 0.0% of its decisions), where this asks whether it
+can *restrict* one, which needs nothing hidden. And it had a fresh hint going in --
+the two-phase beam ranks the same set of optimal repartitions differently from
+CP-SAT and edges its score.
+
+Run as a hand-written tie-break with no learning and no reward anywhere
+(`tools/denial_ab.py`), so that a null cannot be blamed on a training signal:
+identical to `by_value` except that among plays it ranks *equal* it prefers the one
+leaving the least permeable table, permeability being the unseen-weighted count of
+lay-off doors from `greedy_agent.appendable` -- the same matrix `legal_macros` gates
+a lay-off on.
+
+| arm, head to head vs plain `by_value`, 1600 deals from both seats | win | paired vs the null control |
+|---|---|---|
+| `deny` | 50.84% +-1.38 | **+1.06pp +-1.57** |
+| `deny+steal` | 50.59% +-1.35 | +0.81pp +-1.57 |
+| `value` (positive control) | 50.59% +-1.30 | +0.81pp +-1.56 |
+| `open` (sign control -- prefer the *most* permeable) | 49.97% +-1.09 | -- |
+| `null` (seeded coin flip over the same ties) | 49.78% +-1.36 | -- |
+| `base` mirrored against itself | exactly 50.00% +-0.00 | -- |
+
+**Null, and the bound is wider than denial.** Power was sized from a pilot before
+running (per-deal sd 0.305, so 894 deals for a 2pp half-width) and run at 1600;
+the self-mirror reading *exactly* 50.00% is the check that the seat rotation is
+exact. On `standard-greedy` at n=800 the coin flip is level with the arm and ahead
+of it on score. The positive control -- preferring face value inside a tile-count
+tie, which `by_value` post-meld is genuinely blind to -- came back null too, so
+the honest statement is not "denial is worth nothing" but **no tie-break over
+`by_value`'s indifference set is worth more than ~1.6pp**.
+
+Three measurements explain it, and the third is the one that generalises:
+
+- **The tie-break can barely act.** Ties are 12.4% of decisions, and in **58.9% of
+  them the permeability spread is exactly zero** -- the candidates leave equally
+  permeable tables. Net, the arm plays differently in **3.7%** of decisions.
+- **Its effect on the table is real but tiny.** Mean permeability handed over goes
+  13.17 (`base`) -> 12.84 (`deny`) -> 13.20 (`open`), so the axis does move in the
+  intended direction -- but the coin flip alone reaches 13.00, so only 1.2% of the
+  level is denial rather than perturbation.
+- **And it is not differential: `left - met` is 0.00 +-0.00 for every arm.** The
+  table is common property and both players draw one pool, so a door closed on the
+  opponent is closed on the closer by the same amount. That is not a fact about
+  this tie-break but about the game: **any table-shaping rule pays its own cost**,
+  which no amount of search or learning removes, and it is why the axis has no sign
+  to find.
+
+What this does *not* touch is the asymmetric half of the same idea. A rack is
+private, so improving one's own finishing potential costs an opponent nothing in
+return -- and every agent here maximises rack *size* while the win condition is
+emptying the rack *first*. Seven combining tiles are closer to done than five that
+do not; a held joker guarantees a finish that spending it forfeits. That premise
+remains untested, and unlike denial there is no symmetry argument against it.
+
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
 n=600). Cross-turn strategy is null three ways (the delegate at every inner
 strength, self-play from the clone, best-response against `optimal` with forced
 exploration). Information is null three ways and bounded above by the oracle arm;
-memory stays behaviourally inert in every arena it was given. At the resolution
+memory stays behaviourally inert in every arena it was given. Board shaping is
+null by *mechanism* -- the section above -- and that one is not a resolution
+limit: a shared table makes any restriction symmetric. At the resolution
 these suites afford (~+-2pp at n=600), two-player standard Rummikub behaves as a
 per-turn game: play the best turn available, every turn, and nothing measurable
 remains above that. What this does NOT close: an edge smaller than the noise
@@ -259,7 +321,10 @@ floor, and search behind a better evaluator -- turn-completion search over the
 afterstate value nets ties (the rows above), and the measurement narrows the
 opening rather than shutting it: search inherits its evaluator's resolution, so
 the axis stays open only behind a leaf evaluator with non-zero explained
-variance. The 3p/4p suites, once the promising unknown, are half-measured now:
+variance. Nor does it close **rack potential**: every agent maximises how many
+tiles leave the rack, never how well what remains combines, and that is the one
+candidate the board-shaping symmetry argument does not reach, because a rack is
+private. The 3p/4p suites, once the promising unknown, are half-measured now:
 the per-turn ceiling holds there and the information bound is null at 3p (the
 two rows above).
 
