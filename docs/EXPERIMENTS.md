@@ -113,6 +113,7 @@ because the observation widens with the table (570 / 572 / 574).
 | value net over afterstates, TD(0), 3 seeds x 600 updates | +27.02 / +22.23 / +27.13 at u600, n=240 | 76-81% | **The first learner in this file with no policy head, no imitation and no collapse.** Greedy over `V(afterstate)` from outcomes alone -- the teacher drives only a 5-update critic warmup -- reaches the heuristic band by u80 on two seeds of three and every late checkpoint stays in it: twelve samples over u260-u600 span **+18.6 to +30.9** around `first_legal`'s +26.79, touching `by_value`'s +29.60 (+29.75 / +30.59 / +30.93) without holding it. Mid-run troughs (+7.3, -24.1, one seed opening at -138) all recover, unlike the macro trainer's collapse. |
 | turn-completion search over the SWA nets (`tools/search_afterstate.py`, eval-only) | paired vs myopic: **+0.71 +-2.07** over 3 seeds | -- | **Null: search inherits its evaluator's resolution.** Per seed +4.66 / -0.15 / -2.37 on identical deals; the between-seed spread triples (3.2 -> 10.2 points) while the mean stands still, `--beam 3` buys nothing over beam 1, and the one seed that cleared `by_value` on score is *worse* than `by_value` on `standard-optimal` (2.0% vs 4.0%). |
 | solver-free repartition: template picker cloned from CP-SAT (`tools/train_repartition.py`), beam 16 / beam 4 / greedy | **+47.51** / +45.26 / +42.31 | 99.8% / 99.8% / 98.5% | **99% / 88% / 73% of the repartition gap recovered with no solver in the loop.** All arms in one n=240 run with `by_value` (+28.01) and CP-SAT (+47.71) beside them; zero illegal actions; where it plays it plays 1.57 tiles against CP-SAT's 1.58 -- the same turn by a different construction. Greedy decodes at **8.5x** CP-SAT's speed, beam 16 at parity (0.98x). (`by_value` reads +28.01 rather than the published +29.60 because n=240 runs past the frozen suite's 200 deals; every arm here shares the same 240.) |
+| RL fine-tune of the one-phase picker, self-critical PG best-of-4 (`tools/finetune_repartition.py`), greedy decode | **+44.05** | 99.2% | **Stage two of the AlphaStar recipe, and it moves the cheap arm.** Holdout playable 27.8% -> **35.9%** at greedy and 46.5% -> **55.4%** at beam 4 -- 43% of the greedy-to-beam-4 gap, at the greedy decode's own cost. On the suite the move is real but unresolvable (paired +1.75, 95% CI [-0.66, +4.22] at n=240): the offline metric resolves what 240 deals cannot. |
 | two-phase: break slots, then cover the freed tiles (`tools/train_two_phase.py`), beam 16 / beam 4 / greedy | **+48.31** / +45.86 / +43.88 | 99.4% / 99.8% / 99.2% | **103% / 91% / 81% of the gap, and every arm is faster than the one-phase arm it replaces.** 8.88 decisions (3.89 of ~12 slots, 4.99 of ~330 templates) against ~13.6 of ~330: whole-sequence exact match goes 2.0% -> 38.2% and holdout playable 27.8 / 46.5 / 66.4% -> 35.5 / 56.2 / 72.4%. The >=90% claim moves from beam 16 to **beam 4** -- 5.2ms against 24.6ms, a 4.7x cost cut for the same result -- and beam 16 at 12.4ms *exceeds* CP-SAT's 17.4ms and its score. |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
@@ -202,6 +203,30 @@ valid rate than one-phase greedy and a much higher playable one, since a decode
 that dissolves nothing is trivially valid and worth nothing -- validity is the
 guardrail, playability is the objective.
 
+**What RL adds, and the trap it walks past.** The picker is an imitation policy, so
+stage two is policy gradient on top of it with a KL anchor back to the clone --
+AlphaStar's own recipe. Self-critical is the fit: sample a construction, decode
+greedily as the baseline, push up whatever beat it, which optimises the *greedy*
+decode because that is the arm worth having. Three findings, each measured against
+a control. **A validity bonus is actively harmful**: paying 0.1 for a valid
+construction buys 23pp of validity and *costs* playability (29.6% against 32.2%),
+because the nearest reward from a failing rollout is the identity cover -- keep
+every set where it is, always valid, always worthless. **One sample per state is
+the wall**: a lone deviation loses to greedy three times as often as it wins, so
+the signed update mostly teaches "do not deviate" and four different recipes stall
+at 32-33%; taking the best of four draws breaks it to 35.9%, because *the beam's
+whole value is selection among finished constructions* and one sample gives the
+update nothing to select from. Consistent with that, dropping the negative half of
+the advantage matches full signed updates while barely drifting (KL 0.04 against
+0.28), and the signed arm's entropy collapse (0.89 -> 0.37 nats) buys nothing --
+so the stall was never the anchor binding. **And unlabelled states are usable but
+inert**: 20,001 gate states collected in 116s, 79% of them ones CP-SAT declined,
+cost 1.9pp, because under a tiles-only reward nothing plays, every sample and the
+baseline score zero, and an exactly-zero advantage teaches nothing. RL needs no
+labels; it does need two answers that differ. Declining, meanwhile, is structural
+rather than learned -- `STOP` is masked until the table is covered, so a decode
+covers or returns nothing.
+
 **And beam 16 scores above CP-SAT, which is a lead rather than a result.**
 +48.31 against +47.71 at n=480 is inside the noise this suite affords, and the
 arm answers fewer asks than the solver does (19.0% against 20.9%), so it is not
@@ -212,6 +237,14 @@ tie-break -- so choosing among equal-tile repartitions is a free parameter that
 nothing in this repo has ever deliberately set. That is the cheapest standing
 test of whether anything above per-turn maximisation exists at all: same tiles
 shed, different table left behind.
+
+**The two fixes are orthogonal and land in the same place, which is the standing
+lead.** Shortening the sequence (two-phase) and improving selection (RL best-of-4)
+were designed against different diagnoses, and each independently takes the greedy
+decode from 72.6% of the gap to ~81% -- 35.5% and 35.9% holdout playable
+respectively. Neither has been applied to the other: the RL fine-tune ran on the
+one-phase picker, and the two-phase net is imitation-only. Composing them is the
+one cheap experiment with both tools already written.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
