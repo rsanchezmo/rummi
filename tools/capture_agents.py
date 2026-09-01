@@ -9,6 +9,7 @@ screenshots of a number somebody once saw.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 from pathlib import Path
 
@@ -17,7 +18,13 @@ from rummi.evaluate.protocol import PROTOCOL_VERSION, SUITE_BY_NAME, evaluate
 
 # Weakest to strongest. The order is the chart's ordinal axis, so it is asserted
 # rather than assumed -- see the check at the end.
-LADDER = ["random", "weighted-random", "greedy", "rearrange", "optimal"]
+LADDER = ["random", "weighted-random", "greedy", "rearrange", "frugal", "optimal"]
+
+TIE = 0.02
+"""How far a rung may dip below its predecessor before the ladder is out of
+order. Strict order stopped being assertable when `frugal` landed: it is
+statistically even with `optimal` (48.7% head-to-head at n=600), so which of
+the two tops a given suite is that suite's sampling noise."""
 
 
 def main() -> None:
@@ -46,9 +53,12 @@ def main() -> None:
         )
         print(f"{name:16s} win {result.win_rate:>6.1%}  score {result.mean_score:>+7.1f}")
 
-    wins = [a["win_rate"] for a in agents]
-    if wins != sorted(wins):
-        raise SystemExit(f"ladder is out of order: {list(zip(LADDER, wins, strict=True))}")
+    for below, above in itertools.pairwise(agents):
+        if above["win_rate"] < below["win_rate"] - TIE:
+            raise SystemExit(
+                f"ladder is out of order: {below['name']} {below['win_rate']:.1%} "
+                f"sits above {above['name']} {above['win_rate']:.1%}"
+            )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(

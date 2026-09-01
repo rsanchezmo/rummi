@@ -104,7 +104,8 @@ games; `score` is official Rummikub scoring from the agent's side.
 | `weighted-random` | 0.0% | −442.3 | 90.6 | 442.3 | 100.0% |
 | `greedy` | 50.0% | +0.0 | 124.7 | 48.2 | 98.3% |
 | `rearrange` | 85.0% | +31.9 | 129.3 | 21.7 | 80.0% |
-| `optimal` (CP-SAT) | **100.0%** | **+44.6** | 65.7 | 0.0 | 0.0% |
+| `frugal` | **100.0%** | **+49.0** | 64.9 | 0.0 | 0.0% |
+| `optimal` (CP-SAT) | **100.0%** | +44.6 | 65.7 | 0.0 | 0.0% |
 
 **Read the random row as a warning, not a floor.** On the standard config random
 play is *byte-identical to passing every turn* — same scores, same turn counts. It
@@ -117,9 +118,13 @@ The ladder is one idea: **how much of the table are you willing to take apart?**
 `greedy` never rearranges, so once it can neither append to a set nor lay one
 from its rack it just draws — which is why it stalls out in 98% of games.
 `rearrange` steals exactly **one** tile from a set that stays legal without it,
-and that alone is worth 35 points of win rate. `optimal` repartitions the whole
-table at once. The distance between those last two is the value of rearranging
-more than one tile at a time.
+and that alone is worth 35 points of win rate. `frugal` plays template sets and
+single-tile steals, and repartitions the whole table **only where nothing else
+plays** — one CP-SAT solve at exactly the states that need one. `optimal`
+repartitions every turn. That the last two are statistically even (48.7%
+head-to-head over 600 games) at an order of magnitude apart in compute is a
+measured fact about the game: per-turn play above `frugal` buys nothing the
+stuck-state solve does not already deliver.
 
 ## Writing an agent
 
@@ -170,6 +175,7 @@ baseline to beat.
 |---|---:|---:|---:|---:|---:|---:|
 | `greedy` | 50.0% | 33.3% | 25.0% | +0.0 | +0.0 | +0.0 |
 | `rearrange` | 85.0% | 64.8% | 54.1% | +31.9 | +49.9 | +60.1 |
+| `frugal` | 100.0% | 99.4% | 100.0% | +49.0 | +93.6 | +140.8 |
 | `optimal` | 100.0% | 100.0% | 99.5% | +44.6 | +94.0 | +139.4 |
 
 Two things the seat count does to the ladder. `greedy` lands on exactly

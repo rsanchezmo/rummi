@@ -45,9 +45,19 @@
       "disqualified": false
     },
     {
+      "name": "frugal",
+      "win_rate": 1.0,
+      "mean_score": 140.77727272727273,
+      "mean_turns": 40.06363636363636,
+      "mean_final_rack": 0.0,
+      "stalemate_rate": 0.0,
+      "games": 220,
+      "disqualified": false
+    },
+    {
       "name": "optimal",
       "win_rate": 0.9954545454545455,
-      "mean_score": 139.4318181818182,
+      "mean_score": 139.4409090909091,
       "mean_turns": 39.622727272727275,
       "mean_final_rack": 0.05454545454545454,
       "stalemate_rate": 0.004545454545454545,

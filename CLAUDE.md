@@ -97,8 +97,8 @@ better. This has already caused one false "the engine is broken" diagnosis.
 `rummi/env/__init__.py` registers `Rummi-2p-v0`, `Rummi-3p-v0`, `Rummi-4p-v0`.
 The rule for adding another: **an id is for something that changes the
 observation or action space.** Seat count does, so it is in the id. Opponent
-choice does not, so it is a constructor argument -- crossing seats with the five
-bundled agents would be fifteen ids that differ in nothing a policy can see.
+choice does not, so it is a constructor argument -- crossing seats with the six
+bundled agents would be eighteen ids that differ in nothing a policy can see.
 
 Only `vector_entry_point` is registered. `gym.make` failing is the intended
 behaviour: there is no single-env implementation, and wrapping a batch of one
