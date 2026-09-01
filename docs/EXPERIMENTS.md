@@ -111,6 +111,7 @@ because the observation widens with the table (570 / 572 / 574).
 
 | value net over afterstates, Monte Carlo target (u200) | +4.69 | 61.3% | **The estimator, not the idea.** Every decision of an episode shares one target, so only between-episode variance is explainable, and there is almost none to explain: train EV +0.94 against episode-split holdout EV **-0.35** (112k rows) -- memorised episodes, not ranked afterstates. Weight decay buys generalisation only by flattening to the mean. |
 | value net over afterstates, TD(0), 3 seeds x 600 updates | +27.02 / +22.23 / +27.13 at u600, n=240 | 76-81% | **The first learner in this file with no policy head, no imitation and no collapse.** Greedy over `V(afterstate)` from outcomes alone -- the teacher drives only a 5-update critic warmup -- reaches the heuristic band by u80 on two seeds of three and every late checkpoint stays in it: twelve samples over u260-u600 span **+18.6 to +30.9** around `first_legal`'s +26.79, touching `by_value`'s +29.60 (+29.75 / +30.59 / +30.93) without holding it. Mid-run troughs (+7.3, -24.1, one seed opening at -138) all recover, unlike the macro trainer's collapse. |
+| turn-completion search over the SWA nets (`tools/search_afterstate.py`, eval-only) | paired vs myopic: **+0.71 +-2.07** over 3 seeds | -- | **Null: search inherits its evaluator's resolution.** Per seed +4.66 / -0.15 / -2.37 on identical deals; the between-seed spread triples (3.2 -> 10.2 points) while the mean stands still, `--beam 3` buys nothing over beam 1, and the one seed that cleared `by_value` on score is *worse* than `by_value` on `standard-optimal` (2.0% vs 4.0%). |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
 Every macro's afterstate is deterministic and computable without stepping the env
@@ -133,12 +134,25 @@ normalisation layers) scores **+28.37 / +27.59 / +25.16 at n=240** against
 endpoints of +27.02 / +22.23 / +27.13, seed 1 gaining five points over its own
 endpoint. So the band is noise around a mean the averaging extracts -- and the
 mean is ~+27, not `by_value`'s +29.60. **The residual gap is level, not
-instability**, which is what retires a target network as the next lever and
-leaves lookahead: a single afterstate is myopic about what the rest of the turn
-can still play, and search over turn completions consults V where it is asked to
-discriminate least. `--repartition` runs (145 dec/s against ~1,100 without,
-CP-SAT) and is off in these rows so the `by_value` comparison stays
-like-for-like.
+instability**, which is what retires a target network as the next lever.
+`--repartition` runs (145 dec/s against ~1,100 without, CP-SAT) and is off in
+these rows so the `by_value` comparison stays like-for-like.
+
+**Lookahead over these nets is null, and the mechanism is the same noise floor.**
+The search values a candidate macro by greedily completing the turn in
+simulation: `afterstate_obs` returns the observation the env would report next,
+so completion is recursion with no env stepping, and the fidelity test holds 442
+predicted decisions field-exact against real games, 276 of them past depth one,
+completions up to eleven macros long. The lookahead *fires* -- it changes
+4.6-16.3% of decisions per seed, and 36% of one seed's pre-meld decisions get the
+multi-set opening turn the myopic policy cannot see. It ties anyway, per the row
+above, and the three signatures agree on why: added information narrows a spread
+where amplified selection noise widens it (3.2 -> 10.2 while the mean moves
++0.7), a wider beam selects over strictly more completions and buys nothing, and
+the apparent winner does not survive a change of opponent. A maximum over more of
+V's outputs is a maximum over more of V's noise -- with explained variance at
+~0.00 there is nothing at the leaf to propagate. Search is not the lever until an
+evaluator has resolution, and that is a training problem, not a search one.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
@@ -149,11 +163,13 @@ memory stays behaviourally inert in every arena it was given. At the resolution
 these suites afford (~+-2pp at n=600), two-player standard Rummikub behaves as a
 per-turn game: play the best turn available, every turn, and nothing measurable
 remains above that. What this does NOT close: an edge smaller than the noise
-floor, and search-based methods -- MCTS-style planning was never tried, and the
-afterstate value net above is exactly the leaf evaluator a shallow expectimax
-would want. The 3p/4p suites, once the promising unknown, are half-measured now:
-the per-turn ceiling holds there and the information bound is null at 3p (the two
-rows above), leaving search the one untouched axis at any seat count.
+floor, and search behind a better evaluator -- turn-completion search over the
+afterstate value nets ties (the rows above), and the measurement narrows the
+opening rather than shutting it: search inherits its evaluator's resolution, so
+the axis stays open only behind a leaf evaluator with non-zero explained
+variance. The 3p/4p suites, once the promising unknown, are half-measured now:
+the per-turn ceiling holds there and the information bound is null at 3p (the
+two rows above).
 
 **The information channel is closed against `greedy` -- twice by mechanism, once
 by bound.** The observation merges the pool and opponents' racks into `unseen` on

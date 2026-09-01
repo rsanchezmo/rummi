@@ -322,6 +322,37 @@ def afterstate_obs(
     }, kinds
 
 
+def afterstate_view(fields: dict[str, np.ndarray], index: int) -> Observation:
+    """Row ``index`` of :func:`afterstate_obs` as a one-env observation.
+
+    Every field the encoder produces is there and the leading axis is kept, so an
+    agent cannot tell this from what the env would hand it at that decision --
+    which is what makes lookahead a recursion rather than a second model of the
+    rules: :meth:`MacroAgent.legal_macros` runs on it, and its macros have
+    afterstates of their own.
+    """
+    return {name: value[index : index + 1] for name, value in fields.items()}
+
+
+def afterstate_rows(
+    cfg: RummiConfig, fields: dict[str, np.ndarray], kinds: np.ndarray
+) -> np.ndarray:
+    """:func:`afterstate_obs`'s output, flattened and scaled as the network reads it.
+
+    Split from :func:`afterstate_batch` so a caller that already holds the fields --
+    a search reading them back as observations -- is not made to recompute them.
+    """
+    n = len(kinds)
+    flat = np.concatenate(
+        [fields[name].reshape(n, -1) for name in FEATURE_FIELDS], axis=-1
+    ).astype(np.float32)
+    flat /= _scale(cfg)
+    out = np.zeros((n, afterstate_dim(cfg)), dtype=np.float32)
+    out[:, : flat.shape[1]] = flat
+    out[np.arange(n), flat.shape[1] + kinds] = 1.0
+    return out
+
+
 def afterstate_batch(
     cfg: RummiConfig,
     obs: Observation,
@@ -331,15 +362,7 @@ def afterstate_batch(
 ) -> np.ndarray:
     """``(len(macros), afterstate_dim)`` rows, scaled as the network reads them."""
     fields, kinds = afterstate_obs(cfg, obs, env, macros, agent)
-    n = len(macros)
-    flat = np.concatenate(
-        [fields[name].reshape(n, -1) for name in FEATURE_FIELDS], axis=-1
-    ).astype(np.float32)
-    flat /= _scale(cfg)
-    out = np.zeros((n, afterstate_dim(cfg)), dtype=np.float32)
-    out[:, : flat.shape[1]] = flat
-    out[np.arange(n), flat.shape[1] + kinds] = 1.0
-    return out
+    return afterstate_rows(cfg, fields, kinds)
 
 
 def afterstate_features(
