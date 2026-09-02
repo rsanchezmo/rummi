@@ -79,12 +79,29 @@ def load(path: pathlib.Path) -> Policy:
     return Policy(path.stem, net, cfg, repartition)
 
 
-def argmax_over(policy: Policy, x: torch.Tensor, legal: torch.Tensor) -> np.ndarray:
+def masked_logits(
+    policy: Policy, x: torch.Tensor, legal: torch.Tensor
+) -> torch.Tensor:
     with torch.no_grad():
         logits, _ = policy.net(x)
-    return (
-        torch.where(legal, logits, torch.full_like(logits, MASKED)).argmax(-1).numpy()
-    )
+    return torch.where(legal, logits, torch.full_like(logits, MASKED))
+
+
+def argmax_over(policy: Policy, x: torch.Tensor, legal: torch.Tensor) -> np.ndarray:
+    return masked_logits(policy, x, legal).argmax(-1).numpy()
+
+
+def mean_kl(left: torch.Tensor, right: torch.Tensor) -> float:
+    """Mean `KL(left || right)` per decision, in nats, over masked log-softmaxes.
+
+    Argmax agreement is the right instrument for a *concentrated* policy -- which
+    is what every argmax-flip null in this repo was measured on -- and a poor one
+    for a diffuse one, whose mode can jump while the distribution barely moves.
+    This reads the whole distribution, so the two numbers together say whether a
+    flip rate is a behavioural change or a shuffle among near-ties.
+    """
+    p, q = torch.log_softmax(left, -1), torch.log_softmax(right, -1)
+    return float((p.exp() * (p - q)).sum(-1).mean())
 
 
 def main() -> None:
@@ -141,19 +158,23 @@ def main() -> None:
         f"{len(rows):,} decisions recorded against {args.opponent} over "
         f"{args.deals} deals of {args.suite}, driven by {driver.name}\n"
     )
-    picks = {q.name: argmax_over(q, x, legal) for q in policies}
+    scores = {q.name: masked_logits(q, x, legal) for q in policies}
+    picks = {name: logits.argmax(-1).numpy() for name, logits in scores.items()}
 
     names = list(picks)
-    print(f"{'':>22}" + "".join(f"{n[-18:]:>20}" for n in names))
+    print(f"{'':>22}" + "".join(f"{n[-18:]:>20}" for n in names) + f"{'H':>8}")
     for a in names:
         cells = "".join(f"{(picks[a] == picks[b]).mean():>19.1%} " for b in names)
-        print(f"{a[-20:]:>22}{cells}")
+        logp = torch.log_softmax(scores[a], -1)
+        entropy = float(-(logp.exp() * logp).sum(-1).mean())
+        print(f"{a[-20:]:>22}{cells}{entropy:>7.3f}")
     # The first checkpoint is the anchor by convention, and its column is the one
     # a training arm has to move away from before its score can mean anything.
     print(
         f"\nagainst {driver.name}: "
         + "  ".join(
-            f"{n} moves {1 - (picks[n] == picks[driver.name]).mean():.1%}"
+            f"{n} moves {1 - (picks[n] == picks[driver.name]).mean():.1%} "
+            f"(KL {mean_kl(scores[driver.name], scores[n]):.3f})"
             for n in names[1:]
         )
     )
