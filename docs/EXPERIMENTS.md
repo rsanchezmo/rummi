@@ -507,6 +507,74 @@ failures with different fixes, and every 300-update row conflates them. The
 instability is also not inevitable -- two seeds never fall -- so it is trainable,
 and the u40-u100 window is where to look.
 
+## Attention over kinds: the routing is learned, used, and still loses
+
+The first attention architecture tried in this repo, aimed where the measurement
+said to aim it -- the cover head, which the beam buys and the break head does not.
+The cover trunk reads `[need, avail, avail - need, scalars]` flat, so kind 7 and
+kind 8 arrive at the first weight matrix unrelated, while a template asks for
+exactly a relation between kinds. `set_encoder` reads that vector back as one token
+per kind plus a summary and lets them attend before the pointer head scores.
+
+Three arms, 90 epochs, `--seed 0`, cold start, the same eight shards, holdout split
+and colour augmentation. **The break head's training loss is bit-identical across
+all three at every epoch** (1.0805 at 10, 0.9721 at 23, 0.2791 at 90), so the arms
+differ in the cover encoder and nothing else -- shown, not asserted.
+
+| arm | params | greedy valid | greedy playable | beam 4 playable | greedy ms | kept |
+|---|---|---|---|---|---|---|
+| `enc-mlp-s0` | 879,577 | 42.5% | **31.9%** | **52.8%** | 2.78 | 34 |
+| `enc-wide-s0` (`--cover-hidden 768`) | 1,283,545 | 41.1% | 29.6% | 47.8% | 2.78 | 63 |
+| `enc-attn-s0` (2 layers, 4 heads, dim 128) | 870,105 | 36.0% | 27.9% | 49.1% | 4.24 | 19 |
+
+On the 7,276-state holdout, so 4.0pp at greedy is outside the probe noise that
+makes any single epoch unreadable.
+
+**The mechanism is not inert, and that is the informative part.** Every information
+null in this repo was confirmed by an ablation flipping 0.0% of argmax decisions --
+the LSTM's cell state, the oracle's rack block. This one does not read like those
+(1,200 decodes, 20,000 teacher-forced decisions):
+
+| ablation | flips | teacher-forced | playable | ms |
+|---|---|---|---|---|
+| `attend` | -- | 73.7% | 29.0% | 4.24 |
+| `uniform` (routing removed, tokens kept) | 35.0% | 60.4% | 20.2% | 4.47 |
+| `self` (mixing removed; a floor, not a control) | 50.4% | 49.6% | 14.2% | 4.67 |
+| vs `enc-mlp-s0` | 24.3% | 77.9% | 32.3% | 2.78 |
+
+Content-based routing between kinds is **learned and load-bearing** -- removing it
+alone flips 35.0% of cover decisions and costs 13.3pp of teacher-forced accuracy
+and 8.8pp of playable, the largest ablation delta measured on any mechanism here.
+The encoder does the thing it was built to do. It still loses to a flat MLP over
+the same three count vectors, by 4.0pp at 1.53x the decode cost.
+
+**It is not underfitting, and it is not the budget.** By epoch 90 attention has the
+*lower* training loss (0.4230 against 0.4373) and the *worse* holdout step accuracy
+(76.5% against 79.0%): it fits slower early (22.5% behind at epoch 23, 5.0% at 66),
+overtakes, and generalises worse throughout. Its best decode came at **epoch 19 of
+90**, with 30.8% at 33 and at 59 -- flat with noise, not climbing.
+
+**Capacity is bracketed on both sides**, which is what makes this a statement about
+the prior rather than about size. The attention arm is *smaller* than the plain
+baseline (870k against 880k), and the 1.28M wide MLP fits best of the three (train
+loss 0.3675) while scoring worst at greedy (29.6%). Width buys fit and loses the
+deliverable, exactly as the `table_sets` null did.
+
+**What it bounds.** The cover head's bottleneck is not how the multiset is read.
+Two priors and a third arm with 46% more capacity land within 4pp of each other at
+greedy, while beam 4 moves a single checkpoint by 20.9pp (31.9% -> 52.8%). The
+resolution left in this component is in the decode and the labels, not the trunk.
+
+Two limits worth stating. The `--init-cover` warm start was dropped for
+comparability -- an attention cover cannot load a one-phase MLP state dict, so
+warm-starting only the controls would have been the confound -- which costs ~8pp
+absolute against the published 39.7% / 59.6%; these numbers rank arms and do not
+restate the deliverable. And the picker is trained on 48,002 states with labels
+purchasable at 20.7ms each, so **nothing here separates any arm from "more data
+would have done the same"**. That cuts against an encoder *win*, which is why the
+data-scaling curve gates one -- it does not rescue this loss, but a prior with more
+capacity needing more data to pay is the one reading this run cannot exclude.
+
 ## Settings measured as harmful
 
 | setting | effect | why |
