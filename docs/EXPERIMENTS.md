@@ -644,7 +644,10 @@ every action is random and `terminal`/`meld`/`end` describe **the mixture, not t
 policy**. A policy can rot to 100% stalemate with the training log improving. Nor
 is it the diffuse-argmax artifact this file warns about elsewhere -- H is 0.089-0.101,
 a mode carrying ~97% of the mass, and scored `--sample` the same checkpoint reads
-59.2% / -113.06 with 40.5% stalemate against the anchor's 99.8% / +48.70.
+59.2% / -113.06 with 40.5% stalemate against the anchor's 99.8% / +48.70. Sharpest
+of all: sampled against **its own training opponent** it reads **26.8% / -135.44**
+where the anchor reads 51.2%. Sixty updates of best response against `optimal`
+made it worse at `optimal` than the policy it started from.
 
 So the same recipe against the two hard opponents produced movement without
 specialisation: vs `optimal` **11.6% moved, KL 0.262**, terminal -0.040 -> -0.037
