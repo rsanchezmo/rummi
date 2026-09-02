@@ -27,11 +27,13 @@ captured.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import pathlib
 
 import numpy as np
 import torch
 
+from rummi.agents import REGISTRY
 from rummi.agents.base import Agent
 from rummi.agents.hybrid import HybridAgent, hybrid_action_features
 from rummi.agents.hybrid import n_actions as n_hybrid_actions
@@ -42,6 +44,24 @@ from rummi.agents.learned.torch_net import MASKED
 from rummi.agents.macro import MacroAgent, action_features, n_macros
 from rummi.evaluate.protocol import SUITES, SUITE_BY_NAME, Suite, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
+
+
+def against(suite: Suite, versus: list[str] | None) -> list[Suite]:
+    """The suite as it stands, or one copy per opponent seated in its own deals.
+
+    Off-protocol by construction: `SUITE_BY_NAME` and `PROTOCOL_VERSION` are
+    untouched, so a score from here cannot be mistaken for a published one. What is
+    reused is the deals, the seat rotation and the game count, which is what makes
+    two columns paired on deals rather than merely equal in size -- the whole point
+    when the question is whether one policy counters one opponent and not another.
+    """
+    if not versus:
+        return [suite]
+    stem = suite.name.removesuffix(f"-{suite.opponent}")
+    return [
+        dataclasses.replace(suite, name=f"{stem}-{name}", opponent=name)
+        for name in versus
+    ]
 
 
 def layout(space: str, repartition: bool = False):
@@ -90,6 +110,14 @@ def main() -> None:
     p.add_argument("checkpoint", type=pathlib.Path)
     p.add_argument("--suites", nargs="+", default=[s.name for s in SUITES], choices=sorted(SUITE_BY_NAME))
     p.add_argument("--games", type=int, default=None, help="deals per suite; the suite's own count if omitted")
+    p.add_argument(
+        "--vs", nargs="+", default=None, choices=sorted(REGISTRY),
+        help="seat these opponents in the named suites' deals instead of each "
+             "suite's own. OFF-PROTOCOL -- it substitutes into a frozen suite "
+             "rather than editing one, so no published score is invalidated and "
+             "none is produced. This is how a specialisation matrix gets a column "
+             "for an opponent no suite pins, and the columns stay paired on deals",
+    )
     p.add_argument(
         "--repartition", action="store_true",
         help="score against the macro space with the solver-backed REPARTITION macro. "
@@ -199,22 +227,31 @@ def main() -> None:
         f"hidden {ck['hidden']}, {action_count(cfg)} actions, history {history}, "
         f"memory {memory}, {'sampled' if args.sample else 'argmax'}"
     )
+    if args.vs:
+        print(
+            f"off-protocol: {', '.join(args.vs)} seated in the suites' own deals, "
+            "so these rank arms against each other and restate no published score"
+        )
     for name in args.suites:
-        suite: Suite = SUITE_BY_NAME[name]
-        reason = incompatibility(space, cfg, suite.cfg, repartition, history)
+        base: Suite = SUITE_BY_NAME[name]
+        reason = incompatibility(space, cfg, base.cfg, repartition, history)
         if reason is not None:
             print(f"{name:18s} skipped -- {reason}")
             continue
-        entropy_sum, entropy_n = 0.0, 0
-        result = evaluate(label, suite, build_agent=build, games=args.games)
-        assert not result.disqualified, f"{label} was disqualified on {name}"
-        assert result.illegal_attempts == 0, f"{label} proposed a masked-out action on {name}"
-        print(
-            f"{name:18s} win {result.win_rate:>6.1%}  score {result.mean_score:>+8.2f}  "
-            f"stalemate {result.stalemates / max(1, result.games):>6.1%}  "
-            f"H {entropy_sum / max(entropy_n, 1):>5.3f}  n={result.games}",
-            flush=True,
-        )
+        for suite in against(base, args.vs):
+            entropy_sum, entropy_n = 0.0, 0
+            result = evaluate(label, suite, build_agent=build, games=args.games)
+            assert not result.disqualified, f"{label} was disqualified on {suite.name}"
+            assert result.illegal_attempts == 0, (
+                f"{label} proposed a masked-out action on {suite.name}"
+            )
+            print(
+                f"{suite.name:18s} win {result.win_rate:>6.1%}  "
+                f"score {result.mean_score:>+8.2f}  "
+                f"stalemate {result.stalemates / max(1, result.games):>6.1%}  "
+                f"H {entropy_sum / max(entropy_n, 1):>5.3f}  n={result.games}",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":
