@@ -142,6 +142,7 @@ from rummi.agents.learned.two_phase_net import (
     slot_present,
     slot_static,
     stop_break,
+    two_phase_from_checkpoint,
 )
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
@@ -552,8 +553,7 @@ def main() -> None:
 
     checkpoint = torch.load(args.init, weights_only=True)
     monotone = bool(checkpoint["monotone"])
-    net = TwoPhaseNet(cfg, hidden=checkpoint["hidden"], key=checkpoint["key"])
-    net.load_state_dict(checkpoint["state"])
+    net = two_phase_from_checkpoint(cfg, checkpoint)
     clone = copy.deepcopy(net).eval()
     for q in clone.parameters():
         q.requires_grad_(False)
@@ -733,6 +733,8 @@ def main() -> None:
                             "cfg": args.config,
                             "hidden": checkpoint["hidden"],
                             "key": checkpoint["key"],
+                            "cover_hidden": checkpoint.get("cover_hidden"),
+                            "cover_encoder": checkpoint.get("cover_encoder"),
                             "monotone": monotone,
                             "epoch": update,
                             "state": best_state,

@@ -71,6 +71,7 @@ from rummi.agents.learned.repartition_net import (
     state_features,
     stop_action,
 )
+from rummi.agents.learned.set_encoder import EncoderSpec
 from rummi.agents.learned.two_phase_net import (
     TwoPhaseNet,
     TwoPhaseScorer,
@@ -83,6 +84,7 @@ from rummi.agents.learned.two_phase_net import (
     slot_counts,
     slot_static,
     stop_break,
+    two_phase_from_checkpoint,
 )
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
@@ -358,6 +360,21 @@ def main() -> None:
     p.add_argument("--hidden", type=int, default=256)
     p.add_argument("--key", type=int, default=64)
     p.add_argument(
+        "--cover-encoder", default="mlp", choices=("mlp", "attention"),
+        help="what produces the cover head's query: the flat MLP over the count "
+             "vectors, or attention over one token per kind. The break head is "
+             "untouched either way, and trains identically from the same seed",
+    )
+    p.add_argument(
+        "--cover-hidden", type=int, default=None,
+        help="the cover trunk's width, defaulting to --hidden. The capacity control "
+             "for an attention arm: a plain wider MLP, nothing else changed",
+    )
+    p.add_argument("--attn-dim", type=int, default=128)
+    p.add_argument("--attn-layers", type=int, default=2)
+    p.add_argument("--attn-heads", type=int, default=4)
+    p.add_argument("--attn-ffn", type=int, default=256)
+    p.add_argument(
         "--free-order", action="store_true",
         help="drop the template-order constraint from the phase-B mask. Phase A is "
              "always in slot order, which costs nothing: every subset is expressible "
@@ -414,14 +431,37 @@ def main() -> None:
         flush=True,
     )
 
-    net = TwoPhaseNet(cfg, hidden=args.hidden, key=args.key)
-    for source, into in ((args.init_cover, net.cover), (args.init_from, net)):
-        if source is None:
-            continue
-        loaded = torch.load(source, weights_only=True)
-        if loaded["hidden"] != args.hidden or loaded["key"] != args.key:
-            raise SystemExit(f"{source} is {loaded['hidden']}/{loaded['key']} wide")
-        into.load_state_dict(loaded["state"])
+    encoder = EncoderSpec(
+        kind=args.cover_encoder,
+        dim=args.attn_dim,
+        layers=args.attn_layers,
+        heads=args.attn_heads,
+        ffn=args.attn_ffn,
+    )
+    net = TwoPhaseNet(
+        cfg,
+        hidden=args.hidden,
+        key=args.key,
+        cover_hidden=args.cover_hidden,
+        cover_encoder=encoder,
+    )
+    if args.init_cover is not None:
+        loaded = torch.load(args.init_cover, weights_only=True)
+        width = args.cover_hidden or args.hidden
+        if loaded["hidden"] != width or loaded["key"] != args.key:
+            raise SystemExit(f"{args.init_cover} is {loaded['hidden']}/{loaded['key']} wide")
+        net.cover.load_state_dict(loaded["state"])
+    if args.init_from is not None:
+        loaded = torch.load(args.init_from, weights_only=True)
+        net = two_phase_from_checkpoint(cfg, loaded)
+        # The resumed weights decide the architecture, so what is saved has to
+        # describe them rather than the flags: a resume that did not repeat
+        # --cover-encoder would otherwise label an attention cover as the default
+        # MLP, and no reader could rebuild it.
+        args.hidden, args.key = loaded["hidden"], loaded["key"]
+        args.cover_hidden = loaded.get("cover_hidden")
+        spec = loaded.get("cover_encoder")
+        encoder = EncoderSpec(**spec) if spec else EncoderSpec()
     opt = torch.optim.Adam(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scorer = TwoPhaseScorer(net)
     print(f"params {sum(q.numel() for q in net.parameters()):,}", flush=True)
@@ -521,6 +561,8 @@ def main() -> None:
                         "cfg": args.config,
                         "hidden": args.hidden,
                         "key": args.key,
+                        "cover_hidden": args.cover_hidden,
+                        "cover_encoder": encoder.as_dict(),
                         "monotone": monotone,
                         "epoch": epoch,
                         "state": best_state,
@@ -614,6 +656,8 @@ def main() -> None:
                     "holdout_by_beam": {str(k): v for k, v in final.items()},
                     "hidden": args.hidden,
                     "key": args.key,
+                    "cover_hidden": args.cover_hidden,
+                    "cover_encoder": encoder.as_dict(),
                     "lr": args.lr,
                     "batch": args.batch,
                     "augment": bool(args.augment),

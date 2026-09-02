@@ -43,13 +43,20 @@ from rummi.agents.learned.repartition_net import (
     n_actions,
     padded_sets,
     present_counts,
+    state_dim,
     state_features,
     stop_action,
     template_table,
 )
+from rummi.agents.learned.set_encoder import (
+    EncoderSpec,
+    KindAttentionTrunk,
+    set_attention,
+)
 from rummi.agents.learned.two_phase_net import (
     BREAK_DYNAMIC,
     BreakNet,
+    TwoPhaseNet,
     break_dynamic,
     break_feasible,
     break_state_features,
@@ -61,6 +68,7 @@ from rummi.agents.learned.two_phase_net import (
     slot_counts,
     slot_static,
     stop_break,
+    two_phase_from_checkpoint,
 )
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.env.numpy.deal import reset
@@ -491,3 +499,103 @@ def test_the_break_head_never_ranks_a_masked_slot_above_a_legal_one():
     assert (logits[0, ~legal[0]] == MASKED).all()
     assert logits[0, legal[0]].min() > MASKED
     assert int(np.argmax(logits[0])) in np.flatnonzero(legal[0]).tolist()
+
+
+def test_the_attention_encoder_is_a_drop_in_the_head_cannot_tell_apart():
+    """Same inputs, same mask discipline, same folded head -- only the trunk differs.
+
+    The whole point of an encoder arm is that it is comparable to its control at
+    nothing but the encoder, so the swap must not reach the pointer head: the
+    candidate side of the bilinear score is built from `static` and `dynamic`, which
+    neither arm touches, and `MASKED` still has to dominate.
+    """
+    cfg = STANDARD
+    spec = EncoderSpec(kind="attention", dim=32, layers=2, heads=4, ffn=64)
+    torch.manual_seed(0)
+    net = RepartitionNet(cfg, hidden=48, key=16, encoder=spec)
+
+    row = stuck_states()[0]
+    need, avail = initial_counts(cfg, row.rack, row.board)
+    dynamic, short = candidate_features(
+        cfg, need[None], avail[None], present_counts(cfg, row.board)[None], np.array([0])
+    )
+    legal = feasible(
+        cfg, need[None], avail[None], np.array([0]), np.array([0]), short, monotone=True
+    )
+    with torch.no_grad():
+        logits = net(
+            torch.from_numpy(
+                state_features(
+                    cfg,
+                    need[None],
+                    avail[None],
+                    np.array([0]),
+                    np.array([0]),
+                    present_counts(cfg, row.board)[None],
+                )
+            ),
+            torch.from_numpy(dynamic),
+            torch.from_numpy(legal),
+        ).numpy()
+    assert logits.shape == (1, n_actions(cfg))
+    assert (logits[0, ~legal[0]] == MASKED).all()
+    assert logits[0, legal[0]].min() > MASKED
+
+    # The default keeps the MLP's own parameter names, so every published
+    # checkpoint still loads into an untouched constructor.
+    assert set(RepartitionNet(cfg, hidden=48, key=16).state_dict()) == set(
+        RepartitionNet(cfg, hidden=48, key=16, encoder=EncoderSpec()).state_dict()
+    )
+
+
+def test_ablating_the_attention_removes_exactly_the_pathway_between_kinds():
+    """What the flip-rate probe rests on: `self` really does cut the mixing.
+
+    Under `self` the summary token reads its own scalars and nothing else, so two
+    states whose scalars agree and whose counts differ have to score *identically*;
+    under `attend` they must not, or there is no routing to measure the value of.
+    """
+    cfg = STANDARD
+    spec = EncoderSpec(kind="attention", dim=32, layers=2, heads=4, ffn=64)
+    torch.manual_seed(0)
+    trunk = KindAttentionTrunk(cfg, state_dim(cfg), 48, spec)
+
+    left = torch.zeros(1, state_dim(cfg))
+    right = left.clone()
+    left[0, 3] = left[0, cfg.n_kinds + 3] = 1.0
+    right[0, 9] = right[0, cfg.n_kinds + 9] = 1.0
+    with torch.no_grad():
+        assert not torch.allclose(trunk(left), trunk(right))
+        set_attention(trunk, "self")
+        assert torch.allclose(trunk(left), trunk(right))
+        set_attention(trunk, "uniform")
+        # Uniform pooling is still a *sum* over the tokens, so it separates a pair
+        # that differs in what is held -- it drops only which kind holds it.
+        assert not torch.allclose(trunk(left), trunk(right))
+
+
+def test_a_two_phase_checkpoint_rebuilds_the_encoder_it_was_trained_with():
+    """A checkpoint that named an encoder cannot quietly load into the default one.
+
+    The two arms of the experiment differ only in the cover trunk, so a reader that
+    dropped the spec would score the control twice and call it a comparison.
+    """
+    cfg = STANDARD
+    spec = EncoderSpec(kind="attention", dim=32, layers=1, heads=4, ffn=64)
+    torch.manual_seed(0)
+    net = TwoPhaseNet(cfg, hidden=48, key=16, cover_hidden=64, cover_encoder=spec)
+    checkpoint = {
+        "hidden": 48,
+        "key": 16,
+        "cover_hidden": 64,
+        "cover_encoder": spec.as_dict(),
+        "monotone": False,
+        "state": net.state_dict(),
+    }
+    rebuilt = two_phase_from_checkpoint(cfg, checkpoint)
+    for (name, was), (again, now) in zip(
+        net.state_dict().items(), rebuilt.state_dict().items(), strict=True
+    ):
+        assert name == again and torch.equal(was, now)
+    with pytest.raises(RuntimeError):
+        TwoPhaseNet(cfg, hidden=48, key=16).load_state_dict(checkpoint["state"])

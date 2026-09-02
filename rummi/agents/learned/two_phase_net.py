@@ -46,6 +46,7 @@ from rummi.agents.learned.repartition_net import (
     present_counts,
     stop_action,
 )
+from rummi.agents.learned.set_encoder import EncoderSpec
 from rummi.agents.macro import set_templates
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import tables
@@ -323,12 +324,43 @@ class TwoPhaseNet(nn.Module):
     `cover` is a plain `RepartitionNet`, unchanged and with the same state dict, so
     a one-phase checkpoint initialises it and the two spaces stay comparable at the
     level of weights rather than only of scores.
+
+    The heads share no parameters and no batch, so `cover_hidden` and
+    `cover_encoder` change the cover alone: an arm that varies the cover's encoder
+    trains a bit-identical break head beside it from the same seed.
     """
 
-    def __init__(self, cfg: RummiConfig, hidden: int = 256, key: int = 64) -> None:
+    def __init__(
+        self,
+        cfg: RummiConfig,
+        hidden: int = 256,
+        key: int = 64,
+        cover_hidden: int | None = None,
+        cover_encoder: EncoderSpec | None = None,
+    ) -> None:
         super().__init__()
         self.breaker = BreakNet(cfg, hidden=hidden, key=key)
-        self.cover = RepartitionNet(cfg, hidden=hidden, key=key)
+        self.cover = RepartitionNet(
+            cfg, hidden=cover_hidden or hidden, key=key, encoder=cover_encoder
+        )
+
+
+def two_phase_from_checkpoint(cfg: RummiConfig, checkpoint: dict) -> TwoPhaseNet:
+    """Rebuild the net a checkpoint holds -- widths, cover encoder and weights.
+
+    Written once and read by both trainers, so a checkpoint carrying an encoder the
+    reader does not reconstruct cannot silently load into the default one.
+    """
+    spec = checkpoint.get("cover_encoder")
+    net = TwoPhaseNet(
+        cfg,
+        hidden=checkpoint["hidden"],
+        key=checkpoint["key"],
+        cover_hidden=checkpoint.get("cover_hidden"),
+        cover_encoder=EncoderSpec(**spec) if spec else None,
+    )
+    net.load_state_dict(checkpoint["state"])
+    return net
 
 
 class TwoPhaseScorer:
@@ -538,4 +570,5 @@ __all__ = [
     "slot_present",
     "slot_static",
     "stop_break",
+    "two_phase_from_checkpoint",
 ]

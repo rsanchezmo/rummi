@@ -39,6 +39,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from rummi.agents.learned.set_encoder import EncoderSpec, build_trunk
 from rummi.agents.macro import set_templates, template_points
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import EMPTY, kinds_to_counts, tables
@@ -524,18 +525,26 @@ class RepartitionNet(nn.Module):
     The dynamic half is folded through the query rather than into the candidate
     embedding: `q . (W d) == (q W) . d`, so the `(B, T, key)` tensor never exists
     and the whole head is two matmuls the size of the template table.
+
+    `encoder` chooses what produces that query -- the flat MLP over the count
+    vectors, or `set_encoder`'s attention over one token per kind. Everything below
+    it, the folding included, is the same either way, which is what makes the two
+    comparable at anything but the encoder.
     """
 
     static: torch.Tensor
 
-    def __init__(self, cfg: RummiConfig, hidden: int = 256, key: int = 64) -> None:
+    def __init__(
+        self,
+        cfg: RummiConfig,
+        hidden: int = 256,
+        key: int = 64,
+        encoder: EncoderSpec | None = None,
+    ) -> None:
         super().__init__()
         tt = template_table(cfg)
         self.register_buffer("static", torch.as_tensor(tt.static))
-        self.trunk = nn.Sequential(
-            nn.Linear(state_dim(cfg), hidden), nn.ReLU(),
-            nn.Linear(hidden, hidden), nn.ReLU(),
-        )
+        self.trunk = build_trunk(cfg, state_dim(cfg), hidden, encoder)
         self.query = nn.Linear(hidden, key)
         self.describe = nn.Sequential(
             nn.Linear(static_dim(cfg), key), nn.ReLU(), nn.Linear(key, key)
