@@ -575,6 +575,101 @@ would have done the same"**. That cuts against an encoder *win*, which is why th
 data-scaling curve gates one -- it does not rescue this loss, but a prior with more
 capacity needing more data to pay is the one reading this run cannot exclude.
 
+## The mixed-pool matrix measured nothing, and finding out why cost more than the matrix
+
+**Adaptation only has content against a population.** A best response to one fixed
+deterministic opponent is itself a fixed policy, so the arena for "does a policy
+counter *this* opponent and not *that* one" is a pool. `--opponent` already takes a
+comma-separated one and reports every rate per member, so the experiment needed no
+plumbing: four best-response arms, identical seed and recipe, differing only in
+whom they faced (`greedy` / `rearrange` / `frugal` / `optimal`), cross-scored on all
+four columns. `frugal` earns its place in `OPPONENTS` here -- it is the only member
+even with `optimal` head-to-head (48.7%, n=600) while getting there by a different
+mechanism, so it separates "counters that opponent" from "that opponent is weaker".
+
+`eval_macro --vs` seats an opponent in a frozen suite's own deals rather than
+editing a suite, so the columns are paired on deals and no published score is
+touched. Read at u40, argmax, entropy comparable (H 0.005-0.007), n=400:
+
+| arm | vs `greedy` | vs `rearrange` | vs `frugal` | vs `optimal` |
+|---|---|---|---|---|
+| BR vs greedy | 99.5% / +48.43 | 98.5% / +33.17 | 51.5% / +0.48 | 51.7% / +1.20 |
+| BR vs rearrange | 99.8% / +48.29 | 98.8% / +33.45 | 50.5% / +0.39 | 51.2% / +1.32 |
+| clone (baseline) | 99.8% / +48.24 | 98.8% / +33.47 | 49.8% / -0.14 | 51.2% / +0.78 |
+
+**Flat -- and worthless, because the arms are one policy.** `policy_divergence.py`
+scores every arm's argmax over one driver's recorded rows: the four arms agree with
+each other on **99.0% of 3,327 decisions**, and each sits **0.5-0.6% from its own
+exact anchor** (reproduced by re-running the clone at the same seed, nll 0.0041
+identical). Movement does not grow with training -- 0.5% at u20, 0.5% at u40, 0.6%
+at u60 -- so it is not a matter of more updates. A flat row here says nothing about
+adaptation; it says four copies of `by_value` score the same, which they must.
+
+**This is the trap the denial writeup names** ("either it is worthless, or that
+learner was signal-limited"), caught only because the movement control was
+pre-registered. Without it the matrix would have shipped as a null.
+
+### `--kl-coef` is not what pins it
+
+The obvious suspect was the anchor: RL is KL-anchored to a clone that agrees with
+`by_value` 99.9% of the time. Five rungs from a shared anchor, `--init-from` so
+none re-pays the 200k-state gather:
+
+| rung | moves from anchor | argmax vs `greedy` |
+|---|---|---|
+| kl 0.1, eps 0.05 | 0.5% | -- |
+| kl 0.03 | 0.9% | -- |
+| kl 0.01 | 0.3% | -- |
+| kl 0.003 | 1.1% | -- |
+| kl 0 (unanchored) | 1.1% | 100.0% / +47.90 |
+
+Deleting the anchor entirely moves 1.1% and is **not monotone** (0.01 moves less
+than 0.03), so the whole ladder is one noise band. Nothing collapsed either, which
+qualifies the "unanchored PPO walks to the random floor" note above: that was the
+primitive space: from a repartition-space clone, kl=0 scores +47.90 against the
+anchor's +48.67.
+
+### `--explore-eps` moves it, and past 0.2 it destroys it -- invisibly
+
+| rung (kl 0) | moves | argmax vs `greedy` | H |
+|---|---|---|---|
+| eps 0.05 | 1.1% | 100.0% / +47.90 | 0.005 |
+| eps 0.2 | 1.6% | 100.0% / +47.66 | 0.007 |
+| eps 0.5 | 3.3% | **0.0% / -442.32, 100% stalemate** | 0.101 |
+
+**The eps 0.5 arms are destroyed, and every number the trainer printed said
+otherwise**: terminal +0.117 (the best of any rung), meld 90.0%, end 25%. Because
+`--explore-eps` mixes uniform-over-legal into the rollout sampler, at 0.5 half of
+every action is random and `terminal`/`meld`/`end` describe **the mixture, not the
+policy**. A policy can rot to 100% stalemate with the training log improving. Nor
+is it the diffuse-argmax artifact this file warns about elsewhere -- H is 0.089-0.101,
+a mode carrying ~97% of the mass, and scored `--sample` the same checkpoint reads
+59.2% / -113.06 with 40.5% stalemate against the anchor's 99.8% / +48.70.
+
+So the same recipe against the two hard opponents produced movement without
+specialisation: vs `optimal` **11.6% moved, KL 0.262**, terminal -0.040 -> -0.037
+over 60 updates; vs `frugal` 1.2% moved, KL 0.115, -0.035 -> -0.011. Equal
+headroom (the anchor is 50.5% / 51.2% against them), very different divergence, no
+gain in either -- and the larger divergence is the *degraded* arm, so it measures
+rot, not adaptation.
+
+### What this leaves
+
+**The specialisation question is untested, not answered**, and the blocker is now
+named: **everything that keeps the policy competent moves it at most 1.6%, and the
+first setting that moves more destroys it.** The window has no measured middle. The
+clone sits at a sharp optimum, and exploration large enough to leave its mode is
+large enough to poison the update.
+
+Two things to carry, both cheap and both learned the expensive way:
+- **A flat training arm needs proof it moved** before its score is a null.
+  `policy_divergence.py` is that proof, and it reports entropy and mean KL beside
+  the flip rate because an argmax flip rate is the right instrument for a
+  concentrated policy and a poor one for a diffuse one.
+- **Any run with `--explore-eps` above a few percent must be scored by its argmax
+  policy per checkpoint, never by the training terminal.** Three of four rungs here
+  were unreadable without it.
+
 ## Settings measured as harmful
 
 | setting | effect | why |
