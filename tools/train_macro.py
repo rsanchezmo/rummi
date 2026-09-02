@@ -107,9 +107,15 @@ from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 
-OPPONENTS = ("greedy", "rearrange", "optimal", "self")
+OPPONENTS = ("greedy", "rearrange", "frugal", "optimal", "self")
 """What `--opponent` accepts, comma separated. `self` is a frozen snapshot of the
-learner; the rest are bundled agents."""
+learner; the rest are bundled agents, resolved by name against `REGISTRY`.
+
+`frugal` is here because it is the only member that varies *mechanism* without
+varying strength: it is even with `optimal` head-to-head (48.7%, n=600) while
+solving only where it is stuck rather than repartitioning every turn. A pool whose
+members differ in level confounds "this policy counters that opponent" with "this
+opponent is weaker", and that pair is what separates them."""
 
 HIDDEN, HEAD = 256, "flat"
 """Defaults for the architecture flags, which parse to None so that a flag passed
