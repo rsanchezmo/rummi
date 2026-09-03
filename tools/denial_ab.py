@@ -425,6 +425,8 @@ def head_to_head(
     deals: int,
     seed_base: int,
     batch: int = 32,
+    offset: int = 0,
+    watch=None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """`(deals,)` win fraction and official score for A, seat-rotated over the deals.
 
@@ -432,16 +434,25 @@ def head_to_head(
     `protocol` does and the only thing that cancels turn order past two seats. Each
     deal collapses to one number, so the per-deal spread is the error bar and games
     sharing a deal are not counted as independent.
+
+    `offset` shifts which deals these are without touching the seed base, so a caller
+    may split one rotation across processes and concatenate the per-deal rows -- the
+    deal a row belongs to is `offset + row`, and the seeds are the same either way.
+    `watch(seat, first_deal)` returns an observer for :func:`play_deals`, which is how
+    the mechanism is read off the same games the score comes from.
     """
     wins = np.zeros((deals, cfg.n_players))
     scores = np.zeros((deals, cfg.n_players))
     for start in range(0, deals, batch):
         count = min(batch, deals - start)
-        seeds = [np.random.SeedSequence([seed_base, start + i]) for i in range(count)]
+        seeds = [
+            np.random.SeedSequence([seed_base, offset + start + i]) for i in range(count)
+        ]
         for seat in range(cfg.n_players):
             seats: list[Agent] = [make_b(cfg) for _ in range(cfg.n_players)]
             seats[seat] = make_a(cfg)
-            winner, values = play_deals(cfg, seats, seeds)
+            observer = None if watch is None else watch(seat, offset + start)
+            winner, values = play_deals(cfg, seats, seeds, watch=observer)
             won = winner == seat
             wins[start : start + count, seat] = won
             others = [p for p in range(cfg.n_players) if p != seat]

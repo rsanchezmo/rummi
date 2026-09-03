@@ -15,6 +15,21 @@ alternatives come from CP-SAT under added constraints: the same number of tiles
 shed onto a different table, fewer tiles shed, no rearrangement at all, or
 nothing played.
 
+A mean over a deviation type cannot see a *targeted* effect inside it, so every
+turn -- the alternatives and the one actually played -- also records what it leaves
+behind. The oracle half is the opponent's best reply under CP-SAT against its true
+rack: the most tiles it could shed, which answers both questions asked of it at
+once, since zero means the table offers it nothing and its own rack size means the
+door to going out is open. Beside it sits what the opponent actually shed on its
+next turn in the continuation, and the unseen-weighted lay-off doors
+`tools/denial_ab.py` scores a table by -- the same quantity, computed from nothing
+hidden, so a targeted oracle effect can be checked against the signal a real agent
+would have to find it with.
+
+The hypothesis those exist for is endgame denial: the opponent is a tile or two
+from finishing and, among the tables that shed the same tiles, one closes the door
+it needs.
+
 Two things this cannot bound. It is perfect hindsight -- the future deck and the
 opponent's rack are both visible to the enumeration, so no real policy can reach
 it -- and it deviates on one turn only, so a strategy that gives something up now
@@ -25,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, fields
@@ -35,7 +51,8 @@ import numpy as np
 
 from rummi.agents import build
 from rummi.agents.base import act_by_seat
-from rummi.rules.config import STANDARD, RummiConfig
+from rummi.agents.greedy_agent import appendable
+from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import reset as deal_reset
 from rummi.env.numpy.deal import reset_envs
 from rummi.env.numpy.engine import step as engine_step
@@ -45,6 +62,12 @@ from rummi.env.numpy.state import BatchState
 from rummi.env.observation import encode
 from rummi.solver.ilp import Objective, solve_turn
 from rummi.solver.to_actions import plan, slot_contents
+
+# Permeability is imported rather than recomposed. It is the metric the denial arm
+# was scored on, and a second copy of it could disagree with that one about what a
+# door is -- which is the whole point of recording it here.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from denial_ab import permeability
 
 AGENT = "frugal"
 KINDS = ("cpsat_max", "same_tiles_other_table", "fewer_tiles", "frozen_table", "draw")
@@ -64,6 +87,92 @@ Signature = tuple[tuple[tuple[int, ...], ...], tuple[int, ...]]
 
 class HarnessError(RuntimeError):
     """An illegal step or an unreachable target: a bug here, not a measurement."""
+
+
+# --- what a turn leaves behind ----------------------------------------------
+
+
+@dataclass(slots=True)
+class Left:
+    """What one finished turn leaves: the table's own properties, then what the
+    continuation did with them.
+
+    The oracle half reads the opponent's true rack, which is legitimate here for the
+    same reason the rest of the file is -- this prices a bound, not a policy -- and
+    it is one solve per opponent, not two: `opp_shed` is the *most* tiles that
+    opponent could shed against this table, so zero means the table offers it
+    nothing and its own rack size means its exit is open.
+    """
+
+    perm: float = 0.0
+    """Unseen-weighted lay-off doors: `denial_ab.permeability`, the observable proxy."""
+    doors: int = 0
+    """How many distinct kinds any slot would accept, unweighted."""
+    opp_shed: list[int] = field(default_factory=list)
+    """Per opponent. -1 where the turn ended the game, which leaves no reply to price."""
+    ended: bool = False
+    next_shed: list[int | None] = field(default_factory=list)
+    """Per opponent, what it actually shed on its own next turn: negative where it
+    drew instead, None where it never got one."""
+    next_win: list[bool] = field(default_factory=list)
+    """Per opponent, whether that turn is the one it wins on."""
+    own_shed: int | None = None
+    """The deviator's own next turn, the same way."""
+
+    def as_json(self) -> dict:
+        return {
+            "perm": round(self.perm, 3),
+            "doors": self.doors,
+            "opp_shed": self.opp_shed,
+            "ended": self.ended,
+            "next_shed": self.next_shed,
+            "next_win": self.next_win,
+            "own_shed": self.own_shed,
+        }
+
+
+def unseen_for(state: BatchState, env: int, seat: int) -> np.ndarray:
+    """The pool plus every rack but ``seat``'s -- what the observation merges into
+    `unseen`, read off the state rather than encoded, because by the time a turn has
+    an afterstate `current` has already moved on to the next seat."""
+    racks = state.racks[env].astype(np.int64)
+    return racks.sum(0) - racks[seat] + state.pool[env].astype(np.int64)
+
+
+def sparse_rack(rack: np.ndarray) -> list[list[int]]:
+    return [[int(k), int(n)] for k, n in enumerate(rack) if n]
+
+
+def board_features(
+    cfg: RummiConfig,
+    state: BatchState,
+    env: int,
+    seat: int,
+    opps: list[int],
+    time_limit: float,
+) -> Left:
+    """Read the afterstate the env actually reached -- not the target handed to
+    `plan` -- so a turn is scored on the table it landed on."""
+    rows = state.table_sets[env]
+    unseen = unseen_for(state, env, seat)
+    left = Left(
+        perm=float(permeability(cfg, rows, unseen)),
+        doors=int(appendable(cfg, rows, unseen).any(0).sum()),
+        ended=bool(state.done[env]),
+    )
+    for p in opps:
+        if left.ended:
+            left.opp_shed.append(-1)
+            continue
+        reply = solve_turn(
+            cfg,
+            state.racks[env, p].astype(np.int64),
+            rows,
+            bool(state.melded[env, p]),
+            time_limit=time_limit,
+        )
+        left.opp_shed.append(int(reply.tiles_played) if reply.feasible else 0)
+    return left
 
 
 @dataclass(slots=True)
@@ -93,6 +202,15 @@ class Decision:
     """The k-best enumeration proved there are no further max-tiles tables."""
     freeze: str
     """Why the no-rearrangement turn is or is not a distinct alternative."""
+    opps: list[int] = field(default_factory=list)
+    """The other seats, ascending. Every per-opponent list below is aligned with it."""
+    opp_sizes: list[int] = field(default_factory=list)
+    opp_racks: list[list[list[int]]] = field(default_factory=list)
+    """Each opponent's true rack as ``[kind, count]`` pairs -- the oracle the
+    feasibility check reads, kept so a later question can be asked of the same run
+    without replaying it."""
+    base: Left = field(default_factory=Left)
+    """The played turn, measured exactly as an alternative is, so a delta is paired."""
     alts: list[dict] = field(default_factory=list)
 
 
@@ -302,14 +420,85 @@ def stack(states: list[BatchState]) -> BatchState:
     )
 
 
-def rollout(cfg: RummiConfig, state: BatchState, max_steps: int) -> BatchState:
-    """Continue every env to the end with fresh agents on both seats."""
+@dataclass(slots=True)
+class Trace:
+    """The turn boundaries at the head of a rollout, and nothing after them.
+
+    Depth is `n_players + 2`: every seat's next turn is inside `n_players`
+    boundaries, its *end* one further, and the zero-deviation continuation still has
+    the played turn in front of it so its own boundaries are one later than
+    everything else's.
+    """
+
+    seat: np.ndarray
+    ended: np.ndarray
+    racks: np.ndarray
+    """``(B, depth, P)`` rack totals, which is all a shed count needs."""
+    n: np.ndarray
+
+    @classmethod
+    def blank(cls, batch: int, depth: int, players: int) -> Trace:
+        return cls(
+            seat=np.full((batch, depth), -1, np.int64),
+            ended=np.zeros((batch, depth), bool),
+            racks=np.zeros((batch, depth, players), np.int64),
+            n=np.zeros(batch, np.int64),
+        )
+
+    def record(self, state: BatchState) -> None:
+        at = np.flatnonzero((state.micro_count == 0) & (self.n < self.seat.shape[1]))
+        if not at.size:
+            return
+        k = self.n[at]
+        self.seat[at, k] = state.current[at]
+        self.ended[at, k] = state.done[at]
+        self.racks[at, k] = state.racks[at].sum(-1)
+        self.n[at] = k + 1
+
+    def first_turn(
+        self, env: int, seat: int, winner: int, skip: int
+    ) -> tuple[int | None, bool]:
+        """Tiles ``seat`` sheds on its first turn from ``skip`` boundaries in, and
+        whether that is the turn it wins on. None where it never gets one."""
+        for i in range(skip, int(self.n[env]) - 1):
+            if self.ended[env, i] or int(self.seat[env, i]) != seat:
+                continue
+            shed = int(self.racks[env, i, seat] - self.racks[env, i + 1, seat])
+            return shed, bool(self.ended[env, i + 1]) and winner == seat
+        return None, False
+
+
+def first_turn_in_game(
+    boundaries: list[Boundary], final: BatchState, skip: int, seat: int, winner: int
+) -> tuple[int | None, bool]:
+    """:meth:`Trace.first_turn` read off the baseline's own boundary list instead.
+
+    The played turn's continuation is the game itself, so rolling it out again would
+    only re-derive it. The two derivations share nothing, which is what makes
+    ``--check`` comparing them worth running.
+    """
+    for j in range(skip, len(boundaries)):
+        if boundaries[j].seat != seat:
+            continue
+        before = int(boundaries[j].racks[seat].sum())
+        if j + 1 < len(boundaries):
+            return before - int(boundaries[j + 1].racks[seat].sum()), False
+        return before - int(final.racks[0, seat].sum()), winner == seat
+    return None, False
+
+
+def rollout(
+    cfg: RummiConfig, state: BatchState, max_steps: int
+) -> tuple[BatchState, Trace]:
+    """Continue every env to the end with fresh agents on every seat."""
     seats = [build(AGENT, cfg) for _ in range(cfg.n_players)]
     for agent in seats:
         agent.reset(state.batch_size)
+    trace = Trace.blank(state.batch_size, cfg.n_players + 2, cfg.n_players)
     for _ in range(max_steps):
         if state.done.all():
             break
+        trace.record(state)
         summary = summarize(cfg, state.table_sets)
         mask = legal_actions(state, summary)
         actions, illegal = act_by_seat(
@@ -318,7 +507,7 @@ def rollout(cfg: RummiConfig, state: BatchState, max_steps: int) -> BatchState:
         if illegal:
             raise HarnessError("a rollout agent proposed a masked action")
         engine_step(state, actions, mask)
-    return state
+    return state, trace
 
 
 # --- one game ----------------------------------------------------------------
@@ -336,7 +525,18 @@ def run_game(job: tuple) -> dict:
 
 
 def _run_game(job: tuple) -> dict:
-    index, cfg, seed_base, kbest, time_limit, chunk, max_steps, check, replay_base = job
+    (
+        index,
+        cfg,
+        seed_base,
+        kbest,
+        time_limit,
+        chunk,
+        max_steps,
+        check,
+        replay_base,
+        features,
+    ) = job
     started = time.perf_counter()
     seed = np.random.SeedSequence([seed_base, index])
     boundaries, final = play_base(cfg, seed, max_steps)
@@ -364,6 +564,18 @@ def _run_game(job: tuple) -> dict:
         )
         unproven += diag["unproven"]
         opponents = [p for p in range(cfg.n_players) if p != boundary.seat]
+        base_left = (
+            board_features(cfg, after, 0, boundary.seat, opponents, time_limit)
+            if features
+            else Left()
+        )
+        for p in opponents:
+            shed, win = first_turn_in_game(boundaries, final, i + 1, p, winner)
+            base_left.next_shed.append(shed)
+            base_left.next_win.append(win)
+        base_left.own_shed = first_turn_in_game(
+            boundaries, final, i + 1, boundary.seat, winner
+        )[0]
         decision = Decision(
             boundary=i,
             turn=boundary.turn,
@@ -378,6 +590,10 @@ def _run_game(job: tuple) -> dict:
             n_tables=int(diag["n_tables"]),
             exhausted=bool(diag["exhausted"]),
             freeze=str(diag["freeze"]),
+            opps=opponents,
+            opp_sizes=[int(boundary.racks[p].sum()) for p in opponents],
+            opp_racks=[sparse_rack(boundary.racks[p]) for p in opponents],
+            base=base_left,
         )
         if check:
             found.append(Candidate(kind=CONTINUE, tiles=0, actions=[]))
@@ -393,14 +609,31 @@ def _run_game(job: tuple) -> dict:
     for start in range(0, len(candidates), chunk):
         batch = candidates[start : start + chunk]
         states = []
+        lefts = []
         for candidate in batch:
-            state = boundaries[decisions[candidate.decision].boundary].state.clone()
+            decision = decisions[candidate.decision]
+            state = boundaries[decision.boundary].state.clone()
             execute(cfg, state, candidate.actions)
+            # The zero-deviation candidate has not played the turn yet, so its
+            # afterstate is not one: only the outcome and the sheds are read from it.
+            lefts.append(
+                board_features(cfg, state, 0, decision.seat, decision.opps, time_limit)
+                if features and candidate.kind != CONTINUE
+                else Left()
+            )
             states.append(state)
-        rolled = rollout(cfg, stack(states), max_steps)
+        rolled, trace = rollout(cfg, stack(states), max_steps)
         for offset, candidate in enumerate(batch):
             decision = decisions[candidate.decision]
             outcome = _outcome(rolled, offset, decision.seat)
+            left = lefts[offset]
+            skip = 1 if candidate.kind == CONTINUE else 0
+            rolled_winner = int(rolled.winner[offset])
+            for p in decision.opps:
+                shed, win = trace.first_turn(offset, p, rolled_winner, skip)
+                left.next_shed.append(shed)
+                left.next_win.append(win)
+            left.own_shed = trace.first_turn(offset, decision.seat, rolled_winner, skip)[0]
             if candidate.kind == CONTINUE:
                 turns = int(rolled.turn_count[offset])
                 won = outcome == 1
@@ -409,6 +642,15 @@ def _run_game(job: tuple) -> dict:
                         f"continue at turn {decision.turn} gave won={won} turns={turns}, "
                         f"baseline won={decision.base_won} turns={base_turns}"
                     )
+                if (left.next_shed, left.own_shed) != (
+                    decision.base.next_shed,
+                    decision.base.own_shed,
+                ):
+                    failures.append(
+                        f"continue at turn {decision.turn} sheds "
+                        f"{left.next_shed}/{left.own_shed}, the baseline's own "
+                        f"boundaries say {decision.base.next_shed}/{decision.base.own_shed}"
+                    )
                 continue
             if candidate.kind == REPLAY and outcome != (1 if decision.base_won else 0):
                 failures.append(
@@ -416,7 +658,12 @@ def _run_game(job: tuple) -> dict:
                     f"baseline won={decision.base_won}"
                 )
             decision.alts.append(
-                {"kind": candidate.kind, "tiles": candidate.tiles, "won": outcome}
+                {
+                    "kind": candidate.kind,
+                    "tiles": candidate.tiles,
+                    "won": outcome,
+                    **left.as_json(),
+                }
             )
 
     return {
@@ -442,6 +689,10 @@ def _run_game(job: tuple) -> dict:
                 "n_tables": d.n_tables,
                 "exhausted": d.exhausted,
                 "freeze": d.freeze,
+                "opps": d.opps,
+                "opp_sizes": d.opp_sizes,
+                "opp_racks": d.opp_racks,
+                "base": d.base.as_json(),
                 "alts": d.alts,
             }
             for d in decisions
@@ -476,6 +727,35 @@ def phase(d: dict) -> str:
 
 def _rate(hits: int, total: int) -> str:
     return f"{hits / total:6.1%}" if total else "     --"
+
+
+def _cluster(values: list[tuple[int, float]]) -> tuple[int, float, float]:
+    """n, mean and a 95% half-width clustered by deal, over ``(deal, value)`` pairs.
+
+    Alternatives inside one deal share its deck and its opponent, so the deal is the
+    unit of independence: counting them separately would divide by a sample size the
+    measurement does not have.
+    """
+    by_deal: dict[int, list[float]] = defaultdict(list)
+    for deal, value in values:
+        by_deal[deal].append(value)
+    means = [float(np.mean(v)) for v in by_deal.values()]
+    if not means:
+        return 0, float("nan"), float("nan")
+    if len(means) == 1:
+        return len(values), means[0], float("nan")
+    half = 1.96 * float(np.std(means, ddof=1)) / len(means) ** 0.5
+    return len(values), float(np.mean(means)), half
+
+
+def _fmt(n: int, mean: float, half: float) -> str:
+    """One cell: the delta, its interval and the alternatives behind it. A cell drawn
+    from a single deal has a mean but no interval, and says so rather than quoting a
+    zero."""
+    if not n:
+        return f"{'--':>22}"
+    interval = "  --  " if np.isnan(half) else f"{half:<6.1%}"
+    return f"{mean:>+7.1%} +-{interval} n={n:<5}"
 
 
 def _independent_prediction(played: list[dict], seats: int) -> tuple[float, float]:
@@ -514,6 +794,349 @@ def _independent_prediction(played: list[dict], seats: int) -> tuple[float, floa
                 per_seat.append(1.0 - (1.0 - rate) ** n)
         out.append(float(np.mean(per_seat)) if per_seat else float("nan"))
     return out[0], out[1]
+
+
+# --- the targeted analysis ---------------------------------------------------
+
+SHAPED = "same_tiles_other_table"
+"""The one free parameter in a per-turn-maximising turn, and so the type the tables
+below pair against the played turn one alternative at a time."""
+
+
+@dataclass(slots=True)
+class Delta:
+    """One alternative against the turn it replaced.
+
+    ``deal`` is what the interval is clustered on and ``at`` identifies the decision
+    inside it, so a table can report how many *decisions* a cell covers as well as
+    how many alternatives. Everything else is a split.
+    """
+
+    deal: int
+    at: int
+    delta: float
+    phase: str
+    kind: str
+    shed_vs_base: int
+    """Tiles this alternative shed, minus what the played turn shed."""
+    opp_size: int = 0
+    leader: bool = False
+    """This opponent holds the fewest tiles -- at two seats, always true."""
+    next_up: bool = False
+    """This opponent is the seat that plays next, and so the only one that meets this
+    table as the deviation left it. Past two seats the others meet whatever the seats
+    before them leave, so their reply is a door as it stands and not as they find it."""
+    d_shed: int | None = None
+    """Change in what the opponent actually shed on its next turn. None where one
+    side of the pair never gave it a turn at all."""
+    d_play: int = 0
+    """Change in whether the opponent can play anything at all: -1 closes it."""
+    d_out: int = 0
+    """Change in whether the opponent can shed its whole rack: -1 closes the exit."""
+    base_out: bool = False
+    """The opponent could shed its whole rack against the table actually left, which
+    is what makes a decision one where there is a door to close at all."""
+    closed_out: bool = False
+    d_perm: float = 0.0
+    d_doors: int = 0
+
+
+def tile_deltas(played: list[dict]) -> list[Delta]:
+    """Every alternative against the played turn, split by how many tiles it shed
+    rather than by which constraint reached it."""
+    out: list[Delta] = []
+    for game in played:
+        for at, d in enumerate(game["decisions"]):
+            for a in d["alts"]:
+                if a["won"] < 0 or a["kind"] == REPLAY:
+                    continue
+                out.append(
+                    Delta(
+                        deal=game["game"],
+                        at=at,
+                        delta=float(a["won"] == 1) - float(d["base_won"]),
+                        phase=phase(d),
+                        kind=a["kind"],
+                        shed_vs_base=a["tiles"] - d["base_tiles"],
+                    )
+                )
+    return out
+
+
+def denial_pairs(played: list[dict]) -> tuple[list[Delta], int]:
+    """Every same-tiles alternative against the played turn, once per opponent.
+
+    A turn that ends the game leaves no door to close, on either side of the pair, so
+    those are dropped and counted rather than scored: they would read as a large
+    positive delta with nothing to do with the table.
+    """
+    out: list[Delta] = []
+    dropped = 0
+    for game in played:
+        for at, d in enumerate(game["decisions"]):
+            base = d.get("base")
+            # A run with the features turned off records the outcome and nothing to
+            # pair it against, so there is nothing here to answer.
+            if not base or len(base["opp_shed"]) != len(d.get("opp_sizes", ())):
+                continue
+            smallest = min(d["opp_sizes"])
+            next_seat = (d["seat"] + 1) % (len(d["opps"]) + 1)
+            for a in d["alts"]:
+                if a["kind"] != SHAPED or a["won"] < 0:
+                    continue
+                if base["ended"] or a["ended"]:
+                    dropped += 1
+                    continue
+                for o, size in enumerate(d["opp_sizes"]):
+                    was, now = base["next_shed"][o], a["next_shed"][o]
+                    base_out = base["opp_shed"][o] >= size
+                    out.append(
+                        Delta(
+                            deal=game["game"],
+                            at=at,
+                            delta=float(a["won"] == 1) - float(d["base_won"]),
+                            phase=phase(d),
+                            kind=a["kind"],
+                            shed_vs_base=a["tiles"] - d["base_tiles"],
+                            opp_size=size,
+                            leader=size == smallest,
+                            next_up=d["opps"][o] == next_seat,
+                            d_shed=None if was is None or now is None else now - was,
+                            d_play=int(a["opp_shed"][o] > 0) - int(base["opp_shed"][o] > 0),
+                            d_out=int(a["opp_shed"][o] >= size) - int(base_out),
+                            base_out=base_out,
+                            closed_out=base_out and a["opp_shed"][o] < size,
+                            d_perm=a["perm"] - base["perm"],
+                            d_doors=a["doors"] - base["doors"],
+                        )
+                    )
+    return out, dropped
+
+
+SPLITS = (
+    ("all", lambda p: True),
+    ("pre-meld", lambda p: p.phase == "pre-meld"),
+    ("midgame", lambda p: p.phase == "midgame"),
+    ("endgame", lambda p: p.phase == "endgame"),
+    ("opp rack <=2", lambda p: p.opp_size <= 2),
+    ("opp rack 3-4", lambda p: 3 <= p.opp_size <= 4),
+    ("opp rack >4", lambda p: p.opp_size > 4),
+)
+"""The rows every targeted table carries. The phase rows and the rack rows overlap
+on purpose: `phase` calls a decision endgame on *either* rack being short, and the
+hypothesis is about the opponent's."""
+
+
+def grid(
+    lines: list[str],
+    title: str,
+    records: list[Delta],
+    columns: tuple,
+    splits: tuple = SPLITS,
+) -> None:
+    """One table: `splits` are its rows and `columns` the bucketing under test, both
+    as (label, predicate) over a :class:`Delta`. Every cell is the win delta of the
+    alternatives it holds against the turns they replaced."""
+    lines.append(title)
+    lines.append(f"  {'':<14}" + "".join(f"{name:>23}" for name, _ in columns))
+    for row, keep in splits:
+        kept = [r for r in records if keep(r)]
+        cells = [
+            _fmt(*_cluster([(r.deal, r.delta) for r in kept if inside(r)]))
+            for _, inside in columns
+        ]
+        lines.append(f"  {row:<14}" + "".join(cells))
+    lines.append("")
+
+
+TILE_COLUMNS = (
+    ("fewer tiles", lambda p: p.shed_vs_base < 0 and p.kind != "draw"),
+    ("the same", lambda p: p.shed_vs_base == 0),
+    ("more tiles", lambda p: p.shed_vs_base > 0),
+    ("nothing (draw)", lambda p: p.kind == "draw"),
+)
+SHED_COLUMNS = (
+    ("opp sheds fewer", lambda p: p.d_shed is not None and p.d_shed < 0),
+    ("unchanged", lambda p: p.d_shed == 0),
+    ("opp sheds more", lambda p: p.d_shed is not None and p.d_shed > 0),
+)
+PLAY_COLUMNS = (
+    ("can no longer play", lambda p: p.d_play < 0),
+    ("unchanged", lambda p: p.d_play == 0),
+    ("can play, could not", lambda p: p.d_play > 0),
+)
+OUT_COLUMNS = (
+    ("exit closed", lambda p: p.d_out < 0),
+    ("unchanged", lambda p: p.d_out == 0),
+    ("exit opened", lambda p: p.d_out > 0),
+)
+PERM_COLUMNS = (
+    ("less permeable", lambda p: p.d_perm < -0.001),
+    ("equal", lambda p: abs(p.d_perm) <= 0.001),
+    ("more permeable", lambda p: p.d_perm > 0.001),
+)
+
+
+def _pearson(xs: list[float], ys: list[float]) -> float:
+    if len(xs) < 3:
+        return float("nan")
+    x, y = np.asarray(xs, float), np.asarray(ys, float)
+    if x.std() == 0 or y.std() == 0:
+        return float("nan")
+    return float(np.corrcoef(x, y)[0, 1])
+
+
+def targeted(played: list[dict]) -> list[str]:
+    """The tables a mean by type cannot answer: is the effect targeted inside it?"""
+    lines: list[str] = []
+    grid(
+        lines,
+        "DELTA BY TILES SHED RELATIVE TO THE PLAYED TURN (every type, phase rows only)",
+        tile_deltas(played),
+        TILE_COLUMNS,
+        splits=SPLITS[:4],
+    )
+
+    pairs, dropped = denial_pairs(played)
+    if not pairs:
+        lines.append("TARGETED DENIAL: no afterstate features in this run")
+        lines.append("")
+        return lines
+
+    deals = max(1, len({r.deal for r in pairs}))
+    lines.append(
+        f"TARGETED DENIAL: {len(pairs)} (alternative, opponent) pairs over {deals} deals, "
+        f"{dropped} alternatives dropped for ending the game"
+    )
+    # Past two seats an alternative is paired once per opponent and the outcome delta
+    # is shared between them, so the extra rows are the ones worth reading: which
+    # opponent's door it is.
+    splits = SPLITS
+    if any(not r.next_up for r in pairs):
+        splits = (
+            *SPLITS,
+            ("the next seat", lambda p: p.next_up),
+            ("a later seat", lambda p: not p.next_up),
+            ("the leader", lambda p: p.leader),
+            ("not the leader", lambda p: not p.leader),
+        )
+    lines.append("")
+    for title, columns in (
+        ("  vs WHAT THE OPPONENT ACTUALLY SHED NEXT TURN (oracle)", SHED_COLUMNS),
+        ("  vs WHETHER THE OPPONENT CAN PLAY AT ALL (oracle)", PLAY_COLUMNS),
+        ("  vs WHETHER THE OPPONENT CAN GO OUT (oracle)", OUT_COLUMNS),
+    ):
+        grid(lines, title, pairs, columns, splits=splits)
+    # Permeability is a property of the table and not of an opponent, so it is scored
+    # once per alternative rather than once per pair -- otherwise past two seats the
+    # same delta is counted P-1 times and n reads larger than the sample is. The seat
+    # that plays next is the one kept, since it is the seat that meets this table.
+    grid(
+        lines,
+        "  vs PERMEABILITY OF THE TABLE LEFT (observable, per alternative)",
+        [r for r in pairs if r.next_up],
+        PERM_COLUMNS,
+        splits=splits,
+    )
+
+    lines.append("  THE CELL THE HYPOTHESIS NAMES")
+    for label, keep in (
+        ("exit closed, opp <=2", lambda p: p.closed_out and p.opp_size <= 2),
+        ("exit closed, opp 3-4", lambda p: p.closed_out and 3 <= p.opp_size <= 4),
+        ("exit closed, any rack", lambda p: p.closed_out),
+        ("  the same, leader", lambda p: p.closed_out and p.leader),
+        ("  the same, not leader", lambda p: p.closed_out and not p.leader),
+        ("play closed, any rack", lambda p: p.d_play < 0),
+        ("opp shed fewer, opp <=2", lambda p: p.opp_size <= 2 and (p.d_shed or 0) < 0),
+    ):
+        hit = [r for r in pairs if keep(r)]
+        seen = len({(r.deal, r.at) for r in hit})
+        lines.append(
+            f"    {label:<24} {_fmt(*_cluster([(r.deal, r.delta) for r in hit]))}"
+            f"  decisions {seen:<5} {seen / len(played) if played else 0:.2f}/game"
+        )
+    # Whether the mechanism is even available, which a delta cannot say: a door can
+    # only be closed at a decision where the opponent could walk through it.
+    risk = [r for r in pairs if r.base_out]
+    decisions = len({(r.deal, r.at) for r in risk})
+    lines.append(
+        f"    the opponent could go out against the played table in {len(risk)} pairs "
+        f"({decisions} decisions, {decisions / max(1, len(played)):.2f} per game); an "
+        f"equal-tile table takes that away in {sum(r.closed_out for r in risk)}"
+    )
+    lines.append("")
+
+    # Whether the signal a real agent could compute points where the oracle does.
+    # A correlation of zero here is the stronger null: it says the proxy cannot even
+    # find the cells, let alone that the cells are worth nothing.
+    lines.append("  DOES THE OBSERVABLE PROXY TRACK THE ORACLE?")
+    with_shed = [r for r in pairs if r.d_shed is not None]
+    shed = [float(r.d_shed or 0) for r in with_shed]
+    # The outcome and the proxy are both per alternative, so those two read the
+    # next-seat pairs; the opponent's shed is per opponent and reads all of them.
+    one = [r for r in pairs if r.next_up]
+    for label, xs, ys in (
+        ("corr(d perm, d opponent shed)", [r.d_perm for r in with_shed], shed),
+        ("corr(d doors, d opponent shed)", [float(r.d_doors) for r in with_shed], shed),
+        ("corr(d perm, d win)", [r.d_perm for r in one], [r.delta for r in one]),
+        ("corr(d doors, d win)", [float(r.d_doors) for r in one], [r.delta for r in one]),
+    ):
+        lines.append(f"    {label:<32} {_pearson(xs, ys):>+6.3f}   n={len(xs)}")
+    for label, keep in (
+        ("exit closed", lambda p: p.closed_out),
+        ("exit not closed", lambda p: not p.closed_out),
+        ("play closed", lambda p: p.d_play < 0),
+        ("opp shed fewer", lambda p: (p.d_shed or 0) < 0),
+        ("opp shed more", lambda p: (p.d_shed or 0) > 0),
+    ):
+        hit = [r for r in pairs if keep(r)]
+        if not hit:
+            continue
+        lines.append(
+            f"    mean d perm where {label:<16} {float(np.mean([r.d_perm for r in hit])):>+7.3f}"
+            f"  d doors {float(np.mean([r.d_doors for r in hit])):>+6.3f}  n={len(hit)}"
+        )
+    lines.append("")
+    lines.extend(reply_check(played))
+    return lines
+
+
+def reply_check(played: list[dict]) -> list[str]:
+    """The oracle reply against what the seat that plays next actually did.
+
+    It is a bound, not a model: nothing intervenes between the turn and that seat's
+    reply, so a shed larger than CP-SAT's maximum is a bug in the harness and a
+    table the reply calls dead must leave that seat drawing. Both are asserted to be
+    zero. How often the maximum is *reached* is the other half -- it is the distance
+    between `frugal` and the oracle in one number, and it is why an oracle feature
+    is not the same as a feature the opponent will act on.
+    """
+    compared = exceeded = played_anyway = reached = offered = 0
+    for game in played:
+        for d in game["decisions"]:
+            if not d.get("base") or len(d["base"]["opp_shed"]) != len(d.get("opps", ())):
+                continue
+            o = d["opps"].index((d["seat"] + 1) % (len(d["opps"]) + 1))
+            for turn in (d["base"], *d["alts"]):
+                shed = turn["next_shed"][o]
+                if turn["ended"] or shed is None:
+                    continue
+                compared += 1
+                exceeded += shed > turn["opp_shed"][o]
+                played_anyway += turn["opp_shed"][o] == 0 and shed > 0
+                if turn["opp_shed"][o] > 0:
+                    offered += 1
+                    reached += shed == turn["opp_shed"][o]
+    if not compared:
+        return []
+    return [
+        "  THE ORACLE REPLY AGAINST WHAT THE NEXT SEAT DID",
+        f"    turns compared {compared}   the reply exceeded {exceeded}   "
+        f"played where the reply was nothing {played_anyway}",
+        f"    the next seat took the whole reply in {_rate(reached, offered).strip()} "
+        f"of the {offered} turns it was offered one",
+        "",
+    ]
 
 
 def summarise(games: list[dict]) -> list[str]:
@@ -641,12 +1264,8 @@ def summarise(games: list[dict]) -> list[str]:
     )
     for kind in (*KINDS, REPLAY):
         alts = wins_alt = decided = base_wins = base_decided = changed = 0
-        # The interval is clustered by game: alternatives inside one deal share its
-        # deck and its opponent, so counting them as independent would divide by a
-        # sample size the measurement does not have.
-        per_game = []
+        paired: list[tuple[int, float]] = []
         for game in played:
-            game_alt, game_base, game_n = 0, 0, 0
             for d in game["decisions"]:
                 mine = [a for a in d["alts"] if a["kind"] == kind]
                 if not mine:
@@ -658,20 +1277,16 @@ def summarise(games: list[dict]) -> list[str]:
                     if a["won"] < 0:
                         continue
                     decided += 1
-                    game_n += 1
                     wins_alt += a["won"] == 1
-                    game_alt += a["won"] == 1
-                    game_base += d["base_won"]
+                    paired.append((game["game"], float(a["won"] == 1) - float(d["base_won"])))
                     changed += (a["won"] == 1) != d["base_won"]
-            if game_n:
-                per_game.append((game_alt - game_base) / game_n)
         if not alts:
             continue
-        half = 1.96 * float(np.std(per_game, ddof=1)) / len(per_game) ** 0.5
+        _, mean, half = _cluster(paired)
         lines.append(
             f"  {kind:<24} {alts:>7} {base_wins / base_decided:>8.1%} "
             f"{wins_alt / max(1, decided):>9.1%} "
-            f"{float(np.mean(per_game)):>+9.1%} +-{half:<7.1%} {changed / max(1, decided):>8.1%}"
+            f"{mean:>+9.1%} +-{half:<7.1%} {changed / max(1, decided):>8.1%}"
         )
     lines.append("")
 
@@ -701,6 +1316,8 @@ def summarise(games: list[dict]) -> list[str]:
             cells.append(f"{(wins - base) / decided:>+11.1%} n={alts:<5}")
         lines.append(f"  {kind:<24} " + " ".join(cells))
     lines.append("")
+
+    lines.extend(targeted(played))
 
     tables = Counter(d["n_tables"] for g in played for d in g["decisions"])
     total = sum(tables.values())
@@ -759,6 +1376,7 @@ def summarise(games: list[dict]) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--games", type=int, default=20)
+    parser.add_argument("--config", default="standard", choices=sorted(CONFIG_BY_NAME))
     parser.add_argument("--seed-base", type=int, default=91_000)
     parser.add_argument("--kbest", type=int, default=4)
     parser.add_argument("--time-limit", type=float, default=2.0)
@@ -771,17 +1389,34 @@ def main() -> None:
         help="roll out the zero-deviation continuation at every decision too",
     )
     parser.add_argument("--no-replay-base", action="store_true")
+    parser.add_argument(
+        "--no-features",
+        action="store_true",
+        help="skip the per-turn afterstate records (one CP-SAT solve per opponent per turn)",
+    )
     parser.add_argument("--out", type=Path, default=Path("runs/oracle-regret"))
     parser.add_argument(
-        "--from-json", type=Path, help="re-print the tables from a finished run and exit"
+        "--from-json",
+        type=Path,
+        nargs="+",
+        help="re-print the tables from finished runs and exit. Several runs of the same "
+        "config are pooled, their deal numbers renumbered so the clustered intervals "
+        "still treat one deal as one observation",
     )
     args = parser.parse_args()
 
     if args.from_json is not None:
-        print("\n".join(summarise(json.loads(args.from_json.read_text())["per_game"])))
+        pooled: list[dict] = []
+        for path in args.from_json:
+            offset = 1 + max((g["game"] for g in pooled), default=-1)
+            pooled += [
+                {**g, "game": g["game"] + offset}
+                for g in json.loads(path.read_text())["per_game"]
+            ]
+        print("\n".join(summarise(pooled)))
         return
 
-    cfg = STANDARD
+    cfg = CONFIG_BY_NAME[args.config]
     jobs = [
         (
             i,
@@ -793,6 +1428,7 @@ def main() -> None:
             args.max_steps,
             args.check,
             not args.no_replay_base,
+            not args.no_features,
         )
         for i in range(args.games)
     ]
@@ -821,11 +1457,15 @@ def main() -> None:
     print(f"\nwall clock {wall:.1f}s over {args.workers} workers")
 
     args.out.mkdir(parents=True, exist_ok=True)
-    path = args.out / f"regret-{args.games}g-seed{args.seed_base}-k{args.kbest}.json"
+    path = (
+        args.out
+        / f"regret-{args.config}-{args.games}g-seed{args.seed_base}-k{args.kbest}.json"
+    )
     path.write_text(
         json.dumps(
             {
                 "agent": AGENT,
+                "config": args.config,
                 "games": args.games,
                 "seed_base": args.seed_base,
                 "kbest": args.kbest,

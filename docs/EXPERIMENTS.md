@@ -609,6 +609,385 @@ it deviates on **one** turn: a strategy that gives something up now to collect i
 over several turns is outside the construction entirely, which is exactly where
 the cross-turn and adaptation arms already sit.
 
+## Endgame denial: the cell that survived the oracle, and the reason it is empty
+
+The oracle section closed board shaping at **-0.2% +-0.5%** over 15,801
+alternatives, and that is a mean over a *type*. A mean cannot see a targeted effect
+inside one, and one was left standing: the opponent is a tile or two from
+finishing, and among the tables that shed the same tiles, one closes the door its
+last tile needs. On the back of an envelope that is worth at most a point -- and
+15,801 alternatives, almost none of them in that position, would read null whether
+the cell were worth a point or nothing at all.
+
+The recorded JSON could not answer it (`kind`, `tiles`, `won` per alternative and
+nothing about the table), so every turn now records what it leaves behind, **the
+played turn included**, so the deviation is paired against it rather than pooled:
+
+- **the opponent's best reply** -- `solve_turn` against its *true* rack and its own
+  melded flag. One solve answers both halves, because it is the *maximum* it could
+  shed: zero means the table offers it nothing, and its own rack size means its
+  exit is open. An oracle feature is legitimate here for the reason the whole
+  construction is -- this prices a ceiling, not a policy.
+- **what the opponent actually shed** on its next turn in the continuation, and
+  whether that is the turn it won on.
+- **permeability**, imported from `tools/denial_ab.py` rather than recomputed: the
+  unseen-weighted lay-off doors that arm was scored on, plus the door count
+  unweighted. Nothing hidden, so every oracle cell can be read against the signal a
+  real agent would have to find it with.
+
+Two checks make those numbers usable, and both print with the tables.
+
+- **The reply is a bound on the rollout, and a tight one.** Nothing intervenes
+  between a turn and the next seat's answer to it, so that seat can never shed more
+  than CP-SAT says it could, and a table the reply calls dead must leave it
+  drawing. Over **46,400** turns compared: **0** exceeded the reply, **0** played
+  where the reply was nothing. And the reply is not hypothetical -- the next seat
+  takes **the whole** of it in **97.3%** of the 24,158 turns it is offered one, so a
+  door the oracle sees is a door `frugal` walks through.
+- **The two readings of a next turn agree.** A rollout carries its own boundaries;
+  the played turn's continuation is read off the baseline game's boundary list
+  instead, and `--check` compares the two derivations at every decision. 106
+  continuations over four deals, no disagreement, on top of the outcome and
+  turn-count checks that were already there.
+
+The 300 deals are the *same* 300 (seed base 91,000, k-best 4), and the whole of the
+previous section's output is reproduced line for line: 8,185 decisions, 39,903
+alternatives, 91.3% / 93.0% headline, every type and phase cell. The two summaries
+differ only by the sections added below. 3,457 s on six workers.
+
+### The door does not move
+
+Over the 14,789 (alternative, opponent) pairs -- the 15,801 same-tiles alternatives
+less 1,012 that end the game and so leave no door to close:
+
+| the alternative leaves a table where the opponent... | pairs | delta vs the played turn |
+|---|---|---|
+| **cannot go out, where it could before** | **22** | **+11.1% +-21.8%** |
+| ...unchanged | 14,740 | -0.2% +-0.6% |
+| ...can go out, where it could not before | 27 | -9.1% +-17.8% |
+| cannot play at all, where it could before | 162 | +0.8% +-12.5% |
+| ...can play, where it could not before | 250 | -4.3% +-10.6% |
+| actually shed fewer next turn | 335 | +2.6% +-8.8% |
+| actually shed more next turn | 547 | -2.1% +-7.1% |
+
+**The signs are the hypothesis's and the sample is one event.** Of the 22
+exit-closing pairs, exactly **one** turned a loss into a win and none did the
+reverse; of the 27 exit-*opening* pairs, five threw a win and none rescued one. So
++11.1% is one flip over nine decisions, and the reason the interval is +-21.8% is
+that there is nothing else in the cell.
+
+The frequency is the finding, not the delta. **The oracle door is unchanged in
+99.67% of pairs** -- 97.21% for "can play at all", and even the realised shed is
+unchanged in 94.03%. Restricting to decisions where there is a door to close at all
+(the opponent could go out against the table actually left): **736 pairs over 188
+decisions, 0.63 per deal, and an equal-tile table takes it away in 22 of them, 3.0%**.
+At the headline cell -- opponent at two tiles or fewer -- it is **12 pairs over 4
+decisions, 0.01 per deal**.
+
+That closes the axis by arithmetic rather than by an interval. Nine decisions over
+300 deals is **0.015 opportunities per seat-game**, so a policy that shut every exit
+it could would move its own win rate by 0.015 x 11.1% = **0.2pp**, or 0.5pp at the
+top of that cell's interval. The denial arm bounded this axis at ~1.6pp by
+exhausting a tie-break and the oracle section at half a point by exhausting the
+choice; this says *why* both readings are that size.
+
+### The observable proxy moves two hundred times more often than the door does
+
+| the alternative's table is... | pairs | delta vs the played turn |
+|---|---|---|
+| less permeable | 4,169 | -1.3% +-1.4% |
+| equally permeable | 5,825 | +0.2% +-0.5% |
+| more permeable | 4,795 | -0.1% +-1.4% |
+
+Permeability is **not** equal in 60.6% of pairs, mean absolute change 1.12 against a
+level of 19.7, while the oracle door moves in 0.33% of them. It does point the right
+way where the door moves -- mean change -0.318 where the exit closes against +0.096
+where it does not, -0.414 where play closes -- but it correlates with the oracle at
+**+0.052** against what the opponent actually shed and **+0.017** against the
+outcome. A denial rule reading permeability is therefore acting on a signal that
+fires two hundred times more often than the thing it stands for, which is the
+mechanism behind that arm's 3.7% firing rate buying 1.2% of its own level.
+
+### The reason, and it is not about this measurement
+
+**A solved turn is a function of the multiset the table holds, not of its
+arrangement.** Post-meld the solver may repartition the whole table, so three runs
+and three groups of the same nine tiles are the same problem --
+`test_the_optimum_reads_the_multiset_and_not_the_arrangement` pins that on
+`solve_turn` itself, and pre-meld the table is off limits entirely, so the reply is
+arrangement-invariant there too. Among alternatives that shed the same *number* of
+tiles, then, the door can only move where the alternative sheds a different *set*
+of tiles -- never by rearranging what is already there.
+
+And they almost always are rearranging. Over 15 deals of the same sweep, enumeration
+only (`multiset_check.py` beside this file), **692 of 756 equal-tile alternatives --
+91.5% -- shed exactly the same tiles**, and the reply moved for *none* of them, which
+is the invariance measured rather than argued. Of the 64 that shed a different set,
+it moved for 38. So the 99.67% figure above is not a small sample of a rare event: it
+is 91.5% of the pairs where the door provably cannot move, plus a 60% hit rate on the
+8.5% where it can.
+
+That is why the denial cell is nearly empty, and it does not depend on the
+opponent's strength: it holds against any opponent that can rearrange. The half that
+*is* arrangement-sensitive is what a lay-off-only opponent actually does -- `frugal`
+sheds differently in 5.97% of pairs -- and that half is null on the outcome as well
+(+2.6% +-8.8% / -2.1% +-7.1%).
+
+### Three seats: the argument that killed it at two does not apply, and the answer is the same
+
+The 2p verdict rests partly on symmetry -- the table is common property, so a door
+closed on the opponent is closed on the closer. With two opponents that is different:
+a door costs the closer once and the opposition twice, and there is a *leader* to
+aim at. So the whole sweep was re-run on `STANDARD_3P`, deviations examined at every
+seat, the outcome read from the acting seat's own view: 200 deals over two pooled
+runs of 100 (seed bases 73,000 and 74,000, k-best 4), 3,822 decisions, 20,104
+alternatives, 1,352 s of the two runs together on six workers. Every check holds
+there too: 3,712 re-derived turns reproducing their baselines exactly, 22,810 turns
+compared against the oracle reply with 0 exceeding it, and the next seat taking the
+whole reply in 96.0% of the turns it is offered one.
+
+| delta vs the played turn | 2p, 300 deals | 3p, 200 deals |
+|---|---|---|
+| `cpsat_max` | +0.0% +-2.3% (1,248) | -1.3% +-3.0% (769) |
+| `same_tiles_other_table` | -0.2% +-0.5% (15,801) | **-1.2% +-1.1% (7,280)** |
+| `fewer_tiles` | -3.1% +-1.5% (5,886) | -1.0% +-1.6% (3,820) |
+| `frozen_table` | -5.9% +-3.9% (768) | -5.8% +-4.2% (701) |
+| `draw` | -0.4% +-1.1% (8,185) | -1.2% +-1.7% (3,822) |
+
+**Every type is at or below zero at three seats as well, and the free parameter is
+further below it than at two.** By phase, `same_tiles_other_table` reads -7.3%
+pre-meld (261), +0.4% midgame (1,729), -0.3% endgame (5,290) -- the pre-meld cell
+that read +6.4% at two seats reverses. The one cell that *does* survive the seat
+count is the opening one, and only in the tiles split: an alternative shedding
+**fewer** tiles than the played turn is worth **+5.4% +-5.8%** pre-meld at three
+seats (369 alternatives) against **+8.1% +-6.2%** at two (384). Same sign, same
+size, both about 1.5 sigma; everywhere else pre-meld the two seat counts disagree.
+
+The denial cells, and this is the part the symmetry argument said might differ:
+
+| the alternative leaves a table where the opponent... | 3p pairs | delta |
+|---|---|---|
+| **cannot go out, where it could before** | **28** | **+20.0% +-21.0%** |
+| ...unchanged | 13,190 | -1.4% +-1.2% |
+| ...can go out, where it could not before | 20 | -33.3% +-32.7% |
+| cannot play at all, where it could before | 183 | -4.9% +-12.5% |
+| actually shed fewer next turn | 457 | +0.8% +-8.7% |
+| actually shed more next turn | 503 | -4.2% +-7.8% |
+
+The exit cell is the same shape as at two seats, a little larger and just as rare:
+**15 decisions in 200 deals, 0.07 per deal**, against 231 decisions (1.16 per deal)
+where the opponent could go out against the table actually left -- so an equal-tile
+table takes the exit away in **3.3%** of the pairs where there is one to take. And
+the door belongs to the leader almost by definition: 27 of the 28 exit-closing pairs
+are the seat with the fewest tiles (+21.4% +-22.3%), one is not. Split by *whose*
+turn is next -- the only seat that meets the table as the deviation left it -- the
+next seat's half reads +10.0% +-19.6% (14) and the later seat's +40.0% +-48.0% (14),
+and the later seat's half is not a causal cell at all: two more turns are played onto
+that table before it gets there.
+
+Two 3p differences worth recording, neither of them denial. `play closed` is
+**negative** at three seats (-4.9% +-12.5%) and so is its mirror (-8.4% +-12.1%):
+both directions losing means that split is not measuring denial but "this
+alternative differs from the played turn in a way that costs", which is the sanity
+check the 2p cell also passes (+0.8% / -4.3%). And the observable proxy stops
+pointing the right way entirely: mean permeability change is **+0.071** where the
+exit closes against +0.116 where it does not, so at three seats permeability does
+not even distinguish the cells, let alone score them (correlation with what the
+opponent shed: +0.029; with the outcome: -0.010).
+
+### Four seats, and the number the three runs agree on
+
+`STANDARD_4P` at 150 deals (seed base 76,000, 2,330 decisions, 12,665 alternatives,
+640 s) says the same thing again, and it is worth having because it is where the
+per-turn maximum should be *weakest*: three opponents draw from one pool and a turn
+of yours is three turns away from mattering. `same_tiles_other_table` reads **+0.4%
++-1.3%** over 4,111 alternatives -- the only positive point estimate in the three
+runs and still covering zero -- while `fewer_tiles` (-8.3% +-2.0%) and
+`frozen_table` (-12.1% +-3.6%) lose more heavily than anywhere else, so the harness
+still has resolution at four seats. 14,050 turns compared against the oracle reply,
+0 exceeding it, the next seat taking the whole reply 94.7% of the time.
+
+The exit cell, all three seat counts side by side:
+
+| exit-closing pairs | 2p (300 deals) | 3p (200) | 4p (150) |
+|---|---|---|---|
+| delta vs the played turn | +11.1% +-21.8% | +20.0% +-21.0% | +17.6% +-18.7% |
+| pairs / decisions | 22 / 9 | 28 / 15 | 39 / 17 |
+| decisions per deal | 0.03 | 0.07 | 0.11 |
+| decisions where the exit was open at all | 188 (0.63/deal) | 231 (1.16) | 224 (1.49) |
+| of those pairs, share an equal-tile table shuts | 3.0% | 3.3% | 3.4% |
+
+**Three independent runs, +11% / +20% / +18%, and the same 3% availability.** That
+consistency is the reason to believe the sign at all -- each interval alone covers
+zero -- and the frequency is what closes it: per seat-game the cell is reachable
+0.015 (2p), 0.025 (3p) and 0.028 (4p) times, so **an oracle that shut every exit it
+could would move its own win rate by 0.3-0.5pp, and 1pp at the top of the
+intervals**. At four seats the door stops being the leader's alone (16 leader pairs
+against 23 that are not, +22.2% +-28.8% and +12.5% +-24.5%), which is the one thing
+the seat count changes.
+
+`play closed` is the control that shows how little of this is denial as such: it
+reads +0.8% +-12.5% at two seats, **-4.9%** +-12.5% at three and **+13.2%** +-14.0%
+at four. A cell that changes sign twice across seat counts, with its own mirror
+losing in two of the three runs, is measuring "this alternative differs from the
+played turn" and not a door.
+
+### What this bounds
+
+The same two limits as the section above, and two of its own.
+
+It is perfect hindsight and it deviates on one turn. The door it prices is the door
+as **CP-SAT** sees it, so an opponent whose search is weaker can be shut out of a
+play CP-SAT would have found; the 97.3% / 96.0% / 94.7% figures say how little room
+that leaves against `frugal` at two, three and four seats, but a weaker opponent, a
+tighter micro budget or a rule that forbids rearrangement is a different question
+and this does not answer it.
+
+And the exit cell is **not "the same turn with the door shut"**. Because the reply is
+arrangement-invariant, an alternative that shuts an exit has to shed a *different
+set* of tiles of the same size -- so the +17% is the value of that whole different
+turn, of which the shut door is one part. It is an upper bound on denial for the
+same reason it is a bound on everything else here: the maximum is taken with the
+future visible.
+
+What is left open is not this axis. `same_tiles_other_table` is now measured at all
+three seat counts (-0.2% +-0.5%, -1.2% +-1.1%, +0.4% +-1.3%), its targeted cells are
+rare by structure rather than by sample size, and the observable proxy for them
+carries +0.05, +0.03 and +0.05 of correlation with what the opponent could do.
+**Board shaping is closed at every seat count the repo scores.** The nearest thing
+to a surviving cell is the one the previous section already named -- shedding fewer
+tiles than the played turn *pre-meld*: +8.1% +-6.2% at two seats, +5.4% +-5.8% at
+three, and +1.3% +-5.7% at four, so two runs of three and a shrinking one. That is
+an opening question, not a table question, and it is where the next arm belongs.
+
+## The opening was the one cell that moved, and it does not survive being played
+
+`tools/oracle_regret.py` priced every single-turn deviation in hindsight and found
+none worth anything -- except one cell of fourteen. Pre-meld, an alternative
+shedding **fewer** tiles than the maximum was worth **+9.3% +-5.7%**, and split
+against what `frugal` actually opened with, shedding fewer was **+6.2** (n=384)
+where CP-SAT's max-tiles opening was -1.1 (n=90); midgame and endgame the same
+deviation is -0.8 and -8.3. The mechanism was available and specific: **the
+opening is the one decision that does not recur.** Before melding the table is
+untouchable, so the sets an agent opens with are handed to the opponent as
+*rigid* sets, while a tile kept back is played later with full rearrangement
+rights -- and every other decision in a turn recurs, which is exactly why
+`rack_potential_ab` found nothing to protect (a set kept out of the rack is
+played in the same turn anyway).
+
+Tested directly, pre-sized, and pre-registered (`runs/opening-ab/`). Nine arms in
+`rummi/agents/opening.py`, each `frugal` with the opening turn rebuilt and **every
+post-meld decision delegated to `by_value` untouched**, so a score difference is
+attributable to the opening alone -- `tests/test_opening.py` holds every arm to
+`by_value`'s macro on post-meld states. Pre-meld the macro space collapses to
+something plannable exactly: lay-offs and steals are illegal under
+`strict_initial_meld` and `REPARTITION` is offered only after melding, so an
+opening *is* a sequence of templates drawn from the rack.
+
+Head to head against plain `frugal`, `STANDARD`, 1600 deals played from both
+seats (3200 games per arm), paired per deal, seed base 93,000:
+
+| arm | win | paired delta | opened tiles | value | sets | doors handed over | reply sheds | moves |
+|---|---|---|---|---|---|---|---|---|
+| `base` (frugal mirrored) | **exactly 50.00% +-0.00** | +0.00 | 5.71 | 43.86 | 1.75 | 6.42 of 8.80 | 2.58 | -- |
+| `full` (by_value's opening, replanned) | **exactly 50.00% +-0.00** | +0.00 | 5.71 | 43.86 | 1.75 | 6.42 of 8.80 | 2.58 | 0.00% |
+| `runs_first` | 50.91% +-1.04 | +0.91 +-1.04 | 4.47 | 37.68 | 1.36 | 5.88 of 8.26 | 2.45 | 8.31% |
+| `min_sets` (stop at 30) | 50.56% +-1.02 | +0.56 +-1.02 | 4.13 | 36.88 | 1.25 | 5.18 of 7.59 | 2.40 | 5.98% |
+| `minus_one` | 50.50% +-1.01 | +0.50 +-1.01 | 4.35 | 38.03 | 1.32 | 5.36 of 7.76 | 2.44 | 5.92% |
+| `no_joker` | 50.25% +-0.49 | +0.25 +-0.49 | 5.61 | 42.81 | 1.74 | 6.37 of 8.75 | 2.55 | 2.12% |
+| `min_tiles` (CP-SAT, fewest) | 50.12% +-1.22 | +0.12 +-1.22 | 3.96 | 35.50 | 1.29 | 5.18 of 7.55 | 2.36 | 12.54% |
+| `cheap` | 49.69% +-1.02 | -0.31 +-1.02 | 5.62 | 40.77 | 1.82 | 6.77 of 9.11 | 2.52 | 10.80% |
+| `groups_first` | 49.66% +-1.25 | -0.34 +-1.25 | 4.43 | 37.15 | 1.40 | 4.99 of 7.38 | 2.43 | 10.04% |
+| `max_tiles` (negative control) | 49.47% +-0.89 | -0.53 +-0.89 | 5.95 | 44.87 | 1.88 | 6.81 of 9.15 | 2.57 | 9.92% |
+
+**Null.** The pre-registered bar was a paired delta > +2pp with the interval
+excluding zero, *and* the same sign against `optimal`; no arm reaches it and no
+interval excludes zero. The whole ladder spans 1.44pp, from the negative control
+at -0.53 to `runs_first` at +0.91, and the widest within-mechanism contrasts are
+covered too: `min_sets` - `max_tiles` is **+1.09% +-1.34**, `min_tiles` -
+`max_tiles` **+0.66% +-1.36**, `runs_first` - `groups_first` **+1.25% +-1.34**.
+On `standard-greedy` at n=800 every arm reads 99.5-99.9% and +46.81 to +47.53
+(+-1.5), which resolves nothing: `frugal` is already at 99.6% there.
+
+**And no sign survives changing the arena.** Every remaining arena is the same
+rotation, paired the same way:
+
+| arm, paired delta | 2p vs `frugal` (1600) | 2p vs `optimal` (800) | 3p (800) | 4p (800) | pooled, 2p/3p/4p |
+|---|---|---|---|---|---|
+| `min_sets` | +0.56 +-1.02 | -0.56 +-1.51 | -0.67 +-1.14 | +0.56 +-0.84 | +0.26 +-0.56 |
+| `minus_one` | +0.50 +-1.01 | -0.38 +-1.50 | -0.54 +-1.09 | +0.72 +-0.83 | +0.33 +-0.55 |
+| `runs_first` | +0.91 +-1.04 | +0.44 +-1.56 | -0.46 +-1.17 | -- | +0.30 +-0.78 |
+| `max_tiles` | -0.53 +-0.89 | -- | -0.29 +-0.95 | -0.50 +-0.79 | **-0.45 +-0.50** |
+| `base` / `full` | exactly 0.00 | exactly 0.00 | exactly 0.00 | exactly 0.00 | -- |
+
+`min_sets` and `minus_one` change sign between two seats and three, which is the
+second half of the pre-registered criterion failing outright. **The three seats
+matter for one specific reason: the hypothesis predicts the effect should get
+*bigger* there**, since an opening is handed to two opponents rather than one, and
+it goes the other way. The only sign that repeats in every arena is the negative
+control's -- shedding *more* at the opening is mildly bad, three times out of
+three -- and pooled across the three configs even that is **-0.45pp +-0.50**,
+which is where this axis is bounded.
+
+Two exactness controls carry the reading. `base` mirrored against itself is
+*exactly* 50.00% and +0.00, so the rotation cancels turn order; and `full` --
+`by_value`'s own opening rebuilt by the arms' own planner -- is exactly 50.00%
+too, over **24,490** pre-meld decisions with 0.00% of them moved. So the planner
+reproduces `by_value` byte for byte and the other arms differ from `frugal` in
+their rule and in nothing else.
+
+Four measurements say why, and the last two are the transferable part:
+
+- **The arms are not inert.** They move 6.0-12.5% of pre-meld decisions and
+  **change the outcome of 17.1-25.9% of deals** (`min_sets` 17.5%, `groups_first`
+  25.9%, `no_joker` 4.0%). That caps what any of them could move the win rate by
+  at ~9pp and rules out the reading that closed the two preceding sections: there
+  *is* something to choose here, and choosing it differently is worth nothing.
+- **The opening really does get smaller, and the opponent really does get less.**
+  `min_sets` opens on 4.13 tiles against 5.71, declares 36.88 against 43.86, in
+  1.25 sets against 1.75, and hands over **5.18 lay-off doors of the table's 7.59
+  against 6.42 of 8.80**. The next seat then sheds **2.40 tiles against 2.58**, a
+  7% reduction. The intended mechanism is present and measurable at every step.
+- **And it pays for itself inside two turns.** Per opponent turn *after* the
+  reply the effect is gone -- 1.141 tiles shed against `base`'s 1.146, across
+  every arm -- while the arm's own shedding rises to **0.951 per turn against
+  0.902** and the deal lengthens from 63.8 turns to 64.1. The kept tiles are
+  played a turn or two later by the same hand that kept them, which is
+  `rack_potential`'s recurring-decision finding reappearing one turn out rather
+  than zero: the opening forecloses the *turn*, not the game.
+- **Permeability does not order the result, so denial is not the channel.**
+  `groups_first` hands over the tightest opening measured -- 4.99 doors, 1.4
+  fewer than `frugal` -- and scores **-0.34**, while `runs_first` hands over 5.88
+  and scores the highest at +0.91. That is the board-shaping section's conclusion
+  arriving from the other side: a table-shaping rule pays its own cost, and here
+  the sets you deny the opponent are the sets you were going to extend yourself.
+
+One confound is controlled by construction and worth stating because it is not
+free. `min_sets`, `minus_one` and `no_joker` open on **turn 3.58**, the identical
+turn `frugal` does, because reordering within dearest-first cannot change whether
+30 points are reachable -- so they are pure shape arms. The solver and reordering
+arms open at 3.50-3.56: CP-SAT and cheapest-first find openings the dearest-first
+greedy misses, which is a **capability** difference on top of the shape one. That
+is why `min_tiles` - `max_tiles` (+0.66% +-1.36) is the clean contrast inside the
+solver pair -- same capability, opposite tile count -- and it is null as well.
+
+**What this does to the oracle's cell.** The hindsight measurement said an opening
+shedding fewer tiles was worth +6.2pp over 384 alternatives spread across 242
+deals; the same class of deviation, played as a policy over 1600 deals, is
++0.12% +-1.22 (`min_tiles`) and +0.56% +-1.02 (`min_sets`). The null is roughly
+five times tighter than the positive cell and excludes it, so **the cell was one
+of fourteen and it was noise** -- which is what the oracle section said about it
+before this ran, and the reason this arm existed at all. The oracle bound stands:
+no single-turn deviation from per-turn maximisation is worth anything on the
+standard config, the opening included.
+
+Caveats, all by construction. The arms are deterministic rules, so each deviates
+on *every* opening -- a state-dependent rule that shrank only the openings worth
+shrinking is not excluded by this, only bounded by the 17.5%-of-deals ceiling
+above. And nothing here tests a *multi-turn* opening plan, holding tiles across
+the meld for a combination two turns out: that is the cross-turn arm, and it sits
+outside the one-turn construction exactly as the oracle's does.
+
 ## Attention over kinds: the routing is learned, used, and still loses
 
 The first attention architecture tried in this repo, aimed where the measurement

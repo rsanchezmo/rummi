@@ -209,3 +209,24 @@ def test_freezing_the_table_pins_a_joker_that_is_already_on_it():
     assert frozen.tiles_played == 1
     kept = next(s for s in frozen.sets if C.joker_kind in s)
     assert kept == (kind_of(C, 0, 7), kind_of(C, 1, 7), kind_of(C, 3, 7), C.joker_kind)
+
+
+def test_the_optimum_reads_the_multiset_and_not_the_arrangement():
+    """Unrestricted rearrangement means a solved turn is a function of the tiles the
+    table holds, not of how they are grouped.
+
+    Nine tiles that partition either as three runs or as three groups are the same
+    problem post-meld, and `tools/oracle_regret.py` prices endgame denial on exactly
+    this: what an opponent can do against a table it may repartition cannot be
+    changed by rearranging the table it is handed.
+    """
+    runs = table_of(C, [[kind_of(C, c, n) for n in (5, 6, 7)] for c in (0, 1, 2)])
+    groups = table_of(C, [[kind_of(C, c, n) for c in (0, 1, 2)] for n in (5, 6, 7)])
+    assert (counts_of(C, runs[None]) == counts_of(C, groups[None])).all()
+
+    for rack in ([kind_of(C, 0, 8)], [kind_of(C, 3, 5), kind_of(C, 3, 6)], []):
+        as_runs = solve_turn(C, rack_of(C, rack), runs, has_melded=True)
+        as_groups = solve_turn(C, rack_of(C, rack), groups, has_melded=True)
+        assert as_runs.feasible == as_groups.feasible
+        assert as_runs.tiles_played == as_groups.tiles_played
+        assert as_runs.value_played == as_groups.value_played
