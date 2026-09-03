@@ -104,18 +104,38 @@ class Telemetry:
         for f in fields(self):
             setattr(self, f.name, getattr(self, f.name) + getattr(other, f.name))
 
-    def report(self) -> tuple[str, str]:
+    def means(self) -> dict[str, float]:
+        """The counters over the thing each is summed across, so the printed line and
+        the exported number cannot disagree about a denominator."""
         openings = max(self.openings, 1)
         replies = max(self.replies, 1)
         opp, own = max(self.opp_turns, 1), max(self.own_turns, 1)
+        return {
+            "openings": self.openings,
+            "tiles": self.tiles / openings,
+            "value": self.value / openings,
+            "sets": self.sets / openings,
+            "turn": self.turn / openings,
+            "joker_rate": self.jokers / openings,
+            "doors_new": self.doors_new / openings,
+            "doors_all": self.doors_all / openings,
+            "replies": self.replies,
+            "reply_shed": self.reply_shed / replies,
+            "opp_shed_per_turn": self.opp_shed / opp,
+            "own_shed_per_turn": self.own_shed / own,
+            "deal_turns": self.game_turns / openings,
+        }
+
+    def report(self) -> tuple[str, str]:
+        m = self.means()
         return (
-            f"opened {self.openings:>5,}  tiles {self.tiles / openings:>4.2f}  "
-            f"value {self.value / openings:>5.2f}  sets {self.sets / openings:>4.2f}  "
-            f"turn {self.turn / openings:>5.2f}  joker {self.jokers / openings:>5.1%}  "
-            f"doors {self.doors_new / openings:>5.2f} of {self.doors_all / openings:>6.2f}",
-            f"reply sheds {self.reply_shed / replies:>4.2f}  "
-            f"per opponent turn after it {self.opp_shed / opp:>4.2f}  "
-            f"own {self.own_shed / own:>4.2f}  deal {self.game_turns / openings:>5.1f} turns",
+            f"opened {self.openings:>5,}  tiles {m['tiles']:>4.2f}  "
+            f"value {m['value']:>5.2f}  sets {m['sets']:>4.2f}  "
+            f"turn {m['turn']:>5.2f}  joker {m['joker_rate']:>5.1%}  "
+            f"doors {m['doors_new']:>5.2f} of {m['doors_all']:>6.2f}",
+            f"reply sheds {m['reply_shed']:>4.2f}  "
+            f"per opponent turn after it {m['opp_shed_per_turn']:>4.2f}  "
+            f"own {m['own_shed_per_turn']:>4.2f}  deal {m['deal_turns']:>5.1f} turns",
         )
 
 
@@ -364,6 +384,190 @@ def _assemble(chunks: list[dict], arms: list[str], deals: int) -> dict[str, dict
     return out
 
 
+# --- the published summary ---------------------------------------------------
+
+CONTROLS = ("base", "full")
+"""Not arms: the two exactness checks, which must read exactly even."""
+
+MIN_DELTA = 0.02
+"""Criterion (1), in win rate. Pre-registered, so it is a constant and not a flag."""
+
+
+def criterion_text(path: pathlib.Path) -> str:
+    """The success criterion, lifted out of the pre-registration rather than restated.
+
+    `runs/` is not committed, so the text has to travel into `docs/data` with the
+    numbers -- and a second copy of it in this file could drift from the one the
+    measurement was registered against.
+    """
+    for block in path.read_text().split("\n\n"):
+        if block.startswith("Success criterion"):
+            return block.strip()
+    raise SystemExit(f"{path} has no 'Success criterion' block")
+
+
+def _arena(path: pathlib.Path, payload: dict) -> dict:
+    """One finished run as the numbers its own table printed.
+
+    The suite arena scores through the frozen protocol rather than deal by deal, so
+    it has neither a paired delta nor the opening telemetry -- those are null there,
+    not zero.
+    """
+    cfg = CONFIG_BY_NAME[payload["config"]]
+    common = {
+        "config": payload["config"],
+        "seats": cfg.n_players,
+        "seed_base": payload["seed_base"],
+        "wall_seconds": payload["wall_seconds"],
+        "even": 1.0 / cfg.n_players,
+        "source": str(path),
+        "paired": payload["arena"] == "head2head",
+    }
+    if payload["arena"] == "suite":
+        base = next(r for r in payload["results"] if r["arm"] == "base")
+        return {
+            **common,
+            "label": payload["suite"],
+            "arena": "suite",
+            "deals": payload["games"],
+            "arms": [
+                {
+                    "arm": r["arm"],
+                    "win_rate": r["win_rate"],
+                    "win_ci": r["win_ci"],
+                    "delta": None,
+                    "delta_ci": None,
+                    "mean_score": r["mean_score"],
+                    "score_ci": r["score_ci"],
+                    "stalemate_rate": r["stalemates"],
+                    "moved_rate": None,
+                    "telemetry": None,
+                }
+                for r in payload["results"]
+            ],
+            "base_win_rate": base["win_rate"],
+        }
+
+    deals = payload["deals"]
+    if "base" not in payload["arms"]:
+        raise SystemExit(f"{path} has no `base` arm, so nothing to pair the deltas against")
+    reference = np.asarray(payload["arms"]["base"]["wins"], dtype=np.float64)
+    arms = []
+    for arm, row in payload["arms"].items():
+        wins = np.asarray(row["wins"], dtype=np.float64)
+        scores = np.asarray(row["scores"], dtype=np.float64)
+        win, win_ci = interval(wins)
+        score, score_ci = interval(scores)
+        delta, delta_ci = interval(wins - reference)
+        arms.append(
+            {
+                "arm": arm,
+                "win_rate": win,
+                "win_ci": win_ci,
+                "delta": delta,
+                "delta_ci": delta_ci,
+                "mean_score": score,
+                "score_ci": score_ci,
+                "stalemate_rate": None,
+                # What the arm could have moved at all: a deal it wins from the same
+                # seats as the mirror carries no information about the opening.
+                "moved_rate": float(np.mean(wins != reference)),
+                "telemetry": Telemetry(**row["telemetry"]).means(),
+            }
+        )
+    return {
+        **common,
+        "label": f"{cfg.n_players}p vs {payload['opponent']}, {deals} deals",
+        "arena": "head2head",
+        "opponent": payload["opponent"],
+        "deals": deals,
+        "arms": arms,
+    }
+
+
+def verdict(arenas: list[dict], criterion: str) -> dict:
+    """The pre-registered decision rule, applied rather than recalled.
+
+    Both halves are machine-checkable, so the verdict is derived from the same rows
+    the tables print: an arm has to clear +2.0pp with its interval against `frugal`
+    at two seats *and* carry the same sign against `optimal`.
+    """
+    primary = next(
+        (
+            a for a in arenas
+            if a["arena"] == "head2head" and a.get("opponent") == "frugal" and a["seats"] == 2
+        ),
+        None,
+    )
+    if primary is None:
+        raise SystemExit("the criterion is defined on the 2p head-to-head against frugal")
+    against_optimal = next(
+        (a for a in arenas if a["arena"] == "head2head" and a.get("opponent") == "optimal"),
+        None,
+    )
+    signs = {}
+    if against_optimal is not None:
+        signs = {row["arm"]: row["delta"] for row in against_optimal["arms"]}
+
+    rows = []
+    for row in primary["arms"]:
+        if row["arm"] in CONTROLS:
+            continue
+        other = signs.get(row["arm"])
+        rows.append(
+            {
+                "arm": row["arm"],
+                "delta": row["delta"],
+                "delta_ci": row["delta_ci"],
+                "clears_threshold": bool(row["delta"] - row["delta_ci"] > MIN_DELTA),
+                "delta_vs_optimal": other,
+                "same_sign_vs_optimal": None
+                if other is None
+                else bool(np.sign(other) == np.sign(row["delta"])),
+            }
+        )
+    met = [r["arm"] for r in rows if r["clears_threshold"] and r["same_sign_vs_optimal"]]
+    widest = max(rows, key=lambda r: r["delta"])
+    # The controls void the run rather than fail it, so they are reported as a
+    # precondition of the verdict and not as an arm.
+    controls = {
+        name: all(
+            row["delta"] == 0.0
+            for arena in arenas
+            if arena["paired"]
+            for row in arena["arms"]
+            if row["arm"] == name
+        )
+        for name in CONTROLS
+    }
+    return {
+        "criterion": criterion,
+        "threshold": MIN_DELTA,
+        "arms": rows,
+        "met": met,
+        "widest": widest,
+        "controls_exact": controls,
+        "text": (
+            f"met by {', '.join(met)}"
+            if met
+            else f"not met by any arm; the widest is {widest['arm']} at "
+            f"{widest['delta']:+.2%} +-{widest['delta_ci']:.2%} in {primary['label']}"
+        ),
+    }
+
+
+def export_summary(paths: list[pathlib.Path], registration: pathlib.Path) -> dict:
+    arenas = [_arena(path, json.loads(path.read_text())) for path in paths]
+    arenas.sort(key=lambda a: (a["arena"], a["seats"], -a["deals"]))
+    criterion = criterion_text(registration)
+    return {
+        "arms": list(ARM_NAMES),
+        "controls": list(CONTROLS),
+        "arenas": arenas,
+        "verdict": verdict(arenas, criterion),
+    }
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--config", default="standard", choices=sorted(CONFIG_BY_NAME))
@@ -378,7 +582,28 @@ def main() -> None:
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--out", type=pathlib.Path, default=pathlib.Path("runs/opening-ab"))
     p.add_argument("--tag", default="", help="suffix for the results file")
+    p.add_argument(
+        "--from-json",
+        type=pathlib.Path,
+        nargs="+",
+        help="finished runs to summarise instead of measuring anything",
+    )
+    p.add_argument(
+        "--export-summary",
+        type=pathlib.Path,
+        help="with --from-json, where to write the arenas and the verdict as JSON",
+    )
     args = p.parse_args()
+
+    if args.from_json is not None:
+        if args.export_summary is None:
+            raise SystemExit("--from-json needs --export-summary")
+        payload = export_summary(args.from_json, args.out / "PRE-REGISTRATION.txt")
+        args.export_summary.parent.mkdir(parents=True, exist_ok=True)
+        args.export_summary.write_text(json.dumps(payload, indent=1) + "\n")
+        print(payload["verdict"]["text"])
+        print(f"wrote {args.export_summary}")
+        return
 
     cfg = CONFIG_BY_NAME[args.config]
     args.out.mkdir(parents=True, exist_ok=True)

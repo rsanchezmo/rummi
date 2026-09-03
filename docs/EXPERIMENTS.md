@@ -1,7 +1,7 @@
-# Learned agents: what was tried, and what killed it
+# What was tried, and what killed it
 
-Every attempt at a learned agent strong enough to join the ladder, with the reason
-each one stopped. The scores are the least useful column. **The issue is the point** —
+Every attempt at an agent strong enough to join the ladder, learned or hand-written,
+with the reason each one stopped. The scores are the least useful column. **The issue is the point** —
 most of these failed for a reason that took a day to find and five minutes to
 describe, and rediscovering one costs a day again.
 
@@ -22,6 +22,30 @@ Two kinds of row, and the distinction matters:
 Unless stated, all figures are the `standard-greedy` suite: `standard` config, two
 players, opponent `greedy`, seat-rotated, n=120. `greedy`'s 50.0% / +0.00 self-match
 is exact by rotation, not measured, which is what makes it a usable reference.
+
+**How to read this file.** It is a lab notebook, in the order things happened:
+training runs first, then hand-written arms, then the hindsight measurements that
+bound what was left. The index below is the same content in
+the order of the *argument*, which is how [the README](../README.md#what-the-benchmark-found)
+tells it.
+
+## Questions this file answers
+
+| question | answer | headline |
+|---|---|---|
+| [What is a game of standard Rummikub made of?](../README.md#the-game-in-numbers) | Mostly forced draws, decided by two tiles, and the seat matters more than the agent. | the seat decides **68%** of deals |
+| [Is playing the best available turn the ceiling?](#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | Yes, three ways: CP-SAT, its macro-space rendering, and a 233k clone of that rendering are tied -- the ceiling paragraph inside that section. | **48.7%** head to head, n=600 |
+| [How much is left above it for any strategy to find?](#oracle-one-step-regret-the-bound-the-nulls-were-missing) | Nothing. 39,903 alternative whole turns rolled out to the end against the real deck; every deviation type is at or below zero. | same tiles, other table: **-0.2% +-0.5%** |
+| [Can you shut an opponent out of going out?](#endgame-denial-the-cell-that-survived-the-oracle-and-the-reason-it-is-empty) | The sign is there and the cell is empty: a solved reply reads the table's tile multiset, not its arrangement, so 91.5% of equal-tile alternatives provably cannot move the door. | +11 / +20 / +18pp, fired 0.03-0.11 times per seat-game -- worth **0.2-0.5pp** |
+| [Does the table you leave behind pay?](#board-shaping-the-axis-the-oracle-never-bounded-and-why-it-has-no-sign) | Null by mechanism: the table is common property, so `left - met` is 0.00 +-0.00 and any restriction pays its own cost. | **+1.06pp +-1.57** against a coin flip over the same ties |
+| [Is a rack worth more than its size?](#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | Null by mechanism: a decision recurs after every set, so what a turn "keeps" it plays before ending. | the axis bounded at **~1.8pp** |
+| [Is the opening different, since it does not recur?](#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played) | The oracle's one positive cell out of fourteen, tested as nine pre-registered policies. Null; the mechanism is present at every step and gone within two turns. | best arm **+0.91% +-1.04**, control **-0.45% +-0.50** pooled |
+| [Does any of it change at three or four seats?](#three-seats-the-argument-that-killed-it-at-two-does-not-apply-and-the-answer-is-the-same) | No, and 3p breaks the symmetry argument that closed 2p, so it is an independent test rather than a repeat. | 3p **-1.2% +-1.1%**, [4p](#four-seats-and-the-number-the-three-runs-agree-on) **+0.4% +-1.3%** |
+| [Is there information about the opponent worth having?](#training-attempts) | Null twice by mechanism (belief features, LSTM) and once by bound: handed the opponent's true rack, a policy learns to discard it. | zeroing the block flips **0.0%** of ~9,500 argmax decisions |
+| [Can a network beat the heuristics?](#training-attempts) | It clones one exactly and never exceeds it. The strongest learned agent in the repo is a DAgger clone, and it is the ladder's `learned` rung. | **+47.32 / 99.6%**, even with `optimal` |
+| [What moved the score, then?](#capability-not-policy) | Capability, not policy -- what the action space can express, not what the policy chooses inside it. | five capabilities **~260 points**, two trained nets **~8** |
+| [Why did no training run resolve any of this?](#settings-measured-as-harmful) | The signal sits an order of magnitude under one update's own noise, and argmax scoring confounds policy quality with policy concentration. | [**0.012** normalised units of signal against **0.073** of per-episode noise](#training-attempts) |
+| [What is still open?](#what-this-bounds) | Multi-turn plans, adaptation against a population, configs that force a residue, and league margin. Everything one turn wide is closed. | see also [what this leaves](#what-this-leaves) |
 
 ## The ladder, and where the experiments sit in it
 
@@ -420,9 +444,15 @@ fixed policy, which is the setting every history, memory and oracle arm ran in.
 cheap precondition to measure first is whether adaptation has anywhere to go: if
 the best response to `greedy` and to `optimal` are the same policy, identifying
 which one you face is worth nothing. The 3p/4p suites, once the promising
-unknown, are half-measured now:
-the per-turn ceiling holds there and the information bound is null at 3p (the
-two rows above).
+unknown, are measured now: the per-turn ceiling holds there, the information
+bound is null at 3p (the two rows above), and the hindsight sweep re-run at both
+seat counts puts every deviation type at or below zero there as well --
+[three seats](#three-seats-the-argument-that-killed-it-at-two-does-not-apply-and-the-answer-is-the-same),
+[four seats](#four-seats-and-the-number-the-three-runs-agree-on). The one cell any
+of this ever pointed at, the opening, is closed the same way: nine opening
+policies over 1600 paired deals, null in every arena
+([the opening](#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played)).
+So the verdict above now reads at three and four seats too, and not only at two.
 
 **The information channel is closed against `greedy` -- twice by mechanism, once
 by bound.** The observation merges the pool and opponents' racks into `unseen` on
@@ -600,7 +630,10 @@ Three measurements of the structure, and the last is the lead:
   this measurement points in, and the mechanism is available: `by_value` opens on
   the dearest template and the oracle prefers keeping tiles back, which is the rack
   potential the section above found nothing to protect *because a decision recurs
-  after every set*. The opening is the one decision that does not recur.
+  after every set*. The opening is the one decision that does not recur. Tested
+  as a policy it is null as well, five times tighter than this cell and excluding
+  it -- [the opening](#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played),
+  two sections below.
 
 Two things this cannot bound, both by construction. It is perfect hindsight -- the
 enumeration is scored on the real future of a fixed deck against a fixed opponent,
@@ -858,7 +891,11 @@ carries +0.05, +0.03 and +0.05 of correlation with what the opponent could do.
 to a surviving cell is the one the previous section already named -- shedding fewer
 tiles than the played turn *pre-meld*: +8.1% +-6.2% at two seats, +5.4% +-5.8% at
 three, and +1.3% +-5.7% at four, so two runs of three and a shrinking one. That is
-an opening question, not a table question, and it is where the next arm belongs.
+an opening question, not a table question, and it is where the next arm belonged.
+It ran, and it is null: nine opening policies over 1600 paired deals, best arm
++0.91% +-1.04, the negative control the only sign that repeats across seat counts
+-- [the opening](#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played),
+the section below.
 
 ## The opening was the one cell that moved, and it does not survive being played
 

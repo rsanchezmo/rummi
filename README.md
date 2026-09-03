@@ -8,9 +8,21 @@ implemented three times over — NumPy, torch and JAX — each verified against 
 others bit for bit.
 
 The bundled agents are the point as much as the env is. You get a floor
-(`greedy`) and a genuine ceiling (`optimal`, an OR-Tools CP-SAT solver that plays
-each turn perfectly), so a new agent has something real to measure itself
-against on day one.
+(`greedy`) and a ceiling (`optimal`, an OR-Tools CP-SAT solver that plays each
+turn perfectly), so a new agent has something real to measure itself against on
+day one.
+
+**Why it exists.** The project set out to find a strategy — hand-written or
+learned — that beats an optimal per-turn solver at Rummikub, and built the env,
+the ladder and the training machinery in order to look for one. It did not find
+one, and the search is now closed at the resolution these suites afford: **a
+single round of standard Rummikub has no strategic layer above playing the best
+available turn**, at two, three or four seats, within about a point of win rate,
+even with perfect information. So `optimal` is the game's ceiling and not merely
+the strongest thing in the box, and that is proven rather than asserted. The env,
+the three backends, the ladder and that negative result are what this repo is.
+[What the benchmark found](#what-the-benchmark-found) is the argument and the
+numbers.
 
 ```bash
 pip install -e '.[dev,env,render,solver]'
@@ -92,7 +104,7 @@ to anything that does not search.
 
 ## The opponents
 
-Four strengths, all playable out of the box and all usable as opponents in your
+Seven agents, all playable out of the box and all usable as opponents in your
 own training loop. Scored here on the `standard-greedy` suite over 120
 games; `score` is official Rummikub scoring from the agent's side.
 
@@ -131,9 +143,225 @@ stuck-state solve does not already deliver.
 one repartition among all the ordinary moves and picks — **the net decides *when*
 to spend a solve, CP-SAT decides *how*** — and it lands even with the other two,
 which is how a rung carrying weights earned a place here. It is a 233k-parameter
-DAgger clone of a heuristic that scores +29.6, so it is not imitating the
-ceiling; it needs the `torch` extra (`pip install -e '.[torch]'`) and ships one
-file of weights per seat count, since the observation widens with the table.
+DAgger clone of `by_value` driving that same macro space with the stuck-state
+solve on — an optimal-tier teacher at +48.01 — and it reproduces the teacher to
+within noise from the observation alone, which is what keeps "the observation is
+sufficient to play optimally" a tested claim rather than a hope. It needs the
+`torch` extra (`pip install -e '.[torch]'`) and ships one file of weights per
+seat count, since the observation widens with the table.
+
+## What the benchmark found
+
+The goal was a strategy that beats an optimal per-turn solver: something above
+"play the best turn you can see". Two weeks of arms went at it — PPO in the
+primitive, macro and hybrid action spaces, cloning and DAgger, self-play with a
+snapshot league, best response against `optimal` itself, belief features and an
+LSTM over decision history, a net handed the opponent's true rack, afterstate
+value learning, turn-completion search, hand-written tie-breaks on the table and
+on the rack, and last an opening rule. Then the ceiling itself was measured, by
+hindsight instead of by learning.
+
+**None of it found one.** In a single round of standard Rummikub there is no
+strategic layer above playing the best available turn — at two, three or four
+seats, at about one point of win-rate resolution, even with the opponent's rack
+and the rest of the deck in view. The skill this game rewards is computational,
+and that part is enormous: in the table above `greedy`, which never takes a set
+apart, loses all 120 games to `optimal`, which repartitions every turn. Above
+rearrangement it is the deck. [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) is the
+lab notebook, a section per arm and the reason each stopped; this is the argument.
+
+### The game, in numbers
+
+`optimal` against `frugal`, 200 deals played from both seats:
+
+- **The two top rungs are even at 47.2%**, and **the same seat wins both games of
+  a deal in 68% of them.** The deal is a larger term than the agent, which is why
+  every suite here rotates seats and pairs on deals.
+- **58% of turns are a forced `DRAW`** — 19.1 draws per seat per game against 13.7
+  playing turns. In most turns no legal play exists at all.
+- **The loser is close**: 2 tiles left at the median, ≤1 in 30% of games, ≤3 in
+  78%. Nothing runs out either — 40 of the 78 pool tiles are still unseen at the
+  end, and none of the 400 games stalemated.
+- **Turn order outweighs either agent's choices.** First mover wins 51.2%, 52.5%
+  in the `optimal` mirror, and the leader at half-time wins 59%.
+
+58% forced draws, decided by two tiles, with the seat worth 68% of the outcome:
+that is the shape everything below is measured inside.
+
+```bash
+python tools/game_structure.py --a optimal --b frugal --deals 200
+```
+
+### The ceiling on choosing a turn
+
+Each of those arms tested one candidate strategy, and a null reads the same
+whether the axis is empty or merely out of reach. `tools/oracle_regret.py`
+measures the bound instead: for every turn `frugal` played against itself, replay
+the rest of the game from every *other* whole turn the rules admit. A step holds
+no randomness — the deck is permuted once at `reset` and drawing only advances a
+pointer — so a boundary cloned and continued with deterministic agents replays
+the rest of the game tile for tile. **The game that was played is therefore the
+baseline rollout for every decision in it**, and each deviation is priced against
+that baseline on that deck, with no variance to average away. Every alternative
+is a turn CP-SAT built under an added restriction and then run one primitive
+action at a time against the env's own mask, so the engine accepts it as a turn.
+
+300 deals, 8,185 playing decisions, **39,903 alternative turns each rolled out to
+the end**:
+
+![Win-rate change of one-turn deviations, by deviation type and seat count](docs/charts/regret.svg)
+
+| deviation from the turn `frugal` played | alternatives | changes the winner | delta vs that turn |
+|---|---:|---:|---:|
+| a different CP-SAT optimum | 1,248 | 11.4% | +0.0 ±2.3 |
+| **the same tiles onto a different table** | **15,801** | **3.6%** | **−0.2 ±0.5** |
+| fewer tiles shed | 5,886 | 27.5% | −3.1 ±1.5 |
+| no rearrangement at all | 768 | 27.3% | −5.9 ±3.9 |
+| `DRAW` instead of playing | 8,185 | 26.3% | −0.4 ±1.1 |
+| the played turn, re-derived | 8,015 | 0.0% | +0.0 ±0.0 |
+
+- **The free parameter every table-shaping idea aimed at is worth nothing.**
+  Shedding the same tiles onto a different table is **−0.2 ±0.5pp** over 15,801
+  tries with the future deck and the opponent's rack both visible — the tightest
+  interval in the repo. Nor was the choice empty: a single max-tiles table exists
+  at only 24.3% of decisions.
+- **The instrument detects a worse turn when handed one.** Shedding fewer tiles
+  loses 3.1pp (−8.3 in the endgame) and freezing the table 5.9 (−12.4), at eight
+  times the winner-change rate. The last row is the exactness check: 8,015 turns
+  re-derived to the same table and tiles, every one reproducing its baseline.
+- **`frugal` and `optimal` are not close, they are the same.** CP-SAT's optimum
+  differs from the turn `frugal` played at 15.2% of decisions and is worth **+0.0
+  ±2.3pp** there — their head-to-head tie re-derived per decision, not per match.
+- **Never quote the headline.** *Some* deviation rescues 91.3% of lost games, and
+  a coin flip over the same deviations predicts 99.5%; 93.0% of *won* games are
+  thrown the same way. A maximum over ~120 rollouts per seat changes what the
+  shared pool hands out from that turn on, so the game is re-decided. Deck chaos.
+
+A mean over a type cannot see a targeted effect inside it, so every turn also
+records the opponent's best reply, solved by CP-SAT against its true rack. The one
+cell the hypothesis names — the opponent is a tile from finishing and an
+equal-tile alternative shuts the door it needs — is worth **+11 ±22pp at two
+seats, +20 ±21 at three, +18 ±19 at four**, and **fires 0.03, 0.07 and 0.11 times
+per seat-game**: shutting every exit available moves a win rate by 0.2–0.5pp, 1pp
+at the very top of those intervals. Why it is that rare outlives the measurement:
+**a solved reply is a function of the tile multiset the table holds, not of its
+arrangement**, pinned by a test on `solve_turn` itself. Against any opponent that
+can rearrange, table *shape* carries nothing — only which tiles are shed can
+matter, and 91.5% of equal-tile alternatives shed exactly the same tiles. Lay-off
+permeability, the observable a real agent would have to find the door with,
+correlates **+0.05** with what the opponent could do and moves two hundred times
+more often than the door does.
+
+```bash
+python tools/oracle_regret.py --games 300 --seed-base 91000 --kbest 4 --workers 8
+python tools/oracle_regret.py --config standard_3p --games 100 --seed-base 73000
+python tools/oracle_regret.py --config standard_4p --games 150 --seed-base 76000
+```
+
+Three seats break the argument that closed two — the table is common property, so
+at two seats a door closed on the opponent is closed on the closer, while with two
+opponents it costs the closer once and the opposition twice — and four should be
+weaker still for per-turn play, a turn of yours being three turns from mattering.
+**Every deviation type is at or below zero at three seats** (same tiles, other
+table: −1.2 ±1.1 over 7,280), and at four the only positive point estimate in the
+three runs is +0.4 ±1.3, covering zero, while `fewer_tiles` loses 8.3pp there and a
+frozen table 12.1 — more heavily than anywhere else.
+
+### The one lead, and how it died
+
+One cell of fourteen moved. Pre-meld, an alternative shedding *fewer* tiles than
+the played turn was worth **+8.1 ±6.2pp** (n=384), against −1.1 midgame and −8.4
+in the endgame, and the mechanism was specific: **the opening is the one decision
+that does not recur.** Before melding the table is untouchable, so the sets you
+open with are handed over as rigid sets, while a tile kept back is played later
+with full rearrangement rights.
+
+Tested as a policy, pre-sized and pre-registered: nine opening rules, each
+`frugal` with the opening turn rebuilt and **every post-meld decision delegated to
+`by_value` untouched**, over 1600 deals paired against plain `frugal`, then 800
+against `optimal` and 800 each at three and four seats. **No arm met the bar and
+no interval excludes zero.** `runs_first` is widest at +0.91 ±1.04 and its sign
+flips at three seats; `min_sets` reads +0.56 ±1.02 and −0.67 at three;
+`min_tiles`, the same class of deviation the oracle priced at +8.1, is **+0.12
+±1.22** — about five times tighter than the cell, and excluding it. The only sign
+that repeats in every arena is the negative control's: shedding *more* at the
+opening is mildly bad, **−0.45 ±0.50pp** pooled over 2p, 3p and 4p.
+
+The arms are not inert, which is what makes that a result rather than a
+resolution failure: they move 6.0–12.5% of pre-meld decisions and change the
+outcome of 17.1–25.9% of deals, so each had ~9pp available. The mechanism is
+present at every step and **gone within two turns** — openings shrink 5.71 → 4.13
+tiles and the opponent's next turn sheds 2.58 → 2.40, but a turn after that it is
+1.141 against `base`'s 1.146 while the arm's own shedding rises 0.902 → 0.951. The
+kept tiles are played a turn later by the hand that kept them. Two exactness
+controls carry the reading: `frugal` mirrored against itself is *exactly* 50.00 /
+33.33 / 25.00%, and `by_value`'s own opening rebuilt by the arms' planner is
+exactly +0.00 over **24,490** pre-meld decisions with 0.00% moved.
+
+```bash
+python tools/opening_ab.py --arena head2head --deals 1600 --seed-base 93000
+```
+
+### Why no training run could have seen this
+
+**An effect of 1pp on win rate is 0.02 in reward units** against a terminal reward
+of ±1. The macro trainer normalises its advantage over ~30 closed episodes per
+update, so the standard error of that mean is 1/√30 ≈ 0.18 — an order of magnitude
+above the signal — before the one reward is credited across every decision of the
+episode. From the other side, the ranking that separates two adjacent rungs spans
+**0.012 normalised units against 0.073 of per-episode noise**, which is why the
+afterstate value learner finds the heuristic band in 80 updates and never locks
+the last three points, and why search over it is worth +0.71 ±2.07. Behaviour
+agrees: everything that keeps a cloned policy competent moves it **at most 1.6% of
+its decisions**, and the first setting that moves more destroys it. The hindsight
+instrument resolves what none of that could for one reason — **it pairs each
+deviation with its own baseline on the same deck**, so the variance a learner must
+average over does not exist here at all.
+
+### What is closed, and what is not
+
+Closed at every seat count the repo scores: table shaping, rack potential, the
+opening, and information — a net handed the opponent's true rack ties its own
+control on the same deals, and zeroing that block flips **0.0%** of ~9,500 argmax
+decisions at two seats and of 8,409 at three. **So the ladder's top rung is the
+game's ceiling for one round of the standard rules**, and a submission's room is
+the distance below it. Not closed, and named rather than waved at:
+
+- **Multi-turn plans.** The construction deviates on *one* turn, so giving
+  something up now to collect it later sits outside it. Three arms went at it
+  directly — a delegating agent, self-play from the clone, best response against
+  `optimal` — and all three are null, which is not the same as exhaustive.
+- **Adaptation against a population.** A best response to one fixed deterministic
+  opponent is itself a fixed policy, so "work out who you are playing" has no
+  content in any arena measured here. Different benchmark; the precondition is
+  whether the best responses to `greedy` and to `optimal` differ at all.
+- **Configs that force a residue.** Rack potential is an axis only where a turn
+  boundary *forces* tiles to be kept — a tight micro budget, a one-set-per-turn
+  cap, a rack too large to drain in one turn. Standard forces none of them.
+- **Margin, the cross-turn decision this scoring never poses.** Official Rummikub
+  runs over rounds and the loser pays the face value left in the rack, so a round
+  already lost plausibly holds a real decision: shed *value* rather than tiles,
+  spend a held joker rather than keep it. The frozen suites cannot see it — they
+  score one round by its winner — and it is the likeliest place a layer survives.
+- **An edge below the noise floor**, about ±1pp at these game counts.
+
+| measured | result | notebook | reproduce |
+|---|---|---|---|
+| the shape of a game between the top two rungs | 47.2%, and the seat decides 68% of deals | above | `python tools/game_structure.py --a optimal --b frugal --deals 200` |
+| every single-turn deviation, 2p | same tiles / other table, −0.2 ±0.5pp over 15,801 | [Oracle one-step regret](docs/EXPERIMENTS.md#oracle-one-step-regret-the-bound-the-nulls-were-missing) | `python tools/oracle_regret.py --games 300 --seed-base 91000` |
+| targeted endgame denial | +11 ±22pp, firing 0.03 times per seat-game | [Endgame denial](docs/EXPERIMENTS.md#endgame-denial-the-cell-that-survived-the-oracle-and-the-reason-it-is-empty) | the same run |
+| the same at three and four seats | −1.2 ±1.1 and +0.4 ±1.3 | [Three seats](docs/EXPERIMENTS.md#three-seats-the-argument-that-killed-it-at-two-does-not-apply-and-the-answer-is-the-same), [four seats](docs/EXPERIMENTS.md#four-seats-and-the-number-the-three-runs-agree-on) | `python tools/oracle_regret.py --config standard_3p --games 100 --seed-base 73000` |
+| the opening, played as a policy | best arm +0.91 ±1.04, control −0.45 ±0.50 pooled | [The opening](docs/EXPERIMENTS.md#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played) | `python tools/opening_ab.py --arena head2head --deals 1600 --seed-base 93000` |
+| table shaping, as a tie-break | +1.06 ±1.57pp against a coin flip over the same ties | [Board shaping](docs/EXPERIMENTS.md#board-shaping-the-axis-the-oracle-never-bounded-and-why-it-has-no-sign) | `python tools/denial_ab.py --arena both --deals 1600 --games 400` |
+| rack potential, as a weighted objective | no arm beats its own permuted control; best +1.09 ±1.75 | [Rack potential](docs/EXPERIMENTS.md#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | `python tools/rack_potential_ab.py --arena both --deals 1600 --games 800 --w 1.0` |
+| every learning attempt, and what killed it | the strongest learned agent is a clone of a heuristic, +47.32 | [Training attempts](docs/EXPERIMENTS.md#training-attempts) | one seed each; see the file |
+
+Summaries are committed as `docs/data/regret.json`, `docs/data/opening.json` and
+`docs/data/game_structure.json`, and `tools/render_charts.py` draws the figure from
+the first. The per-decision JSON runs to tens of megabytes, so it is regenerable
+rather than committed; `oracle_regret.py --from-json` re-prints the tables from a
+finished run, pooling several of one config with the deals renumbered so a
+clustered interval still counts one deal once.
 
 ## Writing an agent
 
@@ -191,9 +419,13 @@ baseline to beat.
 Two things the seat count does to the ladder. `greedy` lands on exactly
 `1 / n_players` in every column — it is each suite's own opponent, and that the
 number is *exact* rather than close is the rotation check working, not a
-coincidence. And `optimal` stops being perfect at four seats: with three
-opponents taking turns between yours, playing every turn perfectly is no longer
-quite enough, which finally makes the top rung something a submission can aim at.
+coincidence. And `optimal` stops being *perfect* at four seats — but only just:
+99.5% is one stalemate in 220 games, which is not a gap to aim at. **What the top
+rung now is, is the game's measured ceiling**: an agent that plays the best turn
+available every turn, with nothing above that worth a point at any seat count
+([What the benchmark found](#what-the-benchmark-found)). A submission places
+itself on the rungs below it, and the interesting distance is `greedy` to
+`rearrange` to the solver tier.
 
 `learned` is one net per seat count, trained by the same recipe and nothing else
 — the observation widens with the table, so a 2p net cannot be pointed at a 3p
@@ -221,9 +453,11 @@ turn-order advantage and the luck of the deal, so an agent mirrored against
 itself scores exactly `1 / n_players` and +0.0 — not that within error bars. Each game's
 seed is derived from its index alone, so batching cannot change which deals run.
 
-`docs/EXPERIMENTS.md` records every attempt at a learned agent strong enough to join
-the ladder, and the reason each one stopped. The scores are the least interesting
-column: most failed for something that took a day to find and a line to describe.
+[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) records every attempt at an agent
+strong enough to join the ladder — learned and hand-written — the reason each one
+stopped, and the hindsight measurements that bound what was left to find. The
+scores are the least interesting column: most failed for something that took a day
+to find and a line to describe.
 Deterministic entries are captured to `docs/data/experiments.json` with
 `python tools/capture_experiments.py`; the training runs are one seed apiece and
 cannot be.
@@ -375,7 +609,7 @@ rummi/
 
 ## What is verified
 
-- **488 tests.** The set-validity kernel is checked *exhaustively* against a
+- **659 tests.** The set-validity kernel is checked *exhaustively* against a
   brute-force oracle on the reduced configs, including the closed-form
   "could I add this tile?" predicate.
 - **10.5M fuzz steps, zero invariant violations.** Tile conservation, mask

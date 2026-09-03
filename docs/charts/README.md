@@ -5,8 +5,14 @@ Generated from committed data, not pasted:
 ```bash
 python -m rummi.bench.bench_backends --compile --json docs/data/backends.json
 python tools/capture_agents.py --suite standard-greedy --games 60
+python tools/oracle_regret.py --from-json runs/oracle-regret/regret-standard-300g-seed91000-k4.json \
+    --export-summary docs/data/regret.json
 python tools/render_charts.py
 ```
+
+`docs/data/regret.json` carries all three seat counts, one export per config;
+`README.md` holds the full block. The runs under `runs/` are not committed, so an
+export is the only committed form of those numbers.
 
 SVG because GitHub inlines it, it scales, and it diffs as text. That rules out a
 hover layer — GitHub strips scripts from SVG — so the interaction budget goes to
@@ -21,6 +27,7 @@ validator in both modes rather than by eye:
 |---|---|---|
 | throughput | 6 categorical slots | passes lightness, chroma, CVD and normal-vision gates, light and dark |
 | agents | 5-step ordinal blue ramp | passes monotonicity, step gaps and light-end contrast, light and dark |
+| regret | the top 3 steps of that ramp | seat count is ordered, so the ramp again; the top three stops rather than an even spread, because the ramp's light end is its low-contrast end in *both* themes |
 
 The light-mode check raises a contrast warning on aqua, yellow and magenta, which
 obliges visible labels rather than colour alone — so every series is both

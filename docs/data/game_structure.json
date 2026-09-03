@@ -1,0 +1,79 @@
+{
+ "config": "standard",
+ "pairings": {
+  "optimal-vs-frugal": {
+   "a": "optimal",
+   "b": "frugal",
+   "deals": 200,
+   "games": 400,
+   "a_win_rate": 0.4725,
+   "a_wins_both_seats": 27,
+   "b_wins_both_seats": 38,
+   "seat_decides": 135,
+   "seat_decides_rate": 0.675,
+   "first_mover_win_rate": 0.5125,
+   "stalemate_rate": 0.0,
+   "truncated_rate": 0.0,
+   "loser_tiles": {
+    "mean": 2.6875,
+    "median": 2.0,
+    "p_le_1": 0.3025,
+    "p_le_2": 0.55,
+    "p_le_3": 0.775
+   },
+   "loser_value_mean": 18.8725,
+   "turns_mean": 65.0075,
+   "pool_mean": 40.1975,
+   "p_pool_empty": 0.0,
+   "draws_per_seat": [
+    19.0975,
+    18.705
+   ],
+   "plays_per_seat": [
+    13.6625,
+    13.5425
+   ],
+   "half_time_leader_wins": 0.5919540229885057,
+   "half_time_n": 348,
+   "seed_base": 77000,
+   "wall_seconds": 241.57645775000128
+  },
+  "optimal-vs-optimal": {
+   "a": "optimal",
+   "b": "optimal",
+   "deals": 200,
+   "games": 400,
+   "a_win_rate": 0.5,
+   "a_wins_both_seats": 0,
+   "b_wins_both_seats": 0,
+   "seat_decides": 200,
+   "seat_decides_rate": 1.0,
+   "first_mover_win_rate": 0.525,
+   "stalemate_rate": 0.0,
+   "truncated_rate": 0.0,
+   "loser_tiles": {
+    "mean": 2.67,
+    "median": 2.0,
+    "p_le_1": 0.27,
+    "p_le_2": 0.585,
+    "p_le_3": 0.73
+   },
+   "loser_value_mean": 17.545,
+   "turns_mean": 62.645,
+   "pool_mean": 41.635,
+   "p_pool_empty": 0.0,
+   "draws_per_seat": [
+    18.22,
+    18.145
+   ],
+   "plays_per_seat": [
+    13.365,
+    12.915
+   ],
+   "half_time_leader_wins": 0.601123595505618,
+   "half_time_n": 356,
+   "seed_base": 78000,
+   "wall_seconds": 199.47254937499383
+  }
+ }
+}

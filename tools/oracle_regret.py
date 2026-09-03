@@ -43,7 +43,7 @@ import json
 import sys
 import time
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 from multiprocessing import get_context
 from pathlib import Path
 
@@ -758,6 +758,116 @@ def _fmt(n: int, mean: float, half: float) -> str:
     return f"{mean:>+7.1%} +-{interval} n={n:<5}"
 
 
+@dataclass(slots=True)
+class Headline:
+    """One loser and one winner per game, and how fragile each was.
+
+    Every seat counts, including one that never played a turn -- it cannot be
+    rescued, and dropping it would be dividing by the games where a rescue was
+    possible.
+    """
+
+    seats: int
+    losses: int
+    rescued: int
+    wins: int
+    thrown: int
+    coin_flip: tuple[float, float]
+    """What the two rates would read if a deviation carried no strategy at all."""
+
+
+def headline(played: list[dict]) -> Headline:
+    losses = wins = rescued = thrown = 0
+    seats = 1 + max(d["seat"] for g in played for d in g["decisions"])
+    for game in played:
+        if game["winner"] < 0:
+            continue  # a stalemate has no side to rescue
+        for seat in range(seats):
+            own = [d for d in game["decisions"] if d["seat"] == seat]
+            any_win = any(a["won"] == 1 for d in own for a in d["alts"])
+            any_loss = any(a["won"] == 0 for d in own for a in d["alts"])
+            if game["winner"] == seat:
+                wins += 1
+                thrown += any_loss
+            else:
+                losses += 1
+                rescued += any_win
+    return Headline(
+        seats=seats,
+        losses=losses,
+        rescued=rescued,
+        wins=wins,
+        thrown=thrown,
+        coin_flip=_independent_prediction(played, seats),
+    )
+
+
+@dataclass(slots=True)
+class TypeOutcome:
+    """One alternative type against the turns it replaced, over one phase or all.
+
+    Two deltas, because the two tables that print them ask different questions. The
+    clustered one treats a deal as one observation and so carries an interval; the
+    pooled one is a straight per-alternative mean, which is what the phase cells
+    print, since a cell of a few dozen alternatives has no interval worth quoting.
+    """
+
+    kind: str
+    decisions: int
+    """Decisions that offered this type a candidate at all."""
+    alts: int
+    decided: int
+    """Alternatives whose rollout reached a result -- the denominator of everything."""
+    base_win: float
+    alt_win: float
+    delta: float
+    half: float
+    pooled_delta: float
+    changed: float
+    """How often the deviation lands on the other side of the game's result."""
+
+
+def type_outcomes(played: list[dict], *, only: str | None = None) -> list[TypeOutcome]:
+    out: list[TypeOutcome] = []
+    for kind in (*KINDS, REPLAY):
+        decisions = alts = decided = base_hits = base_per_alt = alt_hits = changed = 0
+        paired: list[tuple[int, float]] = []
+        for game in played:
+            for d in game["decisions"]:
+                if only is not None and phase(d) != only:
+                    continue
+                mine = [a for a in d["alts"] if a["kind"] == kind]
+                if not mine:
+                    continue
+                decisions += 1
+                base_hits += d["base_won"]
+                for a in mine:
+                    alts += 1
+                    if a["won"] < 0:
+                        continue
+                    decided += 1
+                    alt_hits += a["won"] == 1
+                    base_per_alt += d["base_won"]
+                    paired.append((game["game"], float(a["won"] == 1) - float(d["base_won"])))
+                    changed += (a["won"] == 1) != d["base_won"]
+        _, mean, half = _cluster(paired)
+        out.append(
+            TypeOutcome(
+                kind=kind,
+                decisions=decisions,
+                alts=alts,
+                decided=decided,
+                base_win=base_hits / decisions if decisions else float("nan"),
+                alt_win=alt_hits / max(1, decided),
+                delta=mean,
+                half=half,
+                pooled_delta=(alt_hits - base_per_alt) / decided if decided else float("nan"),
+                changed=changed / max(1, decided),
+            )
+        )
+    return out
+
+
 def _independent_prediction(played: list[dict], seats: int) -> tuple[float, float]:
     """What the headline would read if a deviation's outcome carried no strategy.
 
@@ -977,6 +1087,75 @@ PERM_COLUMNS = (
 )
 
 
+HYPOTHESIS_CELLS = (
+    ("exit closed, opp <=2", "exit closed, opp <=2", lambda p: p.closed_out and p.opp_size <= 2),
+    ("exit closed, opp 3-4", "exit closed, opp 3-4",
+     lambda p: p.closed_out and 3 <= p.opp_size <= 4),
+    ("exit closed, any rack", "exit closed, any rack", lambda p: p.closed_out),
+    ("  the same, leader", "exit closed, leader", lambda p: p.closed_out and p.leader),
+    ("  the same, not leader", "exit closed, not leader",
+     lambda p: p.closed_out and not p.leader),
+    ("play closed, any rack", "play closed, any rack", lambda p: p.d_play < 0),
+    ("opp shed fewer, opp <=2", "opp shed fewer, opp <=2",
+     lambda p: p.opp_size <= 2 and (p.d_shed or 0) < 0),
+)
+"""The cells endgame denial predicts, named before the numbers were read.
+
+Two names per row: the table indents a row that continues the one above it, and a
+file that carries the rows without the table cannot, so `key` spells it out.
+"""
+
+
+@dataclass(slots=True)
+class Cell:
+    """One of those cells: the delta, and how often the game even offers it.
+
+    `decisions` beside `n` is the point of the row -- a cell can hold hundreds of
+    (alternative, opponent) pairs drawn from a handful of decisions, and it is the
+    decisions that bound what a policy could act on.
+    """
+
+    label: str
+    key: str
+    n: int
+    delta: float
+    half: float
+    decisions: int
+    per_game: float
+
+
+def hypothesis_cells(pairs: list[Delta], games: int) -> list[Cell]:
+    out: list[Cell] = []
+    for label, key, keep in HYPOTHESIS_CELLS:
+        hit = [r for r in pairs if keep(r)]
+        seen = len({(r.deal, r.at) for r in hit})
+        n, mean, half = _cluster([(r.deal, r.delta) for r in hit])
+        out.append(Cell(label, key, n, mean, half, seen, seen / games if games else 0.0))
+    return out
+
+
+@dataclass(slots=True)
+class Availability:
+    """Whether the mechanism is available at all, which a delta cannot say: a door
+    can only be closed at a decision where the opponent could walk through it."""
+
+    pairs: int
+    decisions: int
+    per_game: float
+    closed: int
+
+
+def denial_availability(pairs: list[Delta], games: int) -> Availability:
+    risk = [r for r in pairs if r.base_out]
+    decisions = len({(r.deal, r.at) for r in risk})
+    return Availability(
+        pairs=len(risk),
+        decisions=decisions,
+        per_game=decisions / max(1, games),
+        closed=sum(r.closed_out for r in risk),
+    )
+
+
 def _pearson(xs: list[float], ys: list[float]) -> float:
     if len(xs) < 3:
         return float("nan")
@@ -1040,29 +1219,16 @@ def targeted(played: list[dict]) -> list[str]:
     )
 
     lines.append("  THE CELL THE HYPOTHESIS NAMES")
-    for label, keep in (
-        ("exit closed, opp <=2", lambda p: p.closed_out and p.opp_size <= 2),
-        ("exit closed, opp 3-4", lambda p: p.closed_out and 3 <= p.opp_size <= 4),
-        ("exit closed, any rack", lambda p: p.closed_out),
-        ("  the same, leader", lambda p: p.closed_out and p.leader),
-        ("  the same, not leader", lambda p: p.closed_out and not p.leader),
-        ("play closed, any rack", lambda p: p.d_play < 0),
-        ("opp shed fewer, opp <=2", lambda p: p.opp_size <= 2 and (p.d_shed or 0) < 0),
-    ):
-        hit = [r for r in pairs if keep(r)]
-        seen = len({(r.deal, r.at) for r in hit})
+    for cell in hypothesis_cells(pairs, len(played)):
         lines.append(
-            f"    {label:<24} {_fmt(*_cluster([(r.deal, r.delta) for r in hit]))}"
-            f"  decisions {seen:<5} {seen / len(played) if played else 0:.2f}/game"
+            f"    {cell.label:<24} {_fmt(cell.n, cell.delta, cell.half)}"
+            f"  decisions {cell.decisions:<5} {cell.per_game:.2f}/game"
         )
-    # Whether the mechanism is even available, which a delta cannot say: a door can
-    # only be closed at a decision where the opponent could walk through it.
-    risk = [r for r in pairs if r.base_out]
-    decisions = len({(r.deal, r.at) for r in risk})
+    available = denial_availability(pairs, len(played))
     lines.append(
-        f"    the opponent could go out against the played table in {len(risk)} pairs "
-        f"({decisions} decisions, {decisions / max(1, len(played)):.2f} per game); an "
-        f"equal-tile table takes that away in {sum(r.closed_out for r in risk)}"
+        f"    the opponent could go out against the played table in {available.pairs} pairs "
+        f"({available.decisions} decisions, {available.per_game:.2f} per game); an "
+        f"equal-tile table takes that away in {available.closed}"
     )
     lines.append("")
 
@@ -1143,29 +1309,10 @@ def summarise(games: list[dict]) -> list[str]:
     played = [g for g in games if "decisions" in g]
     lines: list[str] = []
 
-    # Headline: one loser and one winner per game. Every seat counts, including
-    # one that never played a turn -- it cannot be rescued, and dropping it would
-    # be dividing by the games where a rescue was possible.
-    losses = wins = flipped = fragile = 0
-    seats = 1 + max(d["seat"] for g in played for d in g["decisions"])
-    for game in played:
-        if game["winner"] < 0:
-            continue  # a stalemate has no side to rescue
-        for seat in range(seats):
-            own = [d for d in game["decisions"] if d["seat"] == seat]
-            any_win = any(a["won"] == 1 for d in own for a in d["alts"])
-            any_loss = any(a["won"] == 0 for d in own for a in d["alts"])
-            if game["winner"] == seat:
-                wins += 1
-                fragile += any_loss
-            else:
-                losses += 1
-                flipped += any_win
-
     # If a deviation only reshuffles the shared deck, each one is an independent
-    # coin flip and the headline is just a maximum over however many were tried.
-    # This is what that would predict, from the pooled per-alternative rate.
-    predicted = _independent_prediction(played, seats)
+    # coin flip and the headline is just a maximum over however many were tried,
+    # which is what `coin_flip` predicts from the pooled per-alternative rate.
+    head = headline(played)
 
     n_dec = sum(len(g["decisions"]) for g in played)
     n_alt = sum(len(d["alts"]) for g in played for d in g["decisions"])
@@ -1175,11 +1322,16 @@ def summarise(games: list[dict]) -> list[str]:
     )
     lines.append("")
     lines.append("HEADLINE (per game, per seat)")
-    lines.append(f"  lost games rescued by one deviation   {_rate(flipped, losses)}  n={losses}")
-    lines.append(f"  won games thrown by one deviation     {_rate(fragile, wins)}  n={wins}")
+    lines.append(
+        f"  lost games rescued by one deviation   {_rate(head.rescued, head.losses)}"
+        f"  n={head.losses}"
+    )
+    lines.append(
+        f"  won games thrown by one deviation     {_rate(head.thrown, head.wins)}  n={head.wins}"
+    )
     lines.append(
         f"  the same, if every deviation were an independent coin flip: "
-        f"{predicted[0]:6.1%} / {predicted[1]:6.1%}"
+        f"{head.coin_flip[0]:6.1%} / {head.coin_flip[1]:6.1%}"
     )
     lines.append("")
 
@@ -1262,58 +1414,27 @@ def summarise(games: list[dict]) -> list[str]:
         f"  {'':<24} {'alts':>7} {'base win':>9} {'alt win':>9} "
         f"{'delta (95% CI)':>20} {'changed':>8}"
     )
-    for kind in (*KINDS, REPLAY):
-        alts = wins_alt = decided = base_wins = base_decided = changed = 0
-        paired: list[tuple[int, float]] = []
-        for game in played:
-            for d in game["decisions"]:
-                mine = [a for a in d["alts"] if a["kind"] == kind]
-                if not mine:
-                    continue
-                base_decided += 1
-                base_wins += d["base_won"]
-                for a in mine:
-                    alts += 1
-                    if a["won"] < 0:
-                        continue
-                    decided += 1
-                    wins_alt += a["won"] == 1
-                    paired.append((game["game"], float(a["won"] == 1) - float(d["base_won"])))
-                    changed += (a["won"] == 1) != d["base_won"]
-        if not alts:
+    for o in type_outcomes(played):
+        if not o.alts:
             continue
-        _, mean, half = _cluster(paired)
         lines.append(
-            f"  {kind:<24} {alts:>7} {base_wins / base_decided:>8.1%} "
-            f"{wins_alt / max(1, decided):>9.1%} "
-            f"{mean:>+9.1%} +-{half:<7.1%} {changed / max(1, decided):>8.1%}"
+            f"  {o.kind:<24} {o.alts:>7} {o.base_win:>8.1%} {o.alt_win:>9.1%} "
+            f"{o.delta:>+9.1%} +-{o.half:<7.1%} {o.changed:>8.1%}"
         )
     lines.append("")
 
     # Where the deviation actually costs or gains, crossed with when it is taken.
     lines.append("DELTA (alt win - base win) BY TYPE AND PHASE")
     lines.append(f"  {'':<24} " + " ".join(f"{name:>18}" for name in PHASES))
+    by_phase = {name: {o.kind: o for o in type_outcomes(played, only=name)} for name in PHASES}
     for kind in KINDS:
         cells = []
         for name in PHASES:
-            alts = wins = base = decided = 0
-            for game in played:
-                for d in game["decisions"]:
-                    if phase(d) != name:
-                        continue
-                    for a in d["alts"]:
-                        if a["kind"] != kind:
-                            continue
-                        alts += 1
-                        if a["won"] < 0:
-                            continue
-                        decided += 1
-                        wins += a["won"] == 1
-                        base += d["base_won"]
-            if not decided:
+            o = by_phase[name][kind]
+            if not o.decided:
                 cells.append(f"{'--':>18}")
                 continue
-            cells.append(f"{(wins - base) / decided:>+11.1%} n={alts:<5}")
+            cells.append(f"{o.pooled_delta:>+11.1%} n={o.alts:<5}")
         lines.append(f"  {kind:<24} " + " ".join(cells))
     lines.append("")
 
@@ -1370,6 +1491,106 @@ def summarise(games: list[dict]) -> list[str]:
     return lines
 
 
+# --- the published summary ---------------------------------------------------
+
+
+def _num(value: float) -> float | None:
+    """A cell with no interval carries NaN, which is not JSON. `null` reads back as
+    "no interval" in any consumer; `NaN` reads back only in Python."""
+    return None if isinstance(value, float) and np.isnan(value) else float(value)
+
+
+def summary_payload(
+    games: list[dict], *, config: str, wall_seconds: float, sources: list[str], kbest: int
+) -> dict:
+    """The printed tables as data, for `docs/data/regret.json`.
+
+    Every number comes from the functions the tables print from, so a figure in the
+    docs and a re-print of the same run cannot disagree.
+    """
+    played = [g for g in games if "decisions" in g]
+    head = headline(played)
+    totals = {o.kind: o for o in type_outcomes(played)}
+    by_phase = {name: {o.kind: o for o in type_outcomes(played, only=name)} for name in PHASES}
+    pairs, dropped = denial_pairs(played)
+
+    def cell(o: TypeOutcome) -> dict:
+        return {
+            "n": o.alts,
+            "decided": o.decided,
+            "base_win": _num(o.base_win),
+            "alt_win": _num(o.alt_win),
+            "delta": _num(o.delta),
+            "ci": _num(o.half),
+            "pooled_delta": _num(o.pooled_delta),
+            "changed": _num(o.changed),
+        }
+
+    return {
+        "config": config,
+        "seats": CONFIG_BY_NAME[config].n_players,
+        "agent": AGENT,
+        "kbest": kbest,
+        "sources": sources,
+        "games": len(played),
+        "decisions": sum(len(g["decisions"]) for g in played),
+        "alternatives": sum(len(d["alts"]) for g in played for d in g["decisions"]),
+        "wall_seconds": wall_seconds,
+        "headline": {
+            "losses": head.losses,
+            "rescued": head.rescued,
+            "rescued_rate": head.rescued / head.losses if head.losses else None,
+            "wins": head.wins,
+            "thrown": head.thrown,
+            "thrown_rate": head.thrown / head.wins if head.wins else None,
+            "coin_flip_rescued": _num(head.coin_flip[0]),
+            "coin_flip_thrown": _num(head.coin_flip[1]),
+        },
+        "types": [
+            {
+                "kind": kind,
+                **cell(totals[kind]),
+                "phases": {name: cell(by_phase[name][kind]) for name in PHASES},
+            }
+            for kind in KINDS
+        ],
+        # The control the deltas are read against: an alternative that reproduces the
+        # turn the game played must score exactly even.
+        "base_replay": cell(totals[REPLAY]),
+        "denial": {
+            "pairs": len(pairs),
+            "deals": len({r.deal for r in pairs}),
+            "dropped_ending_the_game": dropped,
+            "cells": [
+                {
+                    "label": c.key,
+                    "n": c.n,
+                    "delta": _num(c.delta),
+                    "ci": _num(c.half),
+                    "decisions": c.decisions,
+                    "per_game": c.per_game,
+                }
+                for c in hypothesis_cells(pairs, len(played))
+            ],
+            "available": asdict(denial_availability(pairs, len(played))),
+        },
+    }
+
+
+def merge_summary(path: Path, payload: dict) -> dict:
+    """`payload` into whatever `path` already holds, keyed by seat count.
+
+    One file holds every seat count the docs quote and a run is one config, so a
+    second export has to land beside the first rather than replace it.
+    """
+    out: dict = {"seat_counts": {}}
+    if path.exists():
+        out = json.loads(path.read_text())
+    out["seat_counts"][str(payload["seats"])] = payload
+    out["seat_counts"] = dict(sorted(out["seat_counts"].items()))
+    return out
+
+
 # --- entry point -------------------------------------------------------------
 
 
@@ -1403,17 +1624,40 @@ def main() -> None:
         "config are pooled, their deal numbers renumbered so the clustered intervals "
         "still treat one deal as one observation",
     )
+    parser.add_argument(
+        "--export-summary",
+        type=Path,
+        help="with --from-json, also write the tables' numbers as JSON, merged into "
+        "whatever the file already holds by seat count",
+    )
     args = parser.parse_args()
 
     if args.from_json is not None:
         pooled: list[dict] = []
+        runs = []
         for path in args.from_json:
+            run = json.loads(path.read_text())
             offset = 1 + max((g["game"] for g in pooled), default=-1)
-            pooled += [
-                {**g, "game": g["game"] + offset}
-                for g in json.loads(path.read_text())["per_game"]
-            ]
+            pooled += [{**g, "game": g["game"] + offset} for g in run["per_game"]]
+            runs.append((path, run))
         print("\n".join(summarise(pooled)))
+        if args.export_summary is None:
+            return
+        configs = {run["config"] for _, run in runs}
+        if len(configs) != 1:
+            raise SystemExit(f"pooled runs disagree on the config: {sorted(configs)}")
+        payload = summary_payload(
+            pooled,
+            config=configs.pop(),
+            wall_seconds=sum(run.get("wall_seconds", 0.0) for _, run in runs),
+            sources=[str(path) for path, _ in runs],
+            kbest=runs[0][1]["kbest"],
+        )
+        args.export_summary.parent.mkdir(parents=True, exist_ok=True)
+        args.export_summary.write_text(
+            json.dumps(merge_summary(args.export_summary, payload), indent=1) + "\n"
+        )
+        print(f"\nwrote {args.export_summary}")
         return
 
     cfg = CONFIG_BY_NAME[args.config]

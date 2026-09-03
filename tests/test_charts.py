@@ -28,17 +28,18 @@ TEXT = re.compile(r'<text x="([-\d.]+)" y="([-\d.]+)"[^>]*font-size="([\d.]+)"[^
 CIRCLE = re.compile(r'<circle cx="([-\d.]+)" cy="([-\d.]+)" r="([\d.]+)"')
 
 
+NAMES = [name for name, _, _ in rc.CHARTS]
+
+
 @pytest.fixture(scope="module")
 def charts():
-    backends = json.loads((DATA / "backends.json").read_text())
-    agents = json.loads((DATA / "agents.json").read_text())
     return {
-        "throughput": rc.throughput_chart(backends),
-        "agents": rc.agents_chart(agents),
+        name: builder(json.loads((DATA / f"{source}.json").read_text()))
+        for name, source, builder in rc.CHARTS
     }
 
 
-@pytest.mark.parametrize("name", ["throughput", "agents"])
+@pytest.mark.parametrize("name", NAMES)
 def test_nothing_escapes_the_viewbox(charts, name):
     svg = charts[name]
     w, h = (float(v) for v in VIEWBOX.search(svg).groups())
@@ -60,7 +61,7 @@ def test_nothing_escapes_the_viewbox(charts, name):
         assert 0 <= float(y) <= h, f"{name}: {content!r} sits outside vertically"
 
 
-@pytest.mark.parametrize("name", ["throughput", "agents"])
+@pytest.mark.parametrize("name", NAMES)
 def test_both_themes_are_defined(charts, name):
     """The chart renders on GitHub in whichever theme the reader uses, and a
     colour defined only for one of them shows as text on its own background."""
@@ -90,7 +91,7 @@ def test_agent_chart_covers_every_bundled_agent():
     assert wins == sorted(wins), "the ladder must be plotted weakest to strongest"
 
 
-@pytest.mark.parametrize("name", ["throughput", "agents"])
+@pytest.mark.parametrize("name", NAMES)
 def test_every_colour_the_chart_reaches_for_is_defined(charts, name):
     """An undefined `var()` paints black in both themes and nothing else notices --
     the palette check only sees literal hexes, and the theme check only sees
@@ -111,6 +112,26 @@ def test_series_colours_come_from_the_validated_palette(charts):
     for svg in charts.values():
         for hexcode in set(re.findall(r"#[0-9a-fA-F]{6}", svg)):
             assert hexcode.lower() in allowed, f"{hexcode} is not in the validated palette"
+
+
+def test_the_regret_chart_plots_the_numbers_in_the_data(charts):
+    """The delta and its interval are the chart's whole content, so a chart that
+    renders while reading none of them would still pass every geometric assertion."""
+    data = json.loads((DATA / "regret.json").read_text())
+    svg = charts["regret"]
+    seats = sorted(data["seat_counts"], key=int)
+    kinds = [t["kind"] for t in data["seat_counts"][seats[0]]["types"]]
+    assert len(seats) == len(rc.SEAT_STOPS), "a seat count with no ordinal stop to plot"
+    for seat in seats:
+        rows = data["seat_counts"][seat]["types"]
+        assert [t["kind"] for t in rows] == kinds, f"{seat}p orders the types differently"
+        assert f"{seat}p" in svg
+        for t in rows:
+            assert f'>{t["delta"] * 100:+.1f}<' in svg, f"{seat}p {t['kind']} delta is missing"
+            assert f'>±{t["ci"] * 100:.1f}<' in svg, f"{seat}p {t['kind']} interval is missing"
+            assert f'>{t["changed"]:.0%}<' in svg
+    for kind in kinds:
+        assert f">{kind}<" in svg
 
 
 def test_every_published_capture_names_the_current_protocol():

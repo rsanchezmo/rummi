@@ -292,6 +292,157 @@ def agents_chart(data: dict, width=900, height=364) -> str:
     )
 
 
+# --- chart 3: one-turn regret -------------------------------------------------
+SEAT_STOPS = (2, 3, 4)
+"""Which stops of the ordinal ramp the three seat counts take. Seat count is ordered,
+so an ordinal ramp rather than categorical hues -- and the top three stops rather than
+an even spread, because the ramp's light end is its low-contrast end in *both* themes.
+Every row is direct-labelled with its seat count anyway, so colour is never the only
+thing carrying identity."""
+
+
+def regret_chart(data: dict, width=900) -> str:
+    """Five deviation types, three seat counts each, against the turn each replaced.
+
+    A dot and interval rather than a bar: the quantity is a difference with a sign, and
+    a bar chart of differences invites reading the length as a magnitude when the
+    interval is what decides whether there is anything there at all.
+
+    The "changes winner" column is the other half of every row. A deviation that moves
+    the game a quarter of the time and still lands three points down is a different
+    claim from one that never moves it, and a delta alone cannot tell them apart.
+    """
+    seats = sorted(data["seat_counts"], key=int)
+    counts = [data["seat_counts"][s] for s in seats]
+    kinds = [t["kind"] for t in counts[0]["types"]]
+    rows = {(s, t["kind"]): t for s, c in zip(seats, counts, strict=True) for t in c["types"]}
+
+    label = max(
+        (text_width(f"{t['delta'] * 100:+.1f}", 10, bold=True) for t in rows.values()),
+        default=30.0,
+    )
+    left, top, row_h, gap = 196, 92, 19, 14
+    d_right = 12 + label
+    ci_right = d_right + 8 + text_width("±00.0", 10)
+    chg_right = ci_right + 10 + text_width("00%", 10)
+    right = int(chg_right + 14)
+    plot_w = width - left - right
+    group_h = len(seats) * row_h
+    plot_h = len(kinds) * (group_h + gap) - gap
+    height = top + plot_h + 88
+
+    # Bounded by the widest interval rather than by the deltas, so no whisker is cut
+    # off, and snapped to the tick step so the zero line lands on a gridline.
+    step = 4.0
+    span = [(t["delta"] * 100, (t["ci"] or 0.0) * 100) for t in rows.values()]
+    lo = min(step * math.floor(min(d - c for d, c in span) / step), 0.0)
+    hi = max(step * math.ceil(max(d + c for d, c in span) / step), 0.0)
+
+    def px(pp: float) -> float:
+        return left + plot_w * (pp - lo) / (hi - lo)
+
+    svg = Svg(width, height, [])
+    svg.add(f'<rect width="{width}" height="{height}" fill="var(--surface)"/>')
+    svg.text(24, 22, "One-turn regret", size=15, fill="var(--ink)", weight=600)
+    svg.text(
+        24, 40,
+        "one-turn deviations against the turn they replaced · hindsight rollouts · "
+        "95% intervals clustered by deal",
+        size=11.5,
+    )
+    svg.text(
+        24, 58,
+        "positive means the deviation won more often than the turn it played instead",
+        size=11,
+    )
+    svg.text(24, top - 16, "deviation type", size=9.5, fill="var(--ink2)", weight=600)
+    svg.text(
+        left + plot_w + chg_right, top - 16, "delta ±95% CI · changes winner",
+        size=9.5, anchor="end", fill="var(--ink2)", weight=600,
+    )
+
+    ticks = [lo + step * i for i in range(round((hi - lo) / step) + 1)]
+    for pp in ticks:
+        x = px(pp)
+        svg.add(
+            f'<line x1="{x:.1f}" y1="{top}" x2="{x:.1f}" y2="{top + plot_h:.1f}" '
+            f'stroke="var(--grid)" stroke-width="1"/>'
+        )
+        svg.text(x, top + plot_h + 16, f"{pp:+.0f}" if pp else "0", size=11,
+                 anchor="middle", mono=True)
+    svg.text(
+        left + plot_w / 2, top + plot_h + 36, "percentage points of win rate",
+        size=11.5, anchor="middle",
+    )
+    svg.add(
+        f'<line x1="{px(0):.1f}" y1="{top}" x2="{px(0):.1f}" y2="{top + plot_h:.1f}" '
+        f'stroke="var(--axis)" stroke-width="1.5"/>'
+    )
+
+    for k, kind in enumerate(kinds):
+        group_top = top + k * (group_h + gap)
+        if k:
+            svg.add(
+                f'<line x1="24" y1="{group_top - gap / 2:.1f}" x2="{left + plot_w:.1f}" '
+                f'y2="{group_top - gap / 2:.1f}" stroke="var(--grid)" stroke-width="1"/>'
+            )
+        svg.text(164, group_top + group_h / 2, kind, size=11, anchor="end",
+                 fill="var(--ink)", mono=True)
+        for s, seat in enumerate(seats):
+            row = rows[(seat, kind)]
+            y = group_top + (s + 0.5) * row_h
+            colour = f"var(--o{s + 1})"
+            svg.text(186, y, f"{seat}p", size=10, anchor="end", mono=True)
+            delta, ci = row["delta"] * 100, (row["ci"] or 0.0) * 100
+            if ci:
+                svg.add(
+                    f'<line x1="{px(delta - ci):.1f}" y1="{y:.1f}" x2="{px(delta + ci):.1f}" '
+                    f'y2="{y:.1f}" stroke="{colour}" stroke-width="2" stroke-linecap="round"/>'
+                )
+            svg.add(
+                f'<circle cx="{px(delta):.1f}" cy="{y:.1f}" r="4" fill="{colour}" '
+                f'stroke="var(--surface)" stroke-width="1.5"/>'
+            )
+            svg.text(left + plot_w + d_right, y, f"{delta:+.1f}", size=10, anchor="end",
+                     fill="var(--ink)", mono=True, weight=600)
+            svg.text(left + plot_w + ci_right, y, f"±{ci:.1f}", size=10, anchor="end",
+                     mono=True)
+            svg.text(left + plot_w + chg_right, y, f"{row['changed']:.0%}", size=10,
+                     anchor="end", fill="var(--ink2)", mono=True)
+
+    lx = 24
+    for s, (seat, count) in enumerate(zip(seats, counts, strict=True)):
+        entry = f"{seat} seats · {count['games']} deals · {count['alternatives']:,} rollouts"
+        svg.add(
+            f'<rect x="{lx}" y="{height - 21}" width="10" height="10" rx="2" '
+            f'fill="var(--o{s + 1})"/>'
+        )
+        svg.text(lx + 15, height - 16, entry, size=11, fill="var(--ink2)")
+        lx += 25 + text_width(entry, 11)
+    if lx > width:
+        raise ValueError("the legend would overflow the chart")
+    return svg.render(
+        theme_css(
+            {
+                "surface": ("#fcfcfb", "#1a1a19"),
+                "ink": INK, "ink2": INK_2, "muted": MUTED, "grid": GRID, "axis": AXIS,
+                **{
+                    f"o{i + 1}": (ORDINAL_LIGHT[stop], ORDINAL_DARK[stop])
+                    for i, stop in enumerate(SEAT_STOPS)
+                },
+            }
+        ),
+        "Win-rate change of one-turn deviations, by deviation type and seat count",
+    )
+
+
+CHARTS = (
+    ("throughput", "backends", throughput_chart),
+    ("agents", "agents", agents_chart),
+    ("regret", "regret", regret_chart),
+)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data", type=Path, default=Path("docs/data"))
@@ -299,8 +450,8 @@ def main() -> None:
     args = p.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
-    for name, builder in (("throughput", throughput_chart), ("agents", agents_chart)):
-        source = args.data / f"{'backends' if name == 'throughput' else 'agents'}.json"
+    for name, source_name, builder in CHARTS:
+        source = args.data / f"{source_name}.json"
         if not source.exists():
             print(f"skipping {name}: {source} not found")
             continue
