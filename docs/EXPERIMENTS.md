@@ -321,7 +321,9 @@ Three measurements explain it, and the third is the one that generalises:
   opponent is closed on the closer by the same amount. That is not a fact about
   this tie-break but about the game: **any table-shaping rule pays its own cost**,
   which no amount of search or learning removes, and it is why the axis has no sign
-  to find.
+  to find. The oracle section prices the same choice with the future deck visible
+  and closes it at **-0.2% +-0.5%**: shedding the same tiles onto another table
+  changes the winner in 3.6% of 15,801 tries.
 
 ## Rack potential: the asymmetric half, and why a recurring decision closes it
 
@@ -391,7 +393,9 @@ rack too large to drain in one turn.
 
 **The 2p ceiling, as measured.** Per-turn play is tied three ways (`optimal`, its
 macro-space rendering, and the 233k-parameter clone of that rendering, 48.7% at
-n=600). Cross-turn strategy is null three ways (the delegate at every inner
+n=600), and the oracle section prices that tie per decision rather than per match:
+where `frugal` and CP-SAT's optimum pick different turns -- 15.2% of decisions --
+the disagreement is worth **+0.0% +-2.3%** with the whole future in view. Cross-turn strategy is null three ways (the delegate at every inner
 strength, self-play from the clone, best-response against `optimal` with forced
 exploration). Information is null three ways and bounded above by the oracle arm;
 memory stays behaviourally inert in every arena it was given. **Both hand-written
@@ -506,6 +510,104 @@ one seventh the compute, and then training takes it apart. Those are different
 failures with different fixes, and every 300-update row conflates them. The
 instability is also not inevitable -- two seeds never fall -- so it is trainable,
 and the u40-u100 window is where to look.
+
+## Oracle one-step regret: the bound the nulls were missing
+
+Every arm above tested one candidate strategy, and a null reads the same whether
+the axis is empty or merely out of reach. Nothing had measured how much there is
+to find. `tools/oracle_regret.py` measures that ceiling by hindsight instead of by
+learning: for every turn `frugal` played against itself, replay the rest of the
+game from every *other* whole turn the rules admit and count what one different
+choice would have changed.
+
+It is exact rather than sampled, which is what makes it affordable. A step holds
+no randomness -- the deck is permuted once at reset and drawing only advances a
+pointer -- so a state cloned at a turn boundary and continued with deterministic
+agents replays the rest of the game tile for tile. The game that was played is
+therefore the baseline rollout for every decision in it, and there is no variance
+to average away. `solve_turn` grew four optional restrictions to enumerate the
+rivals -- `tiles_min`/`tiles_cap`, `exclude` (no-good cuts on the set-count
+vector) and `freeze_table` -- and each one is played through `to_actions.plan`,
+one primitive action at a time against the mask, so an alternative is a turn the
+env itself accepts and not a perturbation: CP-SAT's own optimum, k-best *other*
+tables shedding the same number of tiles, turns shedding max-1, max-2 and one
+tile, the best turn that takes no existing set apart, and `DRAW`.
+
+300 deals, `frugal` vs `frugal` on `STANDARD` at seed base 91,000: 65.0 turns per
+deal, 42% of turn boundaries a real decision and the rest a forced `DRAW`, 8,185
+decisions, 2.32 tiles shed per playing turn, **39,903 alternatives each rolled out
+to the end** in 35 minutes on ten cores. No stalemate, no truncation and no
+harness failure in any of them.
+
+| headline, per game per seat | |
+|---|---|
+| lost games a single deviation would have **won** | **91.3%** |
+| won games a single deviation would have **lost** | **93.0%** |
+| the same, if every deviation were an independent coin flip | 99.5% / 99.8% |
+
+**The headline is not a bound on strategy, and the second row is why.** A
+deviation is picked by a maximum over ~120 rollouts per seat, and every one of
+them changes what the shared pool hands out from that turn on, so the two seats
+diverge and the result is close to re-decided. Rescuing 91.3% of losses while
+throwing 93.0% of wins is a deviation set with **no direction at all**, and it is
+already below what treating each one as an independent flip would predict. So the
+answer needs the deviation measured *against the turn it replaced* rather than
+maximised over -- alt win rate minus base win rate at the same decisions, with the
+interval clustered by deal because alternatives inside one share its deck:
+
+| alternative type | alternatives | changes the winner | delta vs the played turn |
+|---|---|---|---|
+| `cpsat_max` (a different optimum) | 1,248 | 11.4% | +0.0% +-2.3% |
+| **`same_tiles_other_table`** | **15,801** | **3.6%** | **-0.2% +-0.5%** |
+| `fewer_tiles` (max-1, max-2, one) | 5,886 | 27.5% | -3.1% +-1.5% |
+| `frozen_table` (no rearrangement) | 768 | 27.3% | -5.9% +-3.9% |
+| `draw` (hold everything) | 8,185 | 26.3% | -0.4% +-1.1% |
+| `__base_replay__` (the played turn, re-derived) | 8,015 | **0.0%** | +0.0% +-0.0% |
+
+**The free parameter every board-shaping arm aimed at is worth nothing, and this
+is the tightest interval in this document.** Shedding the same number of tiles
+onto a different table changes the winner in **3.6%** of 15,801 tries and is worth
+**-0.2% +-0.5%** -- with the future deck and the opponent's rack both visible. The
+denial section bounded that axis at ~1.6pp by exhausting a tie-break; the oracle
+closes it at half a point by exhausting the *choice*.
+
+Two rows are the positive control that makes that null readable. `fewer_tiles` and
+`frozen_table` change the winner eight times as often and lose, -3.1% and -5.9%,
+so the harness does detect a worse turn when handed one. And `__base_replay__` is
+the exactness check: 8,015 alternatives that CP-SAT re-derived to the same table
+and the same played tiles, every one of them reproducing the baseline outcome
+exactly.
+
+Three measurements of the structure, and the last is the lead:
+
+- **CP-SAT's optimum is usually not unique, and the choice still does not
+  matter.** A single max-tiles table exists at only **24.3%** of decisions, the
+  median decision has **4**, and 28.4% have six or more (the k-best width is 4, so
+  59.7% of enumerations are provably complete). So the indifference set is large
+  and the null above is not "there was nothing to choose between".
+- **Where `frugal` and `optimal` disagree, the disagreement is free.**
+  `cpsat_max` differs from the turn `frugal` actually played at **15.2%** of
+  decisions; where it does it flips a loss to a win 11.0% of the time and a win to
+  a loss 11.7%, net **+0.0% +-2.3%**. That is the head-to-head tie between `frugal`
+  and `optimal` re-derived per decision instead of per match, and it says the tie
+  is not a small edge hidden by noise -- the two turns are worth the same.
+- **The one cell that moves is the opening.** Pre-meld, an alternative shedding
+  *fewer* tiles than the maximum is worth **+9.3% +-5.7%** (428 alternatives over
+  242 deals), against -1.2% +-2.4% midgame and -8.1% +-2.6% in the endgame; the
+  same-tiles row is +6.1% +-8.6% pre-meld and covers zero. Pre-meld is 7.3% of
+  decisions and one turn per seat per game, so this is a narrow window, and one
+  3.2-sigma cell out of fourteen is not a finding -- but it is the only direction
+  this measurement points in, and the mechanism is available: `by_value` opens on
+  the dearest template and the oracle prefers keeping tiles back, which is the rack
+  potential the section above found nothing to protect *because a decision recurs
+  after every set*. The opening is the one decision that does not recur.
+
+Two things this cannot bound, both by construction. It is perfect hindsight -- the
+enumeration is scored on the real future of a fixed deck against a fixed opponent,
+so no policy can reach it and the numbers are ceilings, not achievable rates. And
+it deviates on **one** turn: a strategy that gives something up now to collect it
+over several turns is outside the construction entirely, which is exactly where
+the cross-turn and adaptation arms already sit.
 
 ## Attention over kinds: the routing is learned, used, and still loses
 

@@ -156,3 +156,56 @@ def test_max_value_objective_prefers_shedding_penalty():
     by_value = solve_turn(C, rack, table, True, objective=Objective.MAX_VALUE)
     assert by_value.feasible
     assert by_value.played[C.joker_kind] == 1, "should get rid of the joker"
+
+
+def test_the_no_good_cut_walks_the_tables_that_shed_the_same_count():
+    """Red 1-2-3-4 in hand sheds three tiles two ways, and only two ways."""
+    rack = rack_of(C, [kind_of(C, 0, n) for n in (1, 2, 3, 4)])
+    table = table_of(C, [])
+    found, exclude = [], []
+    for _ in range(4):
+        sol = solve_turn(C, rack, table, True, tiles_min=3, tiles_cap=3, exclude=exclude)
+        if not sol.feasible:
+            break
+        found.append(sol.sets)
+        exclude.append(sol.set_counts)
+    assert sorted(found) == [
+        ((kind_of(C, 0, 1), kind_of(C, 0, 2), kind_of(C, 0, 3)),),
+        ((kind_of(C, 0, 2), kind_of(C, 0, 3), kind_of(C, 0, 4)),),
+    ]
+
+
+def test_freezing_the_table_forbids_the_steal_but_still_allows_a_lay_off():
+    """Red 3-4-5-6 gives up its 3 to a group of 3s, unless the table is frozen."""
+    table = table_of(C, [[kind_of(C, 0, n) for n in (3, 4, 5, 6)]])
+    steal = rack_of(C, [kind_of(C, 1, 3), kind_of(C, 2, 3)])
+    assert solve_turn(C, steal, table, True).tiles_played == 2
+    assert not solve_turn(C, steal, table, True, freeze_table=True).feasible
+    # The same set may still grow, which is the difference between frozen and
+    # untouched.
+    lay_off = rack_of(C, [kind_of(C, 0, 7)])
+    frozen = solve_turn(C, lay_off, table, True, freeze_table=True)
+    assert frozen.feasible and frozen.sets == (
+        tuple(kind_of(C, 0, n) for n in (3, 4, 5, 6, 7)),
+    )
+
+
+def test_freezing_the_table_pins_a_joker_that_is_already_on_it():
+    """The canonical joker steal: two 7s and a joker give the joker up to complete
+    a run, unless the table is frozen -- and then the group grows instead."""
+    table = table_of(
+        C,
+        [
+            [kind_of(C, 0, 7), kind_of(C, 1, 7), C.joker_kind],
+            [kind_of(C, 0, n) for n in (1, 2, 3)],
+        ],
+    )
+    rack = rack_of(C, [kind_of(C, 2, 7), kind_of(C, 3, 7)])
+    steal = solve_turn(C, rack, table, True)
+    assert steal.tiles_played == 2
+    assert tuple(kind_of(C, c, 7) for c in range(4)) in steal.sets
+
+    frozen = solve_turn(C, rack, table, True, freeze_table=True)
+    assert frozen.tiles_played == 1
+    kept = next(s for s in frozen.sets if C.joker_kind in s)
+    assert kept == (kind_of(C, 0, 7), kind_of(C, 1, 7), kind_of(C, 3, 7), C.joker_kind)

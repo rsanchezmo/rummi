@@ -15,6 +15,7 @@ variables into one integer per kind.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache
 
@@ -61,6 +62,9 @@ class Solution:
     meld_value: int = 0
     """Total value of newly created sets, for the opening-meld check."""
     kept_sets: int = 0
+    set_counts: np.ndarray | None = None
+    """``(n_candidates,)`` how many instances of each candidate the target holds.
+    The identity of a solved *table*, which is what a no-good cut excludes."""
     status: str = "unknown"
 
     @property
@@ -152,12 +156,32 @@ def solve_turn(
     objective: str = Objective.MAX_TILES,
     time_limit: float = DEFAULT_TIME_LIMIT,
     keep_weight: int = 1,
+    tiles_min: int = 1,
+    tiles_cap: int | None = None,
+    exclude: Sequence[np.ndarray] = (),
+    freeze_table: bool = False,
 ) -> Solution:
     """Best legal turn for the acting player, or an infeasible solution.
 
     Before melding, the official rule forbids using table tiles or rearranging,
     so the problem shrinks to "best set of sets built from the rack alone, worth
     at least ``initial_meld``" and the existing table is left untouched.
+
+    The four restrictions below exist so a caller can ask for turns *other* than
+    the best one, which is what pricing the choice between them needs. They are
+    additive constraints: at their defaults the model is the one above.
+
+    ``tiles_min`` and ``tiles_cap`` bracket how many tiles leave the rack, so
+    fixing both to the optimum turns the model into an enumerator over the tables
+    that shed the same number. ``exclude`` forbids target tables already found --
+    a no-good cut per :attr:`Solution.set_counts`, which is what makes that
+    enumeration k-best rather than the same answer repeated. ``freeze_table``
+    forbids rearrangement: every set now on the table must survive into the
+    target, extended but never taken apart. Because joker substitutions are
+    counted per kind rather than per set, a frozen slot's own jokers are pinned by
+    demanding room for them and a substitution of some kind its target adds --
+    which fixes the multiset of sets, not which instance the materialiser hands
+    the joker to, so a caller that cares should check the plan it builds.
     """
     cp_model = _cp_model()
     cand = candidates(cfg)
@@ -225,9 +249,82 @@ def solve_turn(
 
     if opening:
         model.Add(meld_value >= cfg.initial_meld)
-        model.Add(tiles_played >= 1)
+        model.Add(tiles_played >= tiles_min)
     else:
-        model.Add(tiles_played >= 1)
+        model.Add(tiles_played >= tiles_min)
+    if tiles_cap is not None:
+        model.Add(tiles_played <= tiles_cap)
+
+    if freeze_table and not opening:
+        # Each existing set claims one instance of a target set containing it, and
+        # two sets cannot claim the same instance -- so a set may grow by a lay-off
+        # and can never be split, which is exactly "no rearrangement".
+        claims: dict[int, list] = {}
+        joker_claims: dict[int, list] = {}
+        for slot, content in enumerate(_slot_contents(table)):
+            need = np.zeros(cfg.n_kinds, dtype=np.int64)
+            for kind in content:
+                need[kind] += 1
+            held_jokers = int(need[cfg.joker_kind])
+            need[cfg.joker_kind] = 0
+            # A frozen slot's own jokers keep their positions, so its target must
+            # have room for them on top of its real tiles.
+            supersets = np.flatnonzero(
+                (cand.counts >= need[None, :]).all(-1) & (cand.length >= len(content))
+            )
+            if supersets.size == 0:
+                return Solution(feasible=False, status="frozen_unmatched_slot")
+            picks = [model.NewBoolVar(f"frz{slot}_{sup}") for sup in supersets]
+            model.Add(sum(picks) == 1)
+            for sup, pick in zip(supersets, picks, strict=True):
+                claims.setdefault(int(sup), []).append(pick)
+            if not held_jokers:
+                continue
+            # Which kinds those jokers stand for is not determined by the slot --
+            # a joker beside two 7s could be either missing colour -- so the model
+            # chooses, and the choice draws on the same per-kind substitution
+            # budget every other joker does.
+            slack = np.maximum(cand.counts[supersets].astype(np.int64) - need[None, :], 0)
+            stands_for = []
+            for gap in np.flatnonzero(slack.any(0)):  # candidates never demand a joker
+                filled = model.NewIntVar(0, held_jokers, f"frzj{slot}_{gap}")
+                model.Add(
+                    filled
+                    <= sum(
+                        int(slack[row, gap]) * pick
+                        for row, pick in enumerate(picks)
+                        if slack[row, gap]
+                    )
+                )
+                stands_for.append(filled)
+                joker_claims.setdefault(int(gap), []).append(filled)
+            model.Add(sum(stands_for) == held_jokers)
+        for kept_index, group in claims.items():
+            model.Add(sum(group) <= x[kept_index])
+        # `subs` is keyed by the numbered-kind array, so it is already in kind
+        # order; a list of it indexes by the plain ints collected above.
+        per_kind = list(subs.values())
+        for gap_kind, group in joker_claims.items():
+            model.Add(sum(group) <= per_kind[gap_kind])
+
+    total_sets = sum(x) if exclude else 0
+    for cut, previous in enumerate(exclude):
+        # A target table differs from an excluded one iff some candidate it used
+        # appears a different number of times, or some candidate it did not use
+        # appears at all.
+        counts = np.asarray(previous).astype(np.int64)
+        support = [int(used) for used in np.flatnonzero(counts)]
+        literals = []
+        for used in support:
+            below = model.NewBoolVar(f"cut{cut}_lo{used}")
+            model.Add(x[used] <= int(counts[used]) - 1).OnlyEnforceIf(below)
+            above = model.NewBoolVar(f"cut{cut}_hi{used}")
+            model.Add(x[used] >= int(counts[used]) + 1).OnlyEnforceIf(above)
+            literals += [below, above]
+        outside = model.NewBoolVar(f"cut{cut}_outside")
+        model.Add(total_sets - sum(x[used] for used in support) >= 1).OnlyEnforceIf(outside)
+        literals.append(outside)
+        model.AddBoolOr(literals)
 
     # Leaving existing sets alone is worth a tie-break: it shortens the resulting
     # micro-action sequence, which is the only cost the score does not capture.
@@ -302,5 +399,6 @@ def solve_turn(
         ),
         meld_value=int(sum(int(cand.value[c]) * int(x_val[c]) for c in range(n_cand))),
         kept_sets=int(sum(solver.Value(k) for k in kept_terms)) if kept_terms else 0,
+        set_counts=x_val,
         status=status_name,
     )
