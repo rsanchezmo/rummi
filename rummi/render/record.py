@@ -77,13 +77,17 @@ def replay(path: Path, renderer: Renderer, pause: bool = False):
     """
     cfg, seed, actions = load(path)
     state = reset(cfg, 1, seed=seed)
-    renderer.render(state, legal_actions(state))
+    # One mask per state, drawn before the step that leaves it: passing
+    # `legal_actions(state)` as an argument evaluates it before `render` can honour
+    # the throttle, so the most expensive thing in a step was paid twice -- and
+    # with rendering off, paid for nothing.
     for action in actions:
         mask = legal_actions(state)
+        renderer.render(state, mask)
         step(state, np.array([action]), mask)
-        renderer.render(state, legal_actions(state))
         if pause:
             input()
+    renderer.render(state, legal_actions(state))
     renderer.close()
     return state
 
@@ -98,16 +102,15 @@ def play(
 ) -> None:
     from rummi.bench.fuzz import make_policy
 
-    policy = make_policy(cfg, policy_name, seed)
+    policy = make_policy(cfg, policy_name, seed, 1)
     state = reset(cfg, 1, seed=seed)
-    renderer.render(state, legal_actions(state))
     for _ in range(max_steps):
         mask = legal_actions(state)
-        actions = policy(state, mask)
+        renderer.render(state, mask)
+        actions = policy(state, mask, ~state.done)
         if recorder is not None:
             recorder.record(actions)
         step(state, actions, mask)
-        renderer.render(state, legal_actions(state))
         if state.done.all():
             break
     renderer.render(state, legal_actions(state))
@@ -118,7 +121,6 @@ def play(
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--play", action="store_true", help="run a fresh game instead of replaying")
     p.add_argument("--replay", type=Path, help="path to a recorded .jsonl game")
     p.add_argument("--out", type=Path, help="record the played game to this path")
     p.add_argument("--config", choices=sorted(CONFIG_BY_NAME), default="standard")

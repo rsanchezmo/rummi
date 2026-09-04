@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -31,16 +32,23 @@ from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.state import BatchState
-from rummi.render.board import Hit, Zone, hit
+from rummi.render.board import Hit, Regions, Zone, hit
 from rummi.render.pygame_view import Overlay, PygameView
 from rummi.render.view_model import GameView, view
 from rummi.rules.actions import decode, encode_assign, encode_pick, encode_place
 from rummi.rules.config import STANDARD, TINY_GROUPS, RummiConfig
 
+if TYPE_CHECKING:
+    from pygame.event import Event
+
 CONFIGS = {"standard": STANDARD, "tiny_groups": TINY_GROUPS}
 DRAG_SLOP = 6
 """How far the pointer must travel before a press counts as a drag. Below it the
 gesture is a click, and a click that took a tile must not also put it back."""
+POLL_MS = 16
+"""How long the loop may block at a stretch while the opponent moves. A frame at
+60Hz: often enough that closing the window is answered as it is asked, coarse
+enough that waiting still costs nothing."""
 
 
 # --- what a click means ------------------------------------------------------
@@ -209,6 +217,11 @@ class Grip:
     def let_go(self) -> None:
         self.press, self.at, self.took = None, None, False
 
+    def empty(self) -> None:
+        """Let go of the gesture and of the tile with it."""
+        self.held = -1
+        self.let_go()
+
 
 def _far(a: tuple[int, int], b: tuple[int, int] | None) -> bool:
     return b is None or abs(a[0] - b[0]) + abs(a[1] - b[1]) > DRAG_SLOP
@@ -295,6 +308,65 @@ def overlay_for(
 
 
 # --- the loop ----------------------------------------------------------------
+def handle(event: Event, session: Session, grip: Grip, regions: Regions | None) -> bool:
+    """Apply one event. ``False`` means the window has been asked to close.
+
+    ``regions`` is what the pointer can reach in the frame on screen, and there is
+    none while the opponent is playing: a press then has nothing to aim at, so it
+    is dropped rather than banked for the player's next turn, where it would land
+    on a board that had changed underneath it. The keys answer for the window
+    rather than for the board, so they are answered wherever the loop is waiting.
+    """
+    import pygame
+
+    if event.type == pygame.QUIT:
+        return False
+    if event.type == pygame.KEYDOWN:
+        if event.key == pygame.K_ESCAPE:
+            grip.held = -1  # let go; the tile stays where it is
+        elif event.key == pygame.K_BACKSPACE:
+            session.undo()
+            grip.empty()
+        return True
+    if regions is None:
+        return True
+
+    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not session.done:
+        grip.press, grip.at = event.pos, None
+        spot = hit(regions, event.pos)
+        if spot is not None:
+            grip.held, grip.took = take(session, spot, grip.held)
+    elif event.type == pygame.MOUSEMOTION and grip.press is not None:
+        if grip.held >= 0 and _far(event.pos, grip.press):
+            grip.at = event.pos
+    elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+        if not (grip.took and not _far(event.pos, grip.press)):
+            grip.held = drop(session, hit(regions, event.pos), grip.held)
+        grip.let_go()
+    return True
+
+
+def wait_out(delay_ms: int, session: Session, grip: Grip) -> bool:
+    """Pace one of the opponent's micro-actions, with the window still answering.
+
+    Blocking on ``pygame.time.wait`` instead leaves the queue unread for the whole
+    of the opponent's turn -- a couple of seconds at the pace this runs at -- so
+    closing the window goes unnoticed until it ends, and every press made in the
+    meantime is delivered afterwards, onto a board it was never aimed at.
+    """
+    import pygame
+
+    deadline = pygame.time.get_ticks() + delay_ms
+    while True:
+        for event in pygame.event.get():
+            if not handle(event, session, grip, None):
+                return False
+        left = deadline - pygame.time.get_ticks()
+        if left <= 0:
+            return True
+        pygame.time.wait(min(POLL_MS, left))
+
+
 def play(
     cfg: RummiConfig = STANDARD,
     opponent: str = "greedy",
@@ -304,6 +376,11 @@ def play(
 ) -> None:
     """Open a window and play a game. Blocks until the game ends or you close it."""
     import pygame
+
+    # Checked here rather than left to the rack lookup: a negative seat indexes
+    # from the end, which would quietly show the window an opponent's hand.
+    if not 0 <= seat < cfg.n_players:
+        raise ValueError(f"seat {seat} is not a seat in a {cfg.n_players}-player game")
 
     session = Session(cfg, reset(cfg, 1, seed=seed), seat=seat)
     rival = build(opponent, cfg)
@@ -323,31 +400,15 @@ def play(
         if not session.done and int(session.state.current[0]) != seat:
             # One micro-action at a time, so the opponent's turn is legible rather
             # than an instant jump from one board to another.
-            grip = Grip()
+            grip.empty()
             session.rival_moves(act_on_state(rival, session.state, session.mask))
-            pygame.time.wait(opponent_delay_ms)
+            running = wait_out(opponent_delay_ms, session, grip)
             continue
 
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+            if not handle(event, session, grip, regions):
                 running = False
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                grip.held = -1  # let go; the tile stays where it is
-            elif event.type == pygame.KEYDOWN and event.key == pygame.K_BACKSPACE:
-                session.undo()
-                grip = Grip()
-            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1 and not session.done:
-                grip.press, grip.at = event.pos, None
-                spot = hit(regions, event.pos)
-                if spot is not None:
-                    grip.held, grip.took = take(session, spot, grip.held)
-            elif event.type == pygame.MOUSEMOTION and grip.press is not None:
-                if grip.held >= 0 and _far(event.pos, grip.press):
-                    grip.at = event.pos
-            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                if not (grip.took and not _far(event.pos, grip.press)):
-                    grip.held = drop(session, hit(regions, event.pos), grip.held)
-                grip.let_go()
+                break
         clock.tick(30)
 
     window.close()

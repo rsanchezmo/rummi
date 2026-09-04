@@ -307,10 +307,12 @@ class PygameView:
         the telemetry is the point of it -- which is exactly why the play window
         does not use it.
         """
+        # `action_mask=False` leaves no mask to count, which `view` reports as -1.
+        legal = f"legal {view.n_legal}   " if view.n_legal >= 0 else ""
         head = (
             f"turn {view.turn}   seat {view.current_player}/{view.cfg.n_players}   "
             f"pool {view.pool_size}   micro {view.micro}/{view.micro_budget}   "
-            f"legal {view.n_legal}   last {view.last_action or '-'}"
+            f"{legal}last {view.last_action or '-'}"
         )
         seats = "  ".join(
             f"{'>' if i == view.current_player else ' '}p{i}:{n}{'*' if view.melded[i] else ''}"
@@ -529,6 +531,15 @@ class PygameView:
         return np.transpose(pygame.surfarray.array3d(self._surface), (1, 0, 2))
 
     def close(self) -> None:
+        """Give back what this view owns, and nothing else.
+
+        A live window owns the display it opened, so that goes; an offscreen view
+        owns only surfaces, which are the garbage collector's business. Shutting
+        pygame down instead would take the fonts and the display out from under
+        every other view in the process -- a renderer closing its window is not a
+        reason for the next one to find nothing to draw on.
+        """
         import pygame
 
-        pygame.quit()
+        if not self.headless:
+            pygame.display.quit()

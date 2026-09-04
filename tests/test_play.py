@@ -16,6 +16,7 @@ from rummi.env.numpy.deal import reset
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.render.board import (
+    PAD,
     Hit,
     Zone,
     hit,
@@ -30,12 +31,13 @@ from rummi.render.play import (
     drop,
     legal_slots,
     pick_action,
+    play,
     take,
 )
 from rummi.render.pygame_view import Overlay, PygameView
 from rummi.render.view_model import view
 from rummi.rules.actions import encode_assign, encode_place
-from rummi.rules.config import STANDARD as C, TINY_GROUPS
+from rummi.rules.config import CONFIG_BY_NAME, STANDARD as C, TINY_GROUPS
 from rummi.rules.encoding import kind_of
 
 from tests.conftest import rebalance_pool, state_with
@@ -264,6 +266,97 @@ def test_the_worst_table_the_config_allows_still_fits():
         assert y + board.card_h <= board.table.bottom, f"{cfg.max_sets} widest sets overflow"
 
 
+def test_a_mixed_width_table_keeps_every_card_on_the_felt():
+    """Uniform tables are not the worst case for greedy wrapping.
+
+    A slot holding fewer than ``min_set`` tiles is still drawn ``min_set`` wide, so
+    a one-tile card costs a single tile and still eats a whole card's width, while
+    the widest runs the deck allows keep forcing the wrap. Five 13-runs and sixteen
+    singletons -- 21 slots and 81 tiles, a state a game reaches mid-turn -- wrap
+    onto a row that the same tiles laid out uniformly never reach.
+
+    Off the felt the cards are drawn over the workbench and the button column, so a
+    click meant for the set presses a button instead.
+    """
+    runs = [[kind_of(C, colour, n) for n in range(1, 14)] for colour in (0, 0, 1, 1, 2)]
+    singles = [[kind_of(C, 2, n)] for n in range(1, 14)] + [[kind_of(C, 3, n)] for n in (1, 2, 3)]
+    table: list[list[int]] = []
+    for row, run in enumerate(runs[:-1]):
+        table.append(run)
+        table.extend(singles[4 * row : 4 * row + 4])
+    table.append(runs[-1])
+
+    s = state_with(C, rack=[kind_of(C, 3, 13)], table=table, melded=True)
+    snapshot = view(s, 0, legal_actions(s))
+    assert len(snapshot.occupied_slots) == 21
+
+    for interactive in (True, False):
+        m = metrics_for(C, interactive=interactive)
+        r = regions_for(m, snapshot)
+        for card in r.cards:
+            assert m.table.contains(card.rect), f"card {card.slot} is drawn off the table"
+            landed = hit(r, card.rect.center)
+            assert landed is not None and landed.slot == card.slot, "the click went elsewhere"
+
+
+def _slots_of(cfg, sizes: list[int]) -> list[list[int]]:
+    """Real tiles for a table of these slot sizes, taken from the deck's copies.
+
+    What a card is drawn as depends only on how many tiles the slot holds, so the
+    sets need not be legal -- mid-turn they routinely are not.
+    """
+    from rummi.rules.encoding import tables
+
+    deck = [k for k, n in enumerate(tables(cfg).copies) for _ in range(int(n))]
+    out, at = [], 0
+    for size in sizes:
+        out.append(deck[at : at + size])
+        at += size
+    assert at <= len(deck), "the table asks for more tiles than the deck holds"
+    return out
+
+
+def _rows_of(cfg, m, sizes: list[int]) -> int:
+    """How many rows the real layout puts these slots on."""
+    s = state_with(cfg, rack=[], table=_slots_of(cfg, sizes), melded=True)
+    cards = regions_for(m, view(s, 0)).cards
+    assert len(cards) == len(sizes) + 1, "every slot gets a card, plus the landing one"
+    return len({card.rect.y for card in cards})
+
+
+@pytest.mark.parametrize("preset", sorted(CONFIG_BY_NAME))
+def test_the_worst_wrapping_the_config_allows_still_fits(preset: str):
+    """Hunt for the table greedy wrapping likes least, with the real layout as the
+    oracle: start a row with the widest set the deck allows whenever that forces a
+    wrap, and pad with one-tile slots when it does not. Sweeping uniform tables
+    misses this, and the cards it finds have to have a rectangle on the felt.
+    """
+    cfg = CONFIG_BY_NAME[preset]
+    # What one seat can put on the table: the others are still holding their deal.
+    budget = cfg.n_tiles - cfg.rack_size * (cfg.n_players - 1)
+    for interactive in (True, False):
+        m = metrics_for(cfg, interactive=interactive)
+        sizes: list[int] = []
+        rows = 1
+        while len(sizes) < cfg.max_sets - 1:  # one slot left for the landing card
+            wide = [*sizes, cfg.max_set_len]
+            wide_rows = _rows_of(cfg, m, wide) if sum(wide) <= budget else rows
+            if wide_rows > rows:
+                sizes, rows = wide, wide_rows
+            elif sum(sizes) + 1 <= budget:
+                sizes = [*sizes, 1]
+                rows = _rows_of(cfg, m, sizes)
+            else:
+                break
+
+        s = state_with(cfg, rack=[], table=_slots_of(cfg, sizes), melded=True)
+        r = regions_for(m, view(s, 0))
+        for card in r.cards:
+            assert m.table.contains(card.rect), (
+                f"{preset}: {len(sizes)} slots on {rows} rows push card {card.slot} off the felt"
+            )
+
+
 def test_a_big_hand_fills_the_rack_rather_than_overflowing_it(board):
     """A rack has two tiers, and the question they answer is what happens to a
     hand that will not fit on one. A tile drawn past the rack cannot be picked up,
@@ -452,6 +545,45 @@ def test_the_three_buttons_do_not_overlap(board):
     assert action_for(C, Hit(Zone.UNDO), -1, legal_actions(s)[0]) is None
 
 
+def test_a_seat_the_config_does_not_have_is_refused(monkeypatch):
+    """`--seat` reaches a numpy index, where 2 is an IndexError naming neither the
+    flag nor the seat, and -1 quietly wraps to the last seat -- which is the
+    opponent, and the one thing the window must never show."""
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    for seat in (C.n_players, -1):
+        with pytest.raises(ValueError, match="is not a seat"):
+            play(C, seat=seat)
+
+
+@pytest.mark.parametrize("preset", sorted(CONFIG_BY_NAME))
+def test_the_button_and_hint_columns_fit_beside_the_rack(preset: str):
+    """The buttons stack in the margin beside the rack, so the window has to be
+    wide enough for both columns -- and a button drawn past the edge cannot be
+    pressed, which is the same failure as a set with no rectangle.
+
+    Only the horizontal direction was ever unchecked, and it is the one that
+    breaks: on a reduced config the margin is narrower than a button, so the bar
+    ran 45px past the edge and the hint column was painted over the rack.
+    """
+    cfg = CONFIG_BY_NAME[preset]
+    m = metrics_for(cfg, interactive=True)
+    assert m.controls is not None and m.hint is not None
+    assert m.controls.right <= m.width - PAD, f"{preset}: the button bar leaves the window"
+    assert m.hint.left >= PAD, f"{preset}: the hint column leaves the window"
+    assert not m.controls.colliderect(m.rack), f"{preset}: buttons drawn over the rack"
+    assert not m.hint.colliderect(m.rack), f"{preset}: hints drawn over the rack"
+
+    # The rects a click actually resolves against, not just the column holding them.
+    regions = regions_for(m, view(reset(cfg, 1, seed=0), 0, None))
+    window = pygame.Rect(0, 0, m.width, m.height)
+    for name, button in (
+        ("end_turn", regions.end_turn), ("draw", regions.draw), ("undo", regions.undo)
+    ):
+        assert button is not None
+        assert window.contains(button), f"{preset}: {name} is drawn outside the window"
+        assert not button.colliderect(m.rack), f"{preset}: {name} is drawn over the rack"
+
+
 def test_a_window_with_controls_reserves_room_for_them():
     win = PygameView(C, headless=True, interactive=True)
     try:
@@ -481,9 +613,6 @@ def test_the_interactive_loop_survives_a_scripted_hand(monkeypatch):
 
     from rummi.render import play as play_module
 
-    pygame.display.quit()
-    pygame.display.init()
-
     events = {"n": 0}
     real_get = pygame.event.get
 
@@ -504,3 +633,98 @@ def test_the_interactive_loop_survives_a_scripted_hand(monkeypatch):
 
     play_module.play(TINY_GROUPS, opponent="greedy", seed=4, opponent_delay_ms=0)
     assert events["n"] > 9, "the loop should have consumed the scripted events"
+
+
+def test_two_views_can_be_opened_and_closed_in_sequence():
+    """A view owns its surfaces, and a window owns the display it opened. Closing
+    one must give back exactly that: taking the whole library down instead leaves
+    every other view in the process holding an uninitialised display, and drawing
+    on one raises before it can say why."""
+    import pygame
+
+    pygame.display.init()
+    first = PygameView(C, headless=True)
+    second = PygameView(C, headless=True, interactive=True)
+    snapshot = view(reset(C, 1, seed=0), 0, None)
+
+    first.close()
+    assert pygame.display.get_init(), "closing one view must not take the display down"
+    assert second.rgb_array(snapshot).shape == (second.size[1], second.size[0], 3)
+    second.close()
+
+    third = PygameView(C, headless=True)
+    try:
+        assert third.rgb_array(snapshot).shape == (third.size[1], third.size[0], 3)
+    finally:
+        third.close()
+
+
+def _drive(monkeypatch, on_rival, seed: int = 0, seat: int = 1):
+    """Run the real loop with the opponent moving first, posting real events from
+    inside its turn. Returns the actions the *player's* side of the loop applied.
+
+    Nothing is scripted into ``pygame.event.get``: the point is what the queue does
+    while the opponent plays, so the events go through the queue itself.
+    """
+    import pygame
+
+    from rummi.render import play as play_module
+
+    applied: list[int] = []
+    calls: list[int] = []
+    real_act = play_module.act_on_state
+    real_apply = play_module.Session.apply
+    real_snapshot = play_module.Session.snapshot
+
+    def spy_act(agent, state, mask):
+        calls.append(len(calls))
+        on_rival(pygame)
+        return real_act(agent, state, mask)
+
+    def spy_apply(self, action):
+        applied.append(int(action))
+        real_apply(self, action)
+
+    def spy_snapshot(self):
+        # Once the turn is the player's the loop would otherwise sit on the queue
+        # for ever; the game under test is over by then.
+        if int(self.state.current[0]) == seat:
+            pygame.event.post(pygame.event.Event(pygame.QUIT))
+        return real_snapshot(self)
+
+    monkeypatch.setattr(play_module, "act_on_state", spy_act)
+    monkeypatch.setattr(play_module.Session, "apply", spy_apply)
+    monkeypatch.setattr(play_module.Session, "snapshot", spy_snapshot)
+    monkeypatch.setattr(pygame.time, "wait", lambda ms: None)
+
+    play_module.play(TINY_GROUPS, opponent="greedy", seed=seed, seat=seat, opponent_delay_ms=0)
+    return applied, calls
+
+
+def test_closing_the_window_during_the_opponents_turn_is_honoured_at_once(monkeypatch):
+    """The opponent's turn is seven micro-actions on this seed, each paced by a
+    wait. Leaving the queue unread across them means a close request is answered
+    when the turn ends, seconds later, which reads as a hung window."""
+    applied, calls = _drive(monkeypatch, lambda pg: pg.event.post(pg.event.Event(pg.QUIT)))
+    assert len(calls) == 1, "the loop played on after the window was asked to close"
+    assert not applied, "the player never acted"
+
+
+def test_a_click_made_while_the_opponent_plays_is_not_replayed_afterwards(monkeypatch):
+    """A press aimed at the opponent's board must not be banked for the player's
+    next turn, where it lands on a board that has changed underneath it. DRAW is
+    the sharp case: it is never masked, so a stray click on it reverts and passes
+    the turn it is finally delivered on."""
+    import pygame
+
+    m = metrics_for(TINY_GROUPS, interactive=True)
+    r = regions_for(m, view(reset(TINY_GROUPS, 1, seed=0), 0, None))
+    at = centre(r.draw)
+
+    def click(pg):
+        pg.event.post(pg.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 1, "pos": at}))
+        pg.event.post(pg.event.Event(pygame.MOUSEBUTTONUP, {"button": 1, "pos": at}))
+
+    applied, calls = _drive(monkeypatch, click)
+    assert len(calls) > 1, "the opponent should have taken a whole turn"
+    assert TINY_GROUPS.draw_action not in applied, "a click from the opponent's turn was replayed"

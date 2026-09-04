@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from functools import cache
 from typing import TYPE_CHECKING
 
 from rummi.render.view_model import GameView, SlotShape
@@ -51,8 +52,10 @@ RACK_TIERS = 2
 drawn empty rather than the rack changing height as tiles come and go. Two tiers of
 tiles at full width hold more than a player can ever be dealt into."""
 TARGET_ROWS = 5
-"""Rows of set cards to aim for when choosing the window width. How many rows are
-then actually reserved is not a guess -- see :func:`rows_needed`."""
+"""Rows of set cards the table is allowed. The window is widened until the worst
+table the config permits wraps onto no more than this, because height is the
+expensive direction: a row is a whole card tall, while the width is already spent
+on a full rack with a button column beside it."""
 
 
 class Zone(str, Enum):
@@ -141,10 +144,6 @@ class Metrics:
     """The other margin, opposite the buttons."""
 
     @property
-    def tier_h(self) -> int:
-        return self.tile_h + RACK_LIP_H
-
-    @property
     def card_h(self) -> int:
         return 2 * CARD_PAD + self.tile_h + CAPTION_H
 
@@ -153,23 +152,79 @@ def card_width(n_tiles: int, tile_w: int) -> int:
     return 2 * CARD_PAD + max(1, n_tiles) * tile_w
 
 
+@cache
 def rows_needed(cfg: RummiConfig, tile_w: int, usable: int) -> int:
-    """Rows to reserve so that no legal table can overflow the area.
+    """Rows to reserve so that no table the config allows can overflow the area.
 
     Sized from the config rather than from what games do: a card pushed out of the
     table is a set with no rectangle, and a set with no rectangle cannot be clicked.
 
-    The bound sweeps *uniform* tables -- every set the same size -- because uniform
-    widths are the worst case for greedy wrapping. A narrower card mixed in only
-    ever fills slack that the uniform table wastes at the end of a row.
+    *Mixed* widths are the worst case for greedy wrapping. A slot holding fewer
+    than ``min_set`` tiles is still drawn ``min_set`` wide, so a narrow card costs
+    one tile and still eats a whole card's width, while the widest run the deck
+    allows keeps forcing the wrap -- a uniform table of wide sets spends its tiles
+    far faster for the same number of wraps, and a uniform table of narrow ones
+    never forces one. What holds the worst case down is two budgets pulling against
+    each other, ``max_sets`` cards and the deck's tiles to fill them with, so it is
+    searched over every way of spending them rather than swept over one family.
+
+    The search is what makes this a bound and not a sample: for each number of
+    cards, tiles and rows it keeps the fullest a row can be left in, and a fuller
+    row can only wrap sooner. Cards are placed exactly as ``cards_for`` places
+    them, so the two cannot disagree about where one lands.
     """
+    span = usable - 2 * CARD_GAP  # what a row has for its cards and the gaps between
+    # One entry per drawn width, with what that width costs in tiles. The narrowest
+    # card costs a single tile because anything under ``min_set`` draws the same.
+    widths = [(card_width(cfg.min_set, tile_w), 1)] + [
+        (card_width(size, tile_w), size) for size in range(cfg.min_set + 1, cfg.max_set_len + 1)
+    ]
+    # The landing card is drawn only while a slot is free, so ``max_sets`` bounds
+    # the cards whether or not it is one of them; the spare tile pays for the fact
+    # that it carries none.
+    budget = cfg.n_tiles + 1
+    # (cards, tiles, rows) -> the fullest the row in progress can be left.
+    reach: dict[tuple[int, int, int], int] = {(0, 0, 1): 0}
     worst = 1
-    for size in range(1, cfg.max_set_len + 1):
-        width = card_width(max(size, cfg.min_set), tile_w) + CARD_GAP
-        per_row = max(1, (usable - CARD_GAP) // width)
-        cards = min(cfg.max_sets, max(1, cfg.n_tiles // size)) + 1  # + the landing card
-        worst = max(worst, -(-cards // per_row))
+    for _ in range(cfg.max_sets):
+        nxt: dict[tuple[int, int, int], int] = {}
+        for (cards, tiles, rows), filled in reach.items():
+            for width, cost in widths:
+                if tiles + cost > budget:
+                    continue
+                if filled and filled + CARD_GAP + width > span:
+                    key, room = (cards + 1, tiles + cost, rows + 1), width
+                else:
+                    room = filled + CARD_GAP + width if filled else width
+                    key = (cards + 1, tiles + cost, rows)
+                if nxt.get(key, -1) < room:
+                    nxt[key] = room
+                worst = max(worst, key[2])
+        if not nxt:
+            break
+        reach = nxt
     return worst
+
+
+@cache
+def width_for_rows(cfg: RummiConfig, tile_w: int, floor: int, rows: int = TARGET_ROWS) -> int:
+    """The narrowest table at least ``floor`` wide whose worst case fits ``rows``.
+
+    Bisected rather than solved, because ``rows_needed`` is a search and not a
+    formula. The invariant is that the upper end always fits -- a table wide enough
+    for every card the config can draw needs one row -- so what comes back fits
+    too, whatever the shape of the curve in between.
+    """
+    if rows_needed(cfg, tile_w, floor) <= rows:
+        return floor
+    lo, hi = floor, cfg.max_sets * (card_width(cfg.max_set_len, tile_w) + CARD_GAP) + CARD_GAP
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if rows_needed(cfg, tile_w, mid) <= rows:
+            hi = mid
+        else:
+            lo = mid + 1
+    return hi
 
 
 def metrics_for(
@@ -179,24 +234,29 @@ def metrics_for(
     action log, where the read-only view keeps the log and the telemetry with it."""
     import pygame
 
-    widest = card_width(cfg.max_set_len, tile_w)
-    # Worst case the config permits: every slot occupied, every tile in the deck
-    # on the table, plus the landing card. Greedy wrapping can waste up to one
-    # card's width per row, so a row is only guaranteed to carry the rest.
-    tiles = max(cfg.n_tiles, cfg.max_sets * cfg.min_set)
-    content = cfg.max_sets * (2 * CARD_PAD + CARD_GAP) + tiles * tile_w + widest
-    # The button bar sets a floor on width whether or not it is drawn: without it
-    # a reduced config produces a window narrow enough that the table needs every
-    # one of TARGET_ROWS for three sets.
+    # The widest card the config allows, and the gaps a row keeps either side of
+    # it: the first card of a row is placed whether or not it fits, so a table
+    # narrower than this would draw one straight off the right-hand edge.
+    widest = card_width(cfg.max_set_len, tile_w) + 2 * CARD_GAP
+    # A floor on width whether or not the buttons are drawn: without it a reduced
+    # config produces a window narrow enough that the table needs every one of
+    # TARGET_ROWS for three sets.
     floor = 3 * BUTTON_W + 2 * BUTTON_GAP + 2 * PAD
-    usable = max(floor, widest, -(-content // TARGET_ROWS) + widest)
-    rows = rows_needed(cfg, tile_w, usable)
-
-    card_h = 2 * CARD_PAD + tile_h + CAPTION_H
     # Centred and sized to a full rack rather than spanning the window: the rack is
     # the one object on screen that is yours, and a strip pinned to both edges
     # reads as another panel of the interface.
-    tray_w = min(usable, 2 * RACK_PAD + (cfg.rack_size + RACK_SLACK) * tile_w)
+    tray_target = 2 * RACK_PAD + (cfg.rack_size + RACK_SLACK) * tile_w
+    if interactive:
+        # The buttons stack *beside* the rack, one column each side, so the window
+        # needs the tray plus a full button either way. The floor above is three
+        # buttons side by side, which is a wider number on the standard config and
+        # a narrower one on a reduced deck -- where the bar then left the window.
+        floor = max(floor, tray_target + 2 * BUTTON_W)
+    usable = width_for_rows(cfg, tile_w, max(floor, widest))
+    rows = rows_needed(cfg, tile_w, usable)
+
+    card_h = 2 * CARD_PAD + tile_h + CAPTION_H
+    tray_w = min(usable, tray_target)
     tray_x = PAD + (usable - tray_w) // 2
     table = pygame.Rect(PAD, STATUS_H, usable, rows * (card_h + CARD_GAP) + CARD_GAP)
     # Half the rack: the workbench holds what you have picked up, which is one or
