@@ -354,6 +354,7 @@ the distance below it. Not closed, and named rather than waved at:
 | the opening, played as a policy | best arm +0.91 ±1.04, control −0.45 ±0.50 pooled | [The opening](docs/EXPERIMENTS.md#the-opening-was-the-one-cell-that-moved-and-it-does-not-survive-being-played) | `python tools/opening_ab.py --arena head2head --deals 1600 --seed-base 93000` |
 | table shaping, as a tie-break | +1.06 ±1.57pp against a coin flip over the same ties | [Board shaping](docs/EXPERIMENTS.md#board-shaping-the-axis-the-oracle-never-bounded-and-why-it-has-no-sign) | `python tools/denial_ab.py --arena both --deals 1600 --games 400` |
 | rack potential, as a weighted objective | no arm beats its own permuted control; best +1.09 ±1.75 | [Rack potential](docs/EXPERIMENTS.md#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | `python tools/rack_potential_ab.py --arena both --deals 1600 --games 800 --w 1.0` |
+| a learned agent with no solver at inference | +45.05 on the suite, 2.66 under `frugal`; 15.0% head-to-head against `optimal`, the chooser even at 49.0% and the constructor's declines the whole loss | [No solver at inference](docs/EXPERIMENTS.md#no-solver-at-inference-composing-the-two-learned-halves) | `python tools/eval_solver_free.py --games 240` |
 | every learning attempt, and what killed it | the strongest learned agent is a clone of a heuristic, +47.32 | [Training attempts](docs/EXPERIMENTS.md#training-attempts) | one seed each; see the file |
 
 Summaries are committed as `docs/data/regret.json`, `docs/data/opening.json` and
@@ -427,7 +428,7 @@ available every turn, with nothing above that worth a point at any seat count
 itself on the rungs below it, and the interesting distance is `greedy` to
 `rearrange` to the solver tier.
 
-`learned` is one net per seat count, trained by the same recipe and nothing else
+`learned` is one net per seat count, cloned by the same recipe and nothing else
 — the observation widens with the table, so a 2p net cannot be pointed at a 3p
 suite and is refused rather than reshaped. That all three land on their teacher
 is the point of the column: the recipe transfers, the weights do not.
@@ -485,6 +486,50 @@ three configs. `DRAW` is never masked, so the MDP cannot deadlock and no mask ro
 is ever all-zero.
 
 Full rules-to-arrays contract: [`SPEC.md`](SPEC.md).
+
+### One action space, and the vocabularies above it
+
+Those 2400 primitives are the env's **only** action space. Everything else in this
+repo is agent-side vocabulary: a name for a whole move, expanded back into
+primitives by `rummi/solver/to_actions.plan` or `MacroAgent.expand` before the env
+sees anything. **Nothing above the primitives changes the MDP, the protocol or a
+published score**, which is also why none of them is a Gymnasium id — an id is for
+something that changes the space the env *exposes*.
+
+| space | size | one action | lives in | used by | why it exists |
+|---|---:|---|---|---|---|
+| primitives | 2400 | one table operation, above | `rummi/rules/actions.py` | everything, eventually | the only space the env accepts |
+| macro | 713, 714 with `REPARTITION` | lay a template set, lay off a tile, steal one, end, draw | `rummi/agents/macro.py` | `frugal`, `learned`, `tools/train_macro.py`, the afterstate learner | every action leaves the table whole — [five capabilities, ~260 points](docs/EXPERIMENTS.md#capability-not-policy) |
+| hybrid | 3111 | either of those, in one head | `rummi/agents/hybrid.py` | `tools/train_macro.py --space hybrid` | expressive and unlearnable: [a macro is on offer in 1.6% of a trained policy's decisions](docs/EXPERIMENTS.md#the-hybrid-space-the-consumption-fix-is-built-and-it-is-not-enough) |
+| repartition construction | 330 — 329 templates and `STOP` | one set of the table being rebuilt | `rummi/agents/learned/repartition_net.py` | `tools/train_repartition.py`, inside a macro `REPARTITION` | [99% of CP-SAT's repartition points at beam 16](docs/EXPERIMENTS.md#training-attempts) on `standard-greedy`, no solver in the loop |
+| two-phase construction | 36 breaks, then those 330 | dissolve a slot; cover what the breaks freed | `rummi/agents/learned/two_phase_net.py` | `tools/train_two_phase.py`, `tools/finetune_two_phase.py` | [89% of the solver's points at 1.7ms against its 20.7ms](docs/EXPERIMENTS.md#training-attempts), on `standard-greedy` |
+| delegate | 2 | take a planner's whole turn, or hold and draw | `rummi/agents/delegating.py` | `tools/train_delegate.py` | tests whether cross-turn strategy exists; [converged to always-play](docs/EXPERIMENTS.md#training-attempts) |
+
+The ladder reads across it. `greedy`, `rearrange` and `optimal` plan a whole turn
+and hand it to the expander, so they only ever speak primitives. `frugal` and
+`learned` decide in the macro space — the same 714 actions, one by a hand-written
+ranking over them and one by a cloned network. No fixed template list can express a
+multi-set repartition ([why](docs/EXPERIMENTS.md#why-optimal-is-out-of-reach-in-the-macro-space)),
+so `REPARTITION` is the one macro backed by a CP-SAT solve, and the construction
+spaces are what would replace that solve with a network, inside the same macro.
+
+Both construction spaces have been taken to their ends. Composed under a value
+chooser learned from outcomes, the two-phase picker -- cloned from CP-SAT's solutions
+and fine-tuned by policy gradient -- gives an agent with **no solver at inference**: +45.05 on `standard-greedy`, 2.66 under `frugal` at 40% of its cost
+per decision -- and **15.0% head-to-head against `optimal`**, where the chooser alone
+is even at 49.0% and the picker alone falls to 23.5%. A declined stuck turn costs
+nothing against `greedy` and is a turn a peer converts, so the greedy suite cannot
+rank constructors and the duel can
+([the composition](docs/EXPERIMENTS.md#no-solver-at-inference-composing-the-two-learned-halves)). Run over the
+primitives themselves, changing nothing but the vocabulary, the same recipe --
+cloned from `frugal`'s turns, then the same fine-tune -- finds the same turn and
+finds it a third as often, which is the primitive space's best score and still 21
+points under `greedy`
+([the cell](docs/EXPERIMENTS.md#the-picker-recipe-over-primitive-actions-the-same-turns-found-a-third-as-often)).
+Its two cheap fixes, a labelled decline and a lay-off rendered in three actions
+instead of seven, cure the wandering outright and move the score the wrong way,
+because imitating the teacher's decline imitates a decision that only pays for the
+rest of the player ([the levers](docs/EXPERIMENTS.md#the-two-levers-pulled-the-wandering-stops-and-the-playing-stops-with-it)).
 
 ## Backends
 

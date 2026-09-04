@@ -140,6 +140,13 @@ because the observation widens with the table (570 / 572 / 574).
 | RL fine-tune of the one-phase picker, self-critical PG best-of-4 (`tools/finetune_repartition.py`), greedy decode | **+44.05** | 99.2% | **Stage two of the AlphaStar recipe, and it moves the cheap arm.** Holdout playable 27.8% -> **35.9%** at greedy and 46.5% -> **55.4%** at beam 4 -- 43% of the greedy-to-beam-4 gap, at the greedy decode's own cost. On the suite the move is real but unresolvable (paired +1.75, 95% CI [-0.66, +4.22] at n=240): the offline metric resolves what 240 deals cannot. |
 | **two-phase + RL fine-tune, composed** (`tools/finetune_two_phase.py`), greedy decode | **+45.63** | 99.8% | **89.4% of the solver's points at 1.7ms against its 20.7ms.** Holdout playable 39.7% greedy / 59.6% beam 4 -- the strongest greedy decode in the repo, from parents at 35.5% and 35.9%. The two fixes **partially overlap**: the fine-tune is worth +8.1pp alone and +4.2pp here, so 52% survives; adding would have predicted 43.6%. |
 | two-phase: break slots, then cover the freed tiles (`tools/train_two_phase.py`), beam 16 / beam 4 / greedy | **+48.31** / +45.86 / +43.88 | 99.4% / 99.8% / 99.2% | **103% / 91% / 81% of the gap, and every arm is faster than the one-phase arm it replaces.** 8.88 decisions (3.89 of ~12 slots, 4.99 of ~330 templates) against ~13.6 of ~330: whole-sequence exact match goes 2.0% -> 38.2% and holdout playable 27.8 / 46.5 / 66.4% -> 35.5 / 56.2 / 72.4%. The >=90% claim moves from beam 16 to **beam 4** -- 5.2ms against 24.6ms, a 4.7x cost cut for the same result -- and beam 16 at 12.4ms *exceeds* CP-SAT's 17.4ms and its score. |
+| **primitive vocabulary, the picker recipe end to end** (`tools/train_primitive_turn.py`), arm B beam 4 / greedy | **-28.28** / -196.96 | 38.1% / 1.9% | **The best the primitive action space has ever scored, and still under `greedy`.** A `PlanningAgent` decoding every turn boundary out of `PLACE`/`PICK`/`DISSOLVE`/`ASSIGN`/`END_TURN`, cloned from `frugal`'s own 60,005 turns and decoded against the env's mask on a simulated copy of the position: zero illegal actions in 960 games and 2.19 tiles where it commits, exactly the teacher's 2.19 -- but it commits only 34.8% of its turns against the teacher's 42.7%. The previous best here was -230, so the sequence recipe is worth ~200 points and leaves the space 28 under `greedy`. |
+| primitive vocabulary as the stuck-state repartition (arm A), beam 4 / greedy | **+36.13** / +31.03 | 92.9% / 87.7% | **The one-variable cell: 41.2% / 15.3% of the solver's contribution against the template picker's 87.6% / 72.6%**, same teacher, same warm start, same beam, same trunk width, same ruler in the same n=240 run (`by_value` +28.01, `by_value+repartition` +47.71, picker +42.31 / +45.26). Offline on 1,500 held-out stuck states, 8.9% / 23.9% / 37.9% playable at greedy / beam 4 / beam 16 against the picker's 29.5% / 50.4% / 70.6% -- and 1.62 tiles where it plays against CP-SAT's 1.59. The vocabulary costs a factor of 2-3, not the quality of the turn. |
+| + self-critical PG, best-of-4, KL-anchored (`tools/finetune_primitive_turn.py`), arm B beam 4 / greedy; arm A beam 4 / greedy | **-20.57** / -151.16; **+38.15** / +32.39 | 41.2% / 3.8%; 93.5% / 88.8% | **A fifth of the effect on the offline metric and the largest move on the suite.** Held-out committed 26.9% -> 28.6% at greedy and 54.9% -> 54.6% at beam 4, against +8.1pp / +8.9pp for the same stage two over templates, and what moves is the long repartition buckets. On the suite it is worth +45.8 to arm B at greedy, +7.7 at beam 4, and takes arm A's share of the solver's contribution from 41.2% to **51.5%**. Kept at update 100 of 300 and falling after -- the same early peak the macro trainer has. |
+| + `DRAW` given a label (cell 2a, `tools/collect_turns.py`), arm B beam 4 / greedy; arm A beam 4 / greedy | **-74.29** / -274.45; **+37.13** / +29.43 | 17.3% / 0.2%; 93.1% / 85.0% | **The abandonment is cured and the playing goes with it.** 72,667 clean declines labelled beside the same 60,005 played turns; the greedy decode's failures go from **0.0% deliberate `DRAW` and 100.0% budget-out at depth 155** to **61.6% / 38.4% at depth 59.6**, and it declines 100.0% of the held-out declines -- but held-out committed falls 26.9% -> **13.4%** at greedy and 54.9% -> 49.3% at beam 4. The mechanism is the calibrated prior: 55% of boundary labels are `DRAW` while the 45% that plays is spread over fifty-three `PLACE`s, so the argmax at a *played* boundary is `DRAW` **53.1%** of the time against the unlabelled arm's 0.0%. No reweighting -- the label is 54.8% of turns but 7.3% of steps, so the loss was never dominated by it. |
+| + the lay-off rendered in three actions, not seven (cell 2b, both levers, `rummi/solver/to_actions.plan`), arm B beam 4 / greedy; arm A beam 4 / greedy | **-146.11** / -322.63; **+33.39** / +28.20 | 7.9% / 0.0%; 89.4% / 84.0% | **Every published score identical, a third of every sequence gone, and the offline metric back above where it started.** Matching standing slots to target sets by overlap -- superset by `ASSIGN`, subset by `PICK` -- takes `frugal`'s expansions from 6.78 primitives to **4.59** with the `PLACE` and `END_TURN` counts unchanged, an ordinary turn 12.92 -> **8.64** and a repartition 27.44 -> **16.45**; all three `docs/data/agents*.json`, `experiments.json` and the n=240 ruler re-capture **identical on every field**. Held-out committed 13.4% -> **24.6%** at greedy and 49.3% -> **55.6%** at beam 4, which is *above* the unlabelled cell's 54.9% while still playing nothing on 98.6% of the positions the teacher declined. |
+| + stage two on 2b, same self-critical PG (`tools/finetune_primitive_turn.py`), arm B beam 4 / greedy; arm A beam 4 / greedy | **-118.42** / -279.25; **+32.20** / +29.81 | 13.1% / 0.2%; 88.1% / 86.2% | **Seven times the offline move, bought by giving the decline back.** Held-out committed 28.1% -> **40.4%** against +1.7pp for the same stage two over the original rendering -- and the one-step measurement says what changed: the argmax at a *declined* boundary goes from `DRAW` 84.5% to **15.7%**. The reward is tiles alone with no term for declining and `--kl-coef 0.1` does not hold it, so stage two trades lever 1 away for commitment. |
+| **solver-free composition: afterstate chooser over the two-phase picker** (`tools/eval_solver_free.py`), beam 4, 3 SWA seeds | **+45.05** / +45.00 / +38.62 | 99.4% / 99.0% / 98.5% | **Both halves learned, no solver at inference -- and the chooser is the free half.** Given a real solve the same value net scores **+47.31 / +47.39** against `frugal`'s +47.71 and the clone rung's +47.23, inside one standard error, so the whole of the +19 the `REPARTITION` macro is worth was already available to a policy trained with no imitation past a five-update warmup. What the composition gives up is the constructor's: 2.66 points from `frugal` at 2.52 ms per decision against its 6.33. Then the caveat that matters, and its attribution: head-to-head against `optimal` it wins **15.0%** (n=200) where `frugal` wins 53.0% on the same deals -- but the chooser swapped alone is **even** (49.0%) and the constructor swapped alone is 23.5%, so the duel loss is the picker's, and the suite's *best* picker arm (beam 1, +45.63) is its worst duellist (14.5%). A 99.4% win rate against `greedy` hides that because a declined stuck turn costs almost nothing there and is a turn a peer converts. |
 
 **Afterstate value learning works, and its ceiling is the outcome's noise floor.**
 Every macro's afterstate is deterministic and computable without stepping the env
@@ -293,6 +300,467 @@ paid for validity and validity rose anyway, as a by-product of shedding more.
 Imitation accuracy meanwhile *falls* (break 71.3% -> 70.4%, cover 82.7% -> 81.9%),
 which is the same signature the one-phase augmentation left -- fitting the
 teacher's next set and constructing a good repartition are not the same skill.
+
+## The picker recipe over primitive actions: the same turns, found a third as often
+
+Every conclusion in this file about the primitive action space -- PPO never melds,
+a cloned policy "fiddles and gives up" at a median of 7 micro-actions, `DRAW`
+reverts what it half-built -- was reached with **per-step imitation and PPO**, and
+all of it predates `tools/train_repartition.py`. What that established is that the
+right objective for *construction* is an outcome-scored **sequence**: legal by mask
+at every step, decoded as a beam, finished candidates ranked on tiles played, and
+per-step accuracy explicitly not the deliverable. It had only ever been run over
+the ~331 set templates. This is the same recipe over the env's own vocabulary,
+**changing one variable** -- the same teacher (`frugal`), the same imitation warm
+start, the same self-critical fine-tune with best-of-4 and a KL anchor, and the
+ruler (`by_value`, `by_value+repartition`, the template picker at matched beams)
+re-measured in the same run. The decoder emits `PLACE`/`PICK`/`DISSOLVE`/`ASSIGN`/
+`END_TURN` instead of templates.
+
+Two pieces of machinery make it a fair fight rather than a new set of rules.
+`rummi/agents/learned/turn_sim.py` rebuilds a position as a `BatchState` **from the
+observation alone**, so the beam's legality oracle is `legal_actions` itself and
+the network reads what the env would actually hand it; the unknowable split of
+`unseen` into pool and opponents' racks is invented so that `rack_sizes` and
+`pool_size` come out right, which is all the mask and the encoder read of it. Over
+**924,178** recorded teacher steps the simulator refused zero, and
+`tests/test_turn_sim.py` holds it to real games field by field. The scorer is
+`TorchPolicy` -- the same 2400-way net `tools/train_ppo.py` trains -- so the network
+is not a second variable either.
+
+**The data.** 60,005 committed turns over 4,020 games and 31,039 gate states CP-SAT
+answered, four seeds of `frugal` against `greedy` (`tools/collect_turns.py`).
+**57.3%** of the teacher's turns are draws and carry no sequence at all; the gate
+answers **20.8%** of its firings, reproducing the 20.9% already on record. The
+lengths are the axis under test: an ordinary turn is a mean of 12.9 primitives, a
+turn with a `REPARTITION` in it 27.4, and the shortest turn the teacher ever
+commits is **seven**.
+
+**Stage one arrives on quality and not on frequency.** Held-out step accuracy 76.5%
+against 90.5% on train, whole-turn exact match 8.8% -- neither is the deliverable.
+Decoding from the boundary with no teacher commits a turn in **26.9% at greedy and
+54.9% at beam 4** of the turns the teacher played, and where it commits it sheds
+**2.22 tiles against the teacher's 2.19**; on stuck states 1.62 against CP-SAT's
+1.59. That is the picker's own signature exactly: the turn it finds is as good as
+the teacher's, it just finds one far less often.
+
+**The one-variable cell.** Asked the question the picker is asked -- the gate has
+fired, `by_value` has nothing, what do you play -- on 1,500 held-out gate states:
+
+| decoder | plays, greedy | beam 4 | beam 16 | tiles where it plays | decodes/s, greedy |
+|---|---|---|---|---|---|
+| **primitive actions** | **8.9%** | **23.9%** | **37.9%** | 1.62 | 368 |
+| templates, one-phase | 29.5% | 50.4% | 70.6% | 1.69 | 304 |
+| templates, two-phase | 47.2% | 67.1% | 81.4% | 1.59 | 428 |
+| CP-SAT | 100% | 100% | 100% | 1.59 | -- |
+
+**The vocabulary costs 3.3x at greedy, 2.1x at beam 4 and 1.9x at beam 16**, on the
+same states, from the same teacher, at matched capacity and matched beam -- and the
+ratio narrows with the beam, which is search paying for what the vocabulary costs.
+On `standard-greedy` at n=240, dropped into `by_value+repartition` in place of the
+solve, it recovers **15.3% of the solver's 19.70-point contribution at greedy and
+41.2% at beam 4** (+31.03 and +36.13 against `by_value`'s +28.01), where the
+one-phase picker recovers 72.6% and 87.6% (+42.31 and +45.26) in the same run. In
+that run it answers **4.9% of the gate's firings at greedy and 9.2% at beam 4**,
+against the picker's 12.8% and 16.5% and CP-SAT's 20.8%: what a wider beam buys is
+how often there is an answer, not what the answer is worth.
+
+**The length breakdown, and why the obvious diagnosis is only half of it.**
+Bucketed by the teacher's own plan length, over the 9,029 held-out turns:
+
+| the teacher's turn | n | committed, greedy | committed, beam 4 |
+|---|---|---|---|
+| ordinary, 7-10 primitives | 3,811 | 32.5% | 66.5% |
+| ordinary, 11-20 | 2,724 | 21.7% | 42.1% |
+| ordinary, 21-35 | 810 | 9.3% | 19.5% |
+| ordinary, 36+ | 139 | 5.8% | 12.2% |
+| with a repartition, 11-20 | 424 | 36.6% | 77.4% |
+| with a repartition, 21-35 | 836 | 34.7% | 71.8% |
+| with a repartition, 36+ | 285 | 23.5% | 62.8% |
+
+Within a class, length is the whole story -- 32.5% -> 5.8% at greedy and
+66.5% -> 12.2% at beam 4, monotone across a factor of five in length. **Across
+classes it inverts, and that kills the specific prediction.** At matched length the
+repartition turns are far *easier*: 34.7% against 9.3% in the 21-35 bucket, 62.8%
+against 12.2% at beam 4 in the 36+ one. So "heuristic level on ordinary turns, short
+of it on repartitions" is exactly backwards, and the reason is what a long turn is
+made of on each side. A long ordinary turn is a pre-meld opening or a multi-set turn
+where every tile has to leave the rack and land right, and there is essentially one
+target; a long repartition happens post-meld on a full table where a great many
+committable turns exist and the decode only has to reach one of them. **Length bites
+where the target is narrow, not where the sequence is long.**
+
+**The failure is abandonment, and it is structural.** Of the held-out turns the
+greedy decode does not commit, **0.0% end in `DRAW` and 72.5% run the turn's micro
+budget out** -- a mean decode length of **115.3 primitives against the teacher's
+15.3**. Counted the stricter way the follow-up below uses, where the forced `DRAW` of
+a spent budget is a wander and not a decline, it is 100% at 155.0: every failure runs
+the clock out. That is "fiddle and give up" again at fifteen times the length, and the
+sequence recipe does not touch it, because in template space the ability to decline
+is not learned: `STOP` is masked until the table is covered, so a decode covers or
+returns nothing. Here nothing masks a turn that is going nowhere -- `PLACE` is legal
+whenever a tile is in the rack -- so the mask cannot express the one thing that made
+the template arm safe. The *agent* is safe either way, because a decode that never
+reaches `END_TURN` returns no plan and the turn is a clean `DRAW` rather than a
+half-built table, which `tests/test_primitive_turn.py` holds it to. What it is not
+is cheap: the wandering is why beam 4 costs 12.5 ms a turn against greedy's 2.2.
+
+Two smaller findings, both cheap levers that were deliberately not pulled because
+either would have moved a second variable. **The teacher's own rendering inflates
+the commonest move**: `to_actions.plan` keeps a set only where the target reproduces
+it exactly, so a lay-off dissolves the receiving slot and rebuilds it -- laying one
+tile onto a three-run is `DISSOLVE`, `PLACE`, four `ASSIGN`s and `END_TURN`, seven
+primitives where the mask allows three (`PLACE`, `ASSIGN` onto the occupied slot,
+`END_TURN`). 84.2% of `greedy`'s `ASSIGN`s land on an occupied slot, so a good part
+of every length in this section is the rendering rather than the move, and the
+student is being taught the long way round. **And `DRAW` has no label**: the dataset
+is the turns the teacher *played*, so the 57.3% it drew are absent and the student is
+never shown a position whose answer is "do not" -- which is exactly the decision the
+mask cannot make for it.
+
+**Stage two barely moves the offline metric and moves the suite a great deal.** The
+same self-critical policy gradient -- sample four whole turns, keep the best-shedding,
+push against the greedy decode, KL-anchor to the clone, reward in tiles with no
+validity bonus -- lifts held-out committed from **26.9% to 28.6%** at greedy and
+leaves beam 4 at 54.6% against 54.9%. On the template picker the same stage two was
+worth +8.1pp and +8.9pp; here it is +1.7pp and nothing, and what it does move is
+concentrated in the long repartition buckets (21-35: 34.7% -> 40.7%, 36+:
+23.5% -> 34.0% at greedy). It peaks at update 100 of 300 and falls after, the same
+early peak the macro trainer has. On the suite it is worth far more than that:
+**+45.8** points to the whole-turn agent at greedy and +7.7 at beam 4, and it takes
+the drop-in repartition from +31.03 to **+32.39** at greedy and +36.13 to **+38.15**
+at beam 4 -- 41.2% of the solver's contribution to **51.5%**, the largest single move
+in this section. That is despite the fine-tune not transferring on the offline
+metric for that arm's own population, which it was not trained on: held-out stuck
+states go
+8.9% -> 7.9% at greedy and 23.9% -> 24.7% at beam 4. Both readings are one seed.
+
+**Arm B is the honest arm, and it is the best the primitive space has ever scored.**
+A `PlanningAgent` that decodes every turn boundary with no macro vocabulary, no
+templates and no solver anywhere scores **-28.28 / 38.1% at beam 4** and
+-196.96 / 1.9% at greedy, and after the fine-tune **-20.57 / 41.2%** and
+-151.16 / 3.8%. The previous best in this file for the primitive action space is
+**-230**; `greedy` is +0.00 / 50.0% and `by_value` +28.01 / 82.1%. The best arm
+commits **36.5%** of its turn boundaries against the teacher's 42.7% and sheds 2.08
+tiles where it commits against the teacher's 2.19, and across all four arm-B runs
+(1,920 games) it attempted **zero** illegal actions -- the legality property holds
+exactly, and what the arm costs is the turns it declines rather than the turns it
+gets wrong. So the sequence recipe is worth about **210 points** in the primitive
+space, and leaves it 21 under `greedy` and 49 under `by_value`: the same verdict as
+the notebook's, by a much smaller margin and for a different reason.
+
+Every arm here is decoded **deterministically** -- argmax at beam 1, best-of-beam
+ranked on tiles above it -- so the argmax-versus-sampled caveat elsewhere in this
+file does not apply to any of these numbers. Each row is one seed of one recipe.
+
+### The two levers, pulled: the wandering stops, and the playing stops with it
+
+The section above named two cheap fixes and left them alone, because either would
+have moved a second variable. Both are built now, and measured as two further cells
+against the same ruler: **2a** labels the teacher's declines, **2b** does that *and*
+stops the teacher rendering a lay-off as seven actions. Everything else -- teacher,
+seeds, targets, net, trunk, epochs, selection rule, stage two -- is where it was.
+
+**Lever 1: `DRAW` gets a label.** `tools/collect_turns.py` records the boundaries
+`frugal` drew from as the one-step sequence `DRAW`: **72,667** of them beside the
+60,005 turns it played, and the played half comes out identical to the digit --
+60,005 turns, 31,039 answered gate states, 12.92 and 27.44 mean primitives -- so the
+declines are the only thing that changed. Only a *clean* decline is labelled: **9.6%**
+of the teacher's draws revert a turn it had already begun lifting tiles for, and
+calling that boundary "do not" teaches the opposite of what happened, so those are
+counted and dropped.
+
+**The class balance is left exactly as it falls, and that is the finding rather than
+an oversight.** A decline is one label and a played turn 15.4, so the declines are
+**54.8% of turns but 7.3% of steps**, and the loss -- summed over steps -- puts
+nowhere near a majority of its mass on them. What cross-entropy learns at a boundary
+is then the honest 55/45, and *that* is the problem: the argmax of a correctly
+calibrated distribution is `DRAW`, because the 45% that plays is spread over
+fifty-three `PLACE`s while the 55% that does not is one action. Measured one step at
+a time over the played held-out boundaries, the argmax is `DRAW` in **53.1%** of them
+where the original arm's was **0.0%**. Reweighting would be a thumb on the scale
+rather than a fix; the principled correction is the one the recipe already has -- a
+beam, which spends one hypothesis on the decline and follows the others.
+
+**Lever 2: a lay-off is three actions, not seven.** `rummi/solver/to_actions.plan`
+matches the standing slots to the target sets by overlap rather than by equality: a
+target that is a *superset* of a slot is reached by `ASSIGN`ing the difference onto
+it, a *subset* by `PICK`ing the surplus off, and only a target that is neither -- or
+a subset so much shorter that picking costs more than rebuilding it -- dissolves. The
+allocation is one function, `to_actions.allocate_slots`, because
+`learned/afterstate.py` mirrors where a set lands and a second copy of that decision
+is a silent, shape-clean drift in every `slot_features` column; it reads the
+allocation now instead of restating it.
+
+**What it does to the teacher, and what it does not.** Over 20 games of `frugal` with
+every expansion replayed against `legal_actions` as it is queued, the same 3,046
+expansions come out **32.4% shorter** -- 20,665 primitives to 13,974, a mean of 6.78
+to 4.59 -- with the `PLACE` count and the `END_TURN` count identical to the tile: the
+same turns, said in fewer words. `DISSOLVE` falls 73% and `ASSIGN` 47%, and 1,416
+`PICK`s appear where this agent had never emitted one. On the teacher's own collection
+an ordinary turn goes **12.92 primitives to 8.64** and one with a repartition **27.44
+to 16.45**, the median 13 to 7, and the shortest turn `frugal` ever commits **7 to 3**.
+
+**Nothing it scores moves.** Over 832 solver targets on all three configs both
+renderings reach the same committed table position for position, every emitted step
+is legal under the real mask, and the plan is 22.8% shorter. Re-captured to a scratch
+path, `docs/data/agents.json`, `agents-standard-3p.json` and `agents-standard-4p.json`
+are **identical on every rung and every field**, and so is `docs/data/experiments.json`.
+The n=240 ruler is identical too: `by_value` +28.01, `by_value+repartition` +47.71,
+the template picker +42.31 and +45.26, to the second decimal. That is the point --
+the target sets never changed, only the sentence that reaches them -- and it is why
+the two cells below compare what the *student* is taught rather than what the teacher
+plays.
+
+**Cell 2a: the abandonment is cured, and the cure is what stops the playing.** Stage
+one fits better and arrives less often. Held-out step accuracy 75.5% against 76.5%
+and whole-turn exact match **50.6%** against 8.8% -- a decline is a turn of one action
+and it gets it right -- while the decode commits **13.4%** of held-out played turns at
+greedy against 26.9%, and **49.3%** at beam 4 against 54.9%. It plays nothing on
+**100.0%** of the 10,966 positions the teacher declined at greedy and 98.4% at beam
+4 -- and the abandonment table below is what says those are *decisions* rather than
+failures to find anything, which is the distinction the original arm could not make.
+
+The failure diagnostic is the deliverable, and it inverts. Of the played held-out
+turns the greedy decode does not commit, **61.6% now end in a deliberate `DRAW`** with
+the micro budget still open and 38.4% run it out, at a mean decode length of **59.6**
+primitives against the teacher's 15.6. The same measurement on the cell above reads
+**0.0% and 100.0% at 155.0** -- the full budget, every time. (Read that way rather
+than the section above's 72.5% / 115.3: a spent budget masks everything but `DRAW`, so
+*every* failure emits it in the end, and only depth separates a decision to decline
+from a wander that ran out of room. Both numbers here are on the same checkpoint and
+holdout, under that accounting.) At beam 4 the diagnostic does not move at all --
+0.0% / 100.0% / 155.0 -- because one hypothesis declining does not stop the other
+three, which is exactly what a beam is for.
+
+On the one-variable stuck-state population -- 1,500 held-out gate states, the gate has
+fired, `by_value` has nothing -- the label costs a little at the cheap decodes and
+nothing at the wide one:
+
+| decoder | plays, greedy | beam 2 | beam 4 | beam 16 | tiles where it plays |
+|---|---|---|---|---|---|
+| primitive, `DRAW` labelled (2a) | **6.1%** | 15.1% | **20.9%** | **37.9%** | 1.65 |
+| primitive, the cell above | 8.9% | 16.9% | 23.9% | 37.9% | 1.62 |
+| primitive, both levers (2b) | 4.4% | 12.8% | 18.7% | 28.9% | 1.92 |
+| templates, one-phase | 29.5% | -- | 48.2% | 68.2% | 1.64 |
+| templates, two-phase | 47.2% | -- | 66.7% | 79.3% | 1.57 |
+| CP-SAT | 100% | 100% | 100% | 100% | 1.57 |
+
+The template rows are the published ones re-measured on each cell's own gate states;
+the nets behind them are untouched, and they move a point or two because the sample
+does.
+
+**Cell 2b: the shorter rendering pays for the label, and a little more.** Same recipe
+on sequences a third shorter -- 670,221 primitive steps against 996,845 for the same
+60,006 turns -- kept at epoch 56. The decode commits **24.6%** of held-out played turns
+at greedy against 2a's 13.4% and the original 26.9%, and **55.6%** at beam 4 against
+49.3% and **54.9%**. So at beam 4 the two levers together sit *above* the cell they
+came from while playing nothing on **98.6%** of what the teacher declined, and 99.9%
+at greedy. Where it plays it sheds 1.94 tiles against the teacher's 2.18, against the
+original's 2.22: smaller turns, and at beam 4 more of them. The abandonment reads the same way
+as 2a's -- 63.5% deliberate declines, 36.5% budget, mean depth 57.2 against a teacher
+length of 10.2 -- and the same 0.0% / 100.0% / 155.0 at beam 4.
+
+**What the cure is unambiguously worth is time.** On the same 2,000 played held-out
+boundaries, one process at a time, the greedy decode costs **3.50 ms** unlabelled,
+2.05 ms in 2a and **1.46 ms** in 2b -- a **2.4x** cut at the same commit rate, because
+the wandering is what it was paying for. Beam 4 barely moves (17.99 / 18.04 / 16.83
+ms), for the reason the beam-4 abandonment gives: with four hypotheses one of them
+always runs to the budget, so nothing is saved.
+
+**The length breakdown is where the mechanism shows.** Lever 2 puts mass in buckets
+the old rendering had nothing in -- 1,925 held-out turns of three primitives or fewer,
+which is a lay-off said the short way -- and inside the ordinary class the monotone
+decline with length survives exactly:
+
+| the teacher's turn | n | committed, greedy | committed, beam 4 |
+|---|---|---|---|
+| ordinary, 1-3 primitives | 1,925 | 34.9% | 76.3% |
+| ordinary, 4-6 | 217 | 24.4% | 52.5% |
+| ordinary, 7-10 | 3,389 | 20.6% | 51.1% |
+| ordinary, 11-20 | 1,622 | 14.0% | 31.4% |
+| ordinary, 21-35 | 375 | 4.8% | 11.5% |
+| ordinary, 36+ | 23 | 0.0% | 8.7% |
+| with a repartition, 7-10 | 423 | 36.9% | 77.5% |
+| with a repartition, 11-20 | 741 | 37.7% | 77.6% |
+| with a repartition, 21-35 | 370 | 34.1% | 73.8% |
+| with a repartition, 36+ | 34 | 44.1% | 76.5% |
+
+The inversion the section above found survives and gets *stronger*: with a
+repartition in them the turns are **flat** in length -- 34-44% at greedy, 74-78% at
+beam 4, across a factor of five -- where the ordinary ones fall off a cliff.
+Shortening the sequence moves everything up and changes nothing about that: length
+bites where the target is narrow, not where the sequence is long.
+
+**Stage two moves the offline metric seven times as much, and it buys it by giving
+the decline back.** The same self-critical PG, unchanged, lifts held-out committed
+from **28.1% to 40.4%** on the probe slice, kept at update 200 -- against +1.7pp for
+the same stage two over the original rendering. What it actually did is visible in the
+one-step measurement: the argmax at a played boundary goes from `DRAW` 46.5% to
+**2.3%**, and at a *declined* boundary from 84.5% to **15.7%**. The reward is tiles
+alone, with no term for declining, and a KL coefficient of 0.1 does not hold it: stage
+two trades lever 1 away for commitment, which is why it is worth so much more here
+than it was there. The abandonment goes back with it: deliberate declines fall
+63.5% -> **4.4%** and the mean failed decode goes 57.2 -> **148.4** primitives, which
+is the wandering the label had just cured.
+
+Stage one and stage two are also where the offline metric and the population part
+company: the probe reads +12.3pp while the *stuck-state* population -- the arm-A
+question -- moves 4.4% -> 7.1% at greedy and 18.7% -> **17.5%** at beam 4, so the
+fine-tune helps where it is asked to commit and not where it is asked to construct.
+
+**On the suite the two levers are a loss, and the reason is the one the offline
+metric cannot see.**
+
+| arm, `standard-greedy` at n=240 | score | win | answers |
+|---|---|---|---|
+| `by_value` | +28.01 | 82.1% | -- |
+| `by_value` + CP-SAT `REPARTITION` | +47.71 | 99.8% | 20.8% |
+| template picker, beam 1 / beam 4 | +42.31 / +45.26 | 98.5% / 99.8% | 12.8% / 16.5% |
+| arm A, the cell above | +31.03 / +36.13 | 87.7% / 92.9% | 4.9% / 9.2% |
+| arm A, 2a | +29.43 / **+37.13** | 85.0% / 93.1% | 3.7% / 8.5% |
+| arm A, 2b | +28.20 / +33.39 | 84.0% / 89.4% | 2.4% / 5.6% |
+| arm A, 2b + stage two | +29.81 / +32.20 | 86.2% / 88.1% | 3.1% / 6.2% |
+| arm B, the cell above | -196.96 / **-28.28** | 1.9% / 38.1% | 34.8% of turns |
+| arm B, 2a | -274.45 / -74.29 | 0.2% / 17.3% | 10.2% / 30.5% |
+| arm B, 2b | -322.63 / -146.11 | 0.0% / 7.9% | 8.0% / 25.4% |
+| arm B, 2b + stage two | -279.25 / -118.42 | 0.2% / 13.1% | 12.2% / 27.4% |
+
+Sixteen arms, zero illegal actions in any of them. Arm A at beam 4 is the one cell
+that *gains*: 2a takes **46.3%** of the solver's 19.70-point contribution against the
+cell above's 41.2%, so where the decode is asked a question the teacher answered, the
+decline label is worth a point. Everywhere else the levers cost, and arm B costs a
+lot -- 46 points at beam 4 in 2a, 118 in 2b. The reason is the one the offline metric
+structurally cannot see. Offline the question is *given a turn the teacher played, do
+you find one*; in a game the question is *is playing better than drawing*, and for
+this agent the answer is almost always yes even when `frugal`'s answer was no.
+`frugal` declines and then draws from a position it can still win from; the primitive
+agent declines and draws itself into the random-play trap. Its in-game commit rate
+falls from the unlabelled arm's 34.8% of turn boundaries to 30.5% / 25.4% / 27.4%,
+and every point of that is a turn it could have played badly and chose not to play
+at all. **Imitating a decline imitates a decision that only pays for the rest of the
+player.**
+
+**What this does to the verdict.** The diagnosis in the section above was right about
+the mechanism and wrong about the remedy. Abandonment *was* the failure -- the greedy
+decode ran the micro budget out on 100% of the turns it did not commit, at a mean of
+155 primitives against a teacher's 16 -- and labelling `DRAW` cures it outright:
+61.6% of the failures become deliberate declines, the mean decode length more than
+halves, and the decline itself is learned to 100.0% on the held-out declines. The
+lay-off rendering was also inflating everything it touched, and fixing it at the root
+takes a third of every sequence out of the dataset while leaving every published score
+identical to the second decimal. Both levers do exactly what they were predicted to
+do. **Neither makes the primitive space competitive**, and together they leave it
+further from `greedy` than the cell above did: the space's best arm is still that
+cell's beam-4 whole-turn agent at **-20.57 / 41.2%**, which neither lever came near,
+against `greedy`'s +0.00 / 50.0% and `by_value`'s +28.01. So "the primitive space is
+closed by measurement" survives, and is now closed for a reason rather than by a
+margin -- the two named repairs were the cheapest things left to try, both worked as
+designed on the thing they targeted, and the space did not move. What is left is not
+a rendering or a label but the decode itself: at beam 16 the vocabulary still reaches
+only 29-38% of the states CP-SAT answers where a template picker reaches 74-81%, on
+the same states from the same teacher, and search is the only axis on which that gap
+has ever narrowed.
+
+Every arm here is one seed, decoded deterministically, on the same protocol. **Stage
+two was run on 2b only**: 2a is the isolating cell for lever 1 and its stage two
+would have measured the same trade the 2b row already names, at another twenty
+minutes of solver-free rollouts. Cell 2a is otherwise complete -- its own collection,
+its own stage one, its own stuck-state and length tables, and its own four suite arms
+on the *committed* renderer, since 2a is by construction the pre-lever-2 cell.
+
+## No solver at inference: composing the two learned halves
+
+Two results above were measured apart and never together. The afterstate value net
+ranks ordinary macros **from outcomes alone** -- TD(0) over positions, the teacher
+driving five updates of critic warmup and nothing else. The two-phase template
+picker answers `REPARTITION` with no CP-SAT: cloned from 48,002 of the solver's own
+solutions and then RL fine-tuned, it recovers ~90% of the solver's points. `frugal`
+is the pair the other way round -- a hand-written chooser over a real solve -- and
+it is the ceiling this ladder has.
+
+`tools/eval_solver_free.py` crosses them. Every arm is scored in one process on the
+same 240 deals played once per seat (n=480), every decode deterministic -- argmax
+over afterstates, a fixed-width beam over templates, nothing sampled -- with
+`by_value` reproducing +28.01, `frugal` +47.71 and both picker arms reproducing
+their published +45.63 / +44.05 to the cent, which is the check that the ruler did
+not move under the new rows.
+
+| chooser | no repartition | CP-SAT | picker beam 1 | picker beam 4 |
+|---|---|---|---|---|
+| `by_value` | +28.01 / 82.1% | **+47.71** / 99.8% | +45.63 / 99.8% | +44.05 / 99.4% |
+| afterstate s0 | -- | +47.31 / 99.6% | +41.85 / 98.5% | **+45.05** / 99.4% |
+| afterstate s1 | -- | +47.39 / 99.6% | +43.07 / 98.5% | +45.00 / 99.0% |
+| afterstate s2 | -- | +44.74 / 99.4% | +34.08 / 97.5% | +38.62 / 98.5% |
+
+**The chooser is the free half.** Handed a solve, the value net *is* optimal tier:
++47.31 and +47.39 against `frugal`'s +47.71, inside one standard error (+-1.0), and
+level with the `learned` clone rung's +47.23 in the same run. Those are the same
+weights whose published myopic scores are +28.37 / +27.59, so the entire +19 the
+`REPARTITION` macro is worth was already available to them -- ranking ordinary
+moves and knowing when a turn is worth a solve needed no teacher beyond the warmup.
+What the composed arm gives up is therefore the constructor's: `by_value` loses
+3.66 points swapping CP-SAT for the beam-4 decode, and the composition loses 2.26
+from its own CP-SAT arm.
+
+**Cost is the other half of the claim.** 2.52 ms per decision at beam 4 and 1.42 at
+beam 1, against `frugal`'s 6.33 and the clone rung's 7.09 -- the solve is the only
+millisecond-scale thing either of those does. So dropping it buys **2.5x** for 2.66
+points, or 4.5x for 5.86. (Re-measured on an idle machine at 30 deals: 6.39 / 2.66
+/ 1.48, so the run's own figures are not contention.)
+
+**And the suite is flattering it -- entirely on the constructor's account.**
+Head-to-head against `optimal`, 100 deals from both seats, every arm on the same
+deals (`--head-to-head optimal --h2h-arms`):
+
+| arm | vs `optimal`, n=200 | its answer rate |
+|---|---|---|
+| `frugal` | 53.0% (106-94) | 20.5% |
+| `learned` clone rung | 53.0% (106-94) | 20.5% |
+| afterstate s0 + CP-SAT | **49.0%** (98-102) | 25.4% |
+| `by_value` + picker b4 | 23.5% (47-153) | 17.6% |
+| afterstate s0 + picker b4 | **15.0%** (30-170) | 23.0% |
+| `by_value` + picker b1 | 14.5% (29-171) | 14.8% |
+
+The single substitutions attribute it, and they do not split it evenly. Swapping the
+**chooser** and keeping the solve is even -- 49.0% against the ceiling's 53.0%, well
+inside the +-3.5pp n=200 affords -- so nothing the value net does is exposed by a
+peer that a `greedy` opponent hid. Swapping the **constructor** and keeping
+`by_value` falls to 23.5%, and the composition sits 8.5pp under that again, about
+two standard errors: the loss is the picker's, with a weak negative interaction on
+top. Holding the chooser at `by_value`, the duel then tracks how often the backend
+answers the gate rather than how well it scores -- CP-SAT answers 20.5% and wins
+53.0%, beam 4 answers 17.6% and wins 23.5%, beam 1 answers 14.8% and wins 14.5% --
+because a declined stuck turn costs almost nothing against `greedy` and is a turn a
+peer converts.
+
+**So the suite cannot rank constructors.** Beam 1 is the best picker arm on the
+suite (+45.63, above beam 4's +44.05) and the worst of every arm here in the duel
+(14.5% against 23.5%): the ordering inverts outright. The "~90% of the solver's
+points" the picker sections claim is therefore a statement about `standard-greedy`
+and does not survive a peer opponent -- and it is the answer rate, not the score,
+that predicts which way a repartition backend goes when one arrives.
+
+**The spread is the interaction, not either part.** s2 is the weakest of the three
+nets (+25.16 myopic) and it is the arm that falls apart -- 6.4 points below s0 at
+beam 4, where its CP-SAT arm trails by only 2.57. Its gate fires 8,643 times
+against s0's 15,578: a worse chooser reaches fewer of the states the picker answers
+well, so the two errors multiply. The beam ordering moves with it: `by_value`
+prefers beam 1 on the suite where every value-chooser seed prefers beam 4, and the
+duel prefers beam 4 by 9pp where the suite puts it 1.6 points behind. The beam
+ranks finished candidates by tiles played, so a wider one answers more of the gate
+-- which is what a chooser ending turns on a value comparison rather than on a rule
+is the first to feel.
+
+**What is learned from what, plainly.** The chooser is learned from outcomes. The
+constructor is cloned from CP-SAT and RL fine-tuned against its own greedy decode.
+So there is no solver at inference, and **this is not an agent learned from scratch
+by RL**: the NP-hard construction was learned *from the solver*, and the honest
+label is solver-free at inference rather than solver-free end to end. It is not
+offered as a rung either. Its win rate does sit inside the `rearrange` (85%) to
+`optimal` (100%) band the bar names, but it carries two files of weights, spreads
+6.4 points over three seeds, and loses the duel to the rung it would displace,
+15.0% against its 53.0%.
 
 ## Board shaping: the axis the oracle never bounded, and why it has no sign
 
