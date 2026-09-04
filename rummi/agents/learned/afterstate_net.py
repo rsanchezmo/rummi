@@ -61,7 +61,7 @@ def load_value_net(path: pathlib.Path, cfg: RummiConfig) -> tuple[ValueNet, bool
     preset widen the afterstate, so a net moved between them would load cleanly
     and score something meaningless.
     """
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     dim = afterstate_dim(cfg)
     if int(checkpoint["dim"]) != dim:
         raise ValueError(
@@ -92,9 +92,9 @@ def argmax_chooser(cfg: RummiConfig, agent: MacroAgent, value_of: Value) -> Choo
     """
 
     def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
-        options = np.flatnonzero(legal)
         if agent.repartition_macro is not None and legal[agent.repartition_macro]:
             return int(agent.repartition_macro)
+        options = np.flatnonzero(legal)
         rows = afterstate_batch(cfg, obs, env, options.tolist(), agent)
         return int(options[int(np.argmax(value_of(rows)))])
 

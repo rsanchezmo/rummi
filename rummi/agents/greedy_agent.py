@@ -26,7 +26,7 @@ from rummi.solver.candidates import candidates
 
 def _offload_values(cfg: RummiConfig) -> np.ndarray:
     """How much rack penalty each kind sheds when played."""
-    v = tables(cfg).value.astype(np.int32).copy()
+    v = tables(cfg).value.astype(np.int32)
     v[cfg.joker_kind] = cfg.joker_penalty
     return v
 
@@ -83,10 +83,10 @@ def _best_new_sets(
     """Per rack, the highest-scoring set formable from it: its tiles, value, and
     whether one exists at all.
 
-    Ranked across every candidate at once, then realised only for the winner. The
-    loop this replaces called `_realise` per candidate -- 329 of them on the
-    standard config -- and profiling put 643k of those calls, each a handful of tiny
-    NumPy reductions, at 60% of the whole agent's runtime.
+    Ranked across every candidate at once, then realised only for the winner.
+    Realising each candidate to score it -- 329 of them on the standard config, a
+    handful of tiny NumPy reductions apiece -- was 643k calls and 60% of the whole
+    agent's runtime.
 
     Two facts make the vectorised form exact rather than approximate. A candidate
     holds each kind at most once, so its shortfall is just how many of its kinds the
@@ -107,7 +107,8 @@ def _best_new_sets(
     value = cand.value.astype(np.int64)
     # Melding needs points; afterwards, shedding tiles is what wins. Packed into one
     # integer so `argmax` does the lexicographic comparison -- and `argmax` returns
-    # the *first* maximum, which is what a strict `>` over ascending indices did.
+    # the *first* maximum, so ties go to the lowest candidate index and the pick is
+    # a function of the rack alone.
     by_points = value * (int(length.max()) + 1) + length
     by_size = length * (int(value.max()) + 1) + value
     key = np.where(by_value[:, None], by_points[None, :], by_size[None, :])
@@ -157,13 +158,15 @@ def plan_turns(
 
     offload = _offload_values(cfg)
     allowed = appendable(cfg, table, rack) & melded[:, None, None]
-    # A turn can append no more tiles than the rack holds.
+    # Appends per turn, bounded by the *dealt* rack size. A rack drawn into holds
+    # more than that, so the bound caps what greedy plays -- and greedy is the suite
+    # opponent, so raising it moves every published score.
     for _ in range(cfg.rack_size):
         live = allowed.any((1, 2))
         if not live.any():
             break
         # Shed the most expensive tile available. `argmax` takes the first maximum,
-        # so ties go to the lowest slot and then the lowest kind, as they did.
+        # so ties go to the lowest slot and then the lowest kind.
         flat = np.argmax(np.where(allowed, offload, -1).reshape(n, -1), axis=-1)
         slot, kind = flat // cfg.n_kinds, flat % cfg.n_kinds
 

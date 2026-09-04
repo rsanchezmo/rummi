@@ -103,11 +103,12 @@ def init_params(
     """Orthogonal init, PPO's usual gains.
 
     The gains are the part that matters: `arch.trunk_gain` through the trunk --
-    matched to the activation, which is the bug an earlier version had -- **0.01 on
-    the policy head** so the first policy is near-uniform over legal actions
-    rather than confidently wrong, and 1.0 on the value head. A policy head at
-    full gain starts out committed to arbitrary actions, which with 1.5% of the
-    action space legal is a slow thing to unlearn.
+    matched to the activation, because a gain chosen for one mis-scales the trunk
+    layer over layer under the other -- **0.01 on the policy head** so the first
+    policy is near-uniform over legal actions rather than confidently wrong, and
+    1.0 on the value head. A policy head at full gain starts out committed to
+    arbitrary actions, which with 1.5% of the action space legal is a slow thing
+    to unlearn.
     """
     arch = arch or Architecture()
     rng = np.random.default_rng(seed)

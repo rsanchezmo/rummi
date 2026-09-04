@@ -63,11 +63,11 @@ class RecordingAgent(MacroAgent):
         solution = solve_turn(cfg, np.asarray(obs["rack"][env]).astype(np.int64), board, True)
         if not solution.plays_anything or solution.played is None:
             return []
-        actions = plan(cfg, board, list(solution.sets), solution.played)
-        spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
-        if len(actions) > cfg.max_micro_per_turn - spent:
+        actions = self._repartition_plan(
+            obs, env, plan(cfg, board, list(solution.sets), solution.played)
+        )
+        if not actions:
             return []
-        actions.pop()
         self.solution[env] = solution
         return actions
 

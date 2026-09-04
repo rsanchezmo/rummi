@@ -29,6 +29,7 @@ model's own preference among equal turns.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -43,6 +44,11 @@ from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import summarize
 from rummi.env.observation import encode
 from rummi.rules.config import RummiConfig
+
+
+Score = Callable[[Observation, np.ndarray, np.ndarray], np.ndarray]
+"""`(obs, mask, group) -> (rows, n_actions)` logits. `group` says which position
+each row is decoding, which only a teacher needs -- see :class:`Scorer`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +117,7 @@ def _best_per_group(groups: np.ndarray, scores: np.ndarray, keep: int) -> np.nda
 
 def decode_turns(
     cfg: RummiConfig,
-    score,
+    score: Score,
     starts: TurnStart,
     beam: int = 1,
     max_depth: int | None = None,
@@ -204,7 +210,7 @@ class PrimitiveTurnAgent(PlanningAgent):
 
     name = "primitive-turn"
 
-    def __init__(self, cfg: RummiConfig, scorer, beam: int = 1) -> None:
+    def __init__(self, cfg: RummiConfig, scorer: Score, beam: int = 1) -> None:
         super().__init__(cfg)
         self.scorer = scorer
         self.beam = beam
@@ -231,7 +237,7 @@ class PrimitiveRepartition(MacroAgent):
 
     name = "primitive-repartition"
 
-    def __init__(self, cfg: RummiConfig, scorer, beam: int = 1) -> None:
+    def __init__(self, cfg: RummiConfig, scorer: Score, beam: int = 1) -> None:
         super().__init__(cfg, choose=by_value(cfg), repartition=True)
         self.scorer = scorer
         self.beam = beam

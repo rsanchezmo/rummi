@@ -186,6 +186,24 @@ def test_the_two_readings_of_a_next_turn_agree(tiny_run):
     assert sum(g["continuations"] for g in tiny_run) > 0
 
 
+def test_the_two_readings_agree_with_one_deal_per_rollout():
+    """The same check at `--chunk 1`, where nothing else keeps the loop running.
+
+    A batch hides this: an env that finishes early is re-recorded on every later
+    step, so its terminal boundary arrives for free while a slower env keeps the
+    rollout going. Alone, the loop stops on the step that boundary is on -- and a
+    turn whose successor was never recorded is unpriceable, which the two
+    derivations then disagree about rather than both reporting as absent.
+    """
+    games = [
+        orr.run_game((seed, TINY_GROUPS, 5, 2, 1.0, 1, 2_000, True, True, True))
+        for seed in range(4)
+    ]
+    assert not any("error" in g for g in games), [g.get("error") for g in games]
+    assert [f for g in games for f in g["failures"]] == []
+    assert sum(g["continuations"] for g in games) > 0
+
+
 def test_the_oracle_reply_bounds_what_the_opponent_actually_did(tiny_run):
     """At two seats nothing intervenes between the turn and the reply, so CP-SAT's
     maximum is a bound on the rollout -- and a table that offers nothing has to
@@ -311,3 +329,23 @@ def test_the_interval_is_clustered_on_the_deal():
     assert one[0] == 10 and two[0] == 2
     assert one[1] == two[1] == 0.5
     assert one[2] == pytest.approx(two[2])
+
+
+def test_the_headline_counts_every_seat_and_not_only_the_ones_that_played() -> None:
+    """A seat that never ends a turn is still a seat that lost.
+
+    The count used to be inferred from the decisions on record, so a seat that
+    never chose anything -- it can still win through the stalemate branch -- was
+    dropped from both the numerator and the denominator, and a run whose every
+    game came back an error had no maximum to take at all.
+    """
+    game = {"winner": 1, "decisions": [{"seat": 0, "base_won": False, "alts": [
+        {"won": 1, "kind": "swap"}
+    ]}]}
+    head = orr.headline([game], seats=3)
+    assert head.seats == 3
+    assert (head.wins, head.losses, head.rescued) == (1, 2, 1)
+
+    empty = orr.headline([], seats=2)
+    assert (empty.seats, empty.wins, empty.losses) == (2, 0, 0)
+    assert orr.summarise([], 2), "a run that measured nothing still has to report"

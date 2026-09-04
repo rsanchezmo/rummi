@@ -44,7 +44,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from rummi.agents.base import Agent, Observation, turn_starting
 from rummi.agents.opening import ARMS, OpeningAgent, OpeningStats
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.rules.encoding import EMPTY
 from rummi.rules.observation import F_IS_NEW, MELD_PROGRESS
@@ -526,20 +526,24 @@ def verdict(arenas: list[dict], criterion: str) -> dict:
                 else bool(np.sign(other) == np.sign(row["delta"])),
             }
         )
+    if not rows:
+        raise SystemExit(f"{primary['label']} holds only controls, so there is no arm to rank")
     met = [r["arm"] for r in rows if r["clears_threshold"] and r["same_sign_vs_optimal"]]
     widest = max(rows, key=lambda r: r["delta"])
     # The controls void the run rather than fail it, so they are reported as a
-    # precondition of the verdict and not as an arm.
-    controls = {
-        name: all(
-            row["delta"] == 0.0
+    # precondition of the verdict and not as an arm. None, not True, where a
+    # control never ran: `all()` over nothing is vacuously true, which would
+    # publish the precondition as met without having checked it.
+    controls: dict[str, bool | None] = {}
+    for name in CONTROLS:
+        deltas = [
+            row["delta"]
             for arena in arenas
             if arena["paired"]
             for row in arena["arms"]
             if row["arm"] == name
-        )
-        for name in CONTROLS
-    }
+        ]
+        controls[name] = all(delta == 0.0 for delta in deltas) if deltas else None
     return {
         "criterion": criterion,
         "threshold": MIN_DELTA,
@@ -616,10 +620,9 @@ def main() -> None:
 
     started = time.perf_counter()
     if args.arena == "suite":
-        # The suites are named with hyphens and the configs with underscores, and
-        # `standard`'s own suite is named after its opponent.
-        default = "standard-greedy" if args.config == "standard" else args.config.replace("_", "-")
-        suite = args.suite or default
+        # Resolved from the suite table, not spelled from the config name: the
+        # suite called `tiny` deals `tiny_groups`, and `tiny` itself has none.
+        suite = args.suite or suite_for(args.config).name
         jobs = [(args.config, arm, suite, args.games) for arm in args.arms]
         results = _run(
             jobs, _suite_job, min(args.workers, len(jobs)), suite, cache=args.out / f"{tag}.jsonl"

@@ -185,7 +185,7 @@ from rummi.agents.macro import (
     steal_offset,
 )
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 
 # The preceding experiment's runner, imported rather than rewritten: it already pins
 # the self-mirror to exactly 50.00% and the ranking it recomposes is pinned to
@@ -639,7 +639,7 @@ def main() -> None:
                 )
 
     if args.arena in ("suite", "both"):
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+        suite = suite_for(args.config)
         print(f"\n{suite.name}, {args.games} deals x {cfg.n_players} seats")
         for arm in dict.fromkeys(("base", *args.modes)):
             stats[arm] = MoveStats()

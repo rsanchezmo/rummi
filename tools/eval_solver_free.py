@@ -66,13 +66,17 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from rummi.agents import build
-from rummi.agents.base import Observation
+from rummi.agents.base import Agent, Observation
 from rummi.agents.learned.afterstate_net import argmax_chooser, load_value_net, value_fn
 from rummi.agents.learned.solver_free import PickerMacroAgent, SolverFreeAgent, load_picker
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 
 VALUES = [pathlib.Path(f"checkpoints/afterstate-sweep-s{seed}-swa.pt") for seed in range(3)]
+"""The averaged value nets. `tools/train_afterstate.py` does not write these: each
+is the mean of one run's u300-u600 checkpoints, produced by
+`tools/average_checkpoints.py --series checkpoints/afterstate-sweep-s<n> --updates
+300 600 20`."""
 PICKER = pathlib.Path("checkpoints/twophase-rl4.pt")
 
 
@@ -194,15 +198,17 @@ def arms(
     return out
 
 
-def head_to_head(
-    suite, a: MacroAgent, b: MacroAgent, deals: int, seed_base: int
-) -> dict:
+def head_to_head(suite, a: Agent, b: Agent, deals: int, seed_base: int) -> dict:
     """`a` against `b` on identical deals, once from each seat.
 
     The shape `tools/game_structure.py` plays, taking built agents rather than
     registry names -- the composition is not a rung and has no name to look up.
     Seeded from its own base so it cannot reuse the suite's deals, which every
     arm above has already been tuned against by being chosen on them.
+
+    Two seats exactly. `--suite` also offers the three- and four-seat suites, and
+    seating two agents at a wider table leaves the rest to `act_by_seat`'s `DRAW`
+    default -- a game one player passes through, scored as a duel.
     """
     from rummi.agents.base import act_by_seat
     from rummi.env.numpy.deal import reset as deal_reset
@@ -213,6 +219,10 @@ def head_to_head(
     from rummi.env.observation import encode
 
     cfg = suite.cfg
+    if cfg.n_players != 2:
+        raise ValueError(
+            f"the duel seats two agents; {suite.name} deals {cfg.n_players}"
+        )
     seeds = [np.random.SeedSequence([seed_base, i]) for i in range(deals)]
     wins = np.zeros(2, dtype=np.int64)
     played = 0

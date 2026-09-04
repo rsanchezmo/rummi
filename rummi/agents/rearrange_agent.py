@@ -28,12 +28,6 @@ from rummi.rules.encoding import EMPTY
 from rummi.solver.candidates import candidates
 
 
-def _stealable(cfg: RummiConfig, board: np.ndarray) -> list[tuple[int, int, int]]:
-    """``(slot, position, kind)`` for every tile whose set survives losing it."""
-    keep = np.asarray(_survivors(cfg, board[None])[0])
-    return [(int(s), int(p), int(board[s, p])) for s, p in zip(*np.nonzero(keep), strict=True)]
-
-
 def _survivors(cfg: RummiConfig, boards: np.ndarray) -> np.ndarray:
     """``(n, S, L)`` true where the tile at that position can be lifted out and the
     set it leaves behind is still a set.
@@ -85,14 +79,6 @@ def _sets_using(
     key = length * (int(value.max()) + 1) + value
     best = np.argmax(np.where(feasible, key[None, :], -1), axis=-1)
     return np.where(feasible[np.arange(best.shape[0]), best], best, -1), have
-
-
-def _set_using(cfg: RummiConfig, rack: np.ndarray, borrowed: int):
-    """Best set formable from ``rack`` plus one borrowed tile, or ``None``."""
-    best, have = _sets_using(cfg, rack[None], np.array([borrowed]))
-    if best[0] < 0:
-        return None
-    return _tiles_of(cfg, candidates(cfg).kinds[best[0]], have[0, best[0]], borrowed)
 
 
 def _tiles_of(
@@ -173,7 +159,9 @@ class RearrangeAgent(PlanningAgent):
         racks, boards = obs["rack"][envs], table(obs)[envs]
         melded = has_melded(obs)[envs]
         plans = plan_turns(cfg, racks, boards, melded)
-        stealing = np.flatnonzero(melded & np.array([not plan for plan in plans]))
+        stealing = np.flatnonzero(
+            melded & np.array([not plan for plan in plans], dtype=bool)
+        )
         if stealing.size:
             steals = steal_one_batch(cfg, racks[stealing], boards[stealing])
             for i, steal in zip(stealing.tolist(), steals, strict=True):

@@ -27,7 +27,7 @@ import argparse
 import numpy as np
 
 from rummi.agents.base import Observation, has_melded, table
-from rummi.agents.greedy_agent import _best_new_set, appendable, plan_turn
+from rummi.agents.greedy_agent import _best_new_sets, appendable, plan_turn
 from rummi.agents.macro import MacroAgent, by_value, playable, removals, set_templates
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.rules.config import CONFIG_BY_NAME
@@ -97,9 +97,11 @@ def diagnose(cfg_name: str, envs: int, steps: int, seed: int) -> dict[str, int]:
                 counts["stuck_append_joker_set"] += (
                     onto_joker and not joker_tile and not plain.any()
                 )
-                counts["stuck_newset_gap"] += (
-                    not can_new_set and _best_new_set(cfg, rack, by_value=False) is not None
-                )
+                # Greedy's own feasibility test, which lets a joker cover more than
+                # one gap where `playable` allows exactly one -- so this column is
+                # the difference between the two rules, not a second copy of either.
+                greedy_set = bool(_best_new_sets(cfg, rack[None], np.array([False]))[2][0])
+                counts["stuck_newset_gap"] += not can_new_set and greedy_set
 
         macro = base(obs, env, legal)
         if macro < agent.extend_offset:

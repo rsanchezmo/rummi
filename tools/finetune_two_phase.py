@@ -145,7 +145,7 @@ from rummi.agents.learned.two_phase_net import (
     two_phase_from_checkpoint,
 )
 from rummi.agents.macro import MacroAgent, by_value
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 
 # Read from where they are defined rather than restated: the holdout metric has to
@@ -277,7 +277,7 @@ def run_break(
 
     for depth in range(cfg.max_sets + 1):
         if forced is not None:
-            alive &= np.array([depth < len(row) for row in forced])
+            alive &= np.array([depth < len(row) for row in forced], dtype=bool)
         rows = np.flatnonzero(alive)
         if rows.size == 0:
             break
@@ -765,7 +765,7 @@ def main() -> None:
 
     scores: list[dict] = []
     if args.eval_games:
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+        suite = suite_for(args.config)
         net.eval()
         for beam in args.beam:
             label = f"two-phase rl (beam {beam})"

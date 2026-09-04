@@ -121,7 +121,7 @@ class TurnStart:
         )
 
 
-def _dummy_racks(cfg: RummiConfig, unseen: np.ndarray, rack_sizes: np.ndarray) -> np.ndarray:
+def _dummy_racks(unseen: np.ndarray, rack_sizes: np.ndarray) -> np.ndarray:
     """`(B, P-1, K)` a deal of `unseen` that reproduces the other seats' sizes.
 
     Which tile goes to which opponent is arbitrary and unobservable, so the tiles
@@ -157,7 +157,7 @@ def to_state(cfg: RummiConfig, starts: TurnStart, repeat: int = 1) -> BatchState
     # the encoder's own rotation is the identity.
     state.current[:] = 0
     state.racks[:, 0] = rows.rack
-    state.racks[:, 1:] = _dummy_racks(cfg, rows.unseen, rows.rack_sizes)
+    state.racks[:, 1:] = _dummy_racks(rows.unseen, rows.rack_sizes)
     state.pool[:] = rows.unseen - state.racks[:, 1:].sum(1)
     state.draw_ptr[:] = cfg.n_tiles - rows.pool_size
     state.table_sets[:] = rows.board

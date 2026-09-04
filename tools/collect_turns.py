@@ -97,6 +97,7 @@ class RecordingAgent(MacroAgent):
         self.game = np.zeros(1, dtype=np.int64)
         self.fired = 0
         self.declined = 0
+        self.committed = 0
         self.drawn = 0
         self.abandoned = 0
         self._open: dict[int, tuple[TurnStart, list[int]]] = {}
@@ -161,6 +162,7 @@ class RecordingAgent(MacroAgent):
                 self.turns.append(
                     (entry[0], entry[1], self._used_solver[env], int(self.game[env]), False)
                 )
+                self.committed += 1
                 self._open.pop(env, None)
         return out
 
@@ -197,8 +199,7 @@ def main() -> None:
     started = time.perf_counter()
     steps = 0
     while steps < args.max_steps:
-        played = sum(1 for row in agent.turns if not row[4])
-        if played >= args.target and len(agent.gates) >= args.stuck_target:
+        if agent.committed >= args.target and len(agent.gates) >= args.stuck_target:
             break
         actions = agent.act(obs, np.asarray(info["action_mask"]))
         obs, _, term, trunc, info = env.step(actions)
@@ -207,9 +208,9 @@ def main() -> None:
         agent.game = np.arange(args.envs, dtype=np.int64) * 1_000_000 + episode
         steps += 1
         if steps % 5000 == 0:
-            rate = played / max(time.perf_counter() - started, 1e-9)
+            rate = agent.committed / max(time.perf_counter() - started, 1e-9)
             print(
-                f"step {steps:>8,}  turns {played:>7,}  "
+                f"step {steps:>8,}  turns {agent.committed:>7,}  "
                 f"stuck {len(agent.gates):>6,}  drawn {agent.drawn:>7,}  "
                 f"gate {agent.fired:>7,} ({1 - agent.declined / max(agent.fired, 1):>5.1%} answered)  "
                 f"{rate:>6.1f} turns/s",
@@ -218,8 +219,15 @@ def main() -> None:
     elapsed = time.perf_counter() - started
     env.close()
 
-    if not agent.turns:
-        raise SystemExit("collected nothing")
+    # Both populations go into one file under their own prefixes, so a run that
+    # reached only one of them has no dataset to write -- said by name rather than
+    # left to fail inside `np.concatenate` once the collection is already paid for.
+    if not agent.turns or not agent.gates:
+        raise SystemExit(
+            f"collected {len(agent.turns):,} turns and {len(agent.gates):,} gate "
+            "states; the file holds both, so raise --max-steps until both targets "
+            "are met"
+        )
 
     turn_starts = TurnStart.stack([row[0] for row in agent.turns])
     turn_plan, turn_len = pad([row[1] for row in agent.turns])

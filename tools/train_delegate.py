@@ -231,8 +231,11 @@ def main() -> None:
                 logits, _ = net(torch.as_tensor(x)[None])
             return bool(logits[0].argmax().item() == 1)
 
+        # Its own suite, not a protocol one: the opponent is `--inner` and the
+        # game count is `--eval-games`, so it is named for what it actually plays
+        # rather than borrowing a frozen suite's name.
         suite = Suite(
-            "standard-optimal" if args.config == "standard" else "tiny",
+            f"{args.config}-{args.inner}",
             CONFIG_BY_NAME[args.config], opponent=args.inner,
             games=args.eval_games, seed_base=3_000, batch_size=16,
         )

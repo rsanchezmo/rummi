@@ -47,6 +47,7 @@ from rummi.rules.observation import (
     MELD_PROGRESS,
     MELD_REMAINING,
     MICRO_COUNT,
+    N_SCALARS,
     POOL_SIZE,
     SLOT_FEATURES,
     max_meld_value,
@@ -93,7 +94,7 @@ def slot_counts_numpy(cfg: RummiConfig, table_sets: np.ndarray) -> np.ndarray:
 
 def feature_dim(cfg: RummiConfig) -> int:
     k, s, p = cfg.n_kinds, cfg.max_sets, cfg.n_players
-    return 4 * k + s * SLOT_FEATURES + 2 * p + 4
+    return 4 * k + s * SLOT_FEATURES + 2 * p + N_SCALARS
 
 
 def _slot_column_scales(cfg: RummiConfig) -> np.ndarray:
@@ -134,7 +135,7 @@ def feature_scale(cfg: RummiConfig) -> np.ndarray:
         np.tile(_slot_column_scales(cfg), s),          # slot_features, row-major
         np.full(p, float(cfg.n_tiles), dtype=np.float32),   # rack_sizes
         np.ones(p, dtype=np.float32),                  # melded
-        np.zeros(4, dtype=np.float32),                 # scalars, filled below
+        np.zeros(N_SCALARS, dtype=np.float32),         # scalars, filled below
     ]
     scalars = parts[-1]
     scalars[POOL_SIZE] = max(1, cfg.n_tiles)

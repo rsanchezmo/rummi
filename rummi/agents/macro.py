@@ -407,17 +407,27 @@ class MacroAgent:
         )
         if not solution.plays_anything or solution.played is None:
             return []
-        actions = plan(cfg, board, list(solution.sets), solution.played)
-        # Rebuilding a whole table is the longest expansion in this space, and
-        # overrunning the turn's micro budget leaves the env offering only DRAW --
-        # which reverts everything the expansion just did. The trailing `END_TURN`
-        # counts against the budget even though it is dropped below, because the
-        # turn still has to spend one to commit.
+        return self._repartition_plan(
+            obs, env, plan(cfg, board, list(solution.sets), solution.played)
+        )
+
+    def _repartition_plan(
+        self, obs: Observation, env: int, actions: list[int]
+    ) -> list[int]:
+        """A repartition backend's `to_actions.plan` output, ready for `expand`.
+
+        Every backend that answers this gate -- CP-SAT above, the template pickers
+        and the recording subclasses in `tools/` -- owes the turn the same two
+        things, so they are owed in one place. Rebuilding a whole table is the
+        longest expansion in this space, and overrunning the turn's micro budget
+        leaves the env offering only DRAW, which reverts everything the expansion
+        just did. The trailing `END_TURN` counts against the budget even though it
+        is dropped here, because the turn still has to spend one to commit.
+        """
         spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
-        if len(actions) > cfg.max_micro_per_turn - spent:
+        if len(actions) > self.cfg.max_micro_per_turn - spent:
             return []
-        actions.pop()  # dropped for the reason `expand` drops it from every macro
-        return actions
+        return actions[:-1]  # dropped for the reason `expand` drops it from every macro
 
     def expand(
         self,

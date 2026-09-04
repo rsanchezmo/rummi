@@ -16,6 +16,10 @@ states the picker exists for, which uniform-random play never does.
 
 from __future__ import annotations
 
+import dataclasses
+import sys
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -30,7 +34,11 @@ from rummi.agents.learned.two_phase_net import TwoPhaseNet, TwoPhaseScorer, stop
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.env.fixed_opponent import FixedOpponentEnv
 from rummi.env.numpy.sets import evaluate_slots
+from rummi.evaluate.protocol import SUITE_BY_NAME
 from rummi.rules.config import STANDARD, RummiConfig
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import eval_solver_free as tool
 
 ENVS = 8
 STEPS = 500
@@ -106,6 +114,23 @@ def test_the_composition_plays_whole_games_inside_the_mask():
     # legal, which is the trap `CLAUDE.md` names: random play never gets here.
     assert commits > 100, f"only {commits} turns were committed; nothing was proved"
     assert agent.asked > 0, "the repartition gate never fired, so the backend is untested"
+
+
+def test_the_duel_refuses_a_suite_it_cannot_seat() -> None:
+    """`head_to_head` seats exactly two agents, and its `--suite` choices do not.
+
+    A three-seat suite left the third seat with no agent at all, so `act_by_seat`
+    filled it with `DRAW` -- a game where one player passes for ever, reported as a
+    win rate like any other. The duel has to say it cannot run instead.
+    """
+    # Shortened so the pre-fix behaviour -- playing the whole thing out with a seat
+    # that only ever draws -- is cheap enough to assert against.
+    suite = dataclasses.replace(SUITE_BY_NAME["standard-3p"], max_steps=20)
+    cfg = suite.cfg
+    with pytest.raises(ValueError, match="two"):
+        tool.head_to_head(
+            suite, MacroAgent(cfg, choose=by_value(cfg)), MacroAgent(cfg), 2, 0
+        )
 
 
 def test_a_decode_that_finds_nothing_plays_the_game_without_it():

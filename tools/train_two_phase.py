@@ -46,6 +46,13 @@ falling) and `--weight-decay 1e-4` fixes exactly that without moving the
 deliverable at all: 34.2% / 55.5%. And widening phase A alone -- `breaks` at 8
 under a greedy cover -- buys 37.1% -> 38.5% for 3.2x the time. **The break choice
 is not what the beam is buying;** the cover is.
+
+**Those rows predate one fix in this file** and were produced with the earlier
+behaviour: the probe slice was re-drawn inside the epoch loop, so the epoch kept
+was chosen by comparing `--probe` held-out states against `--probe` *different*
+held-out states. The kept epoch above ("kept at epoch 33") is therefore a choice
+made partly on sampling noise, and the holdout figures beside it -- scored over
+every held-out state, not the probe -- are not.
 """
 
 from __future__ import annotations
@@ -87,7 +94,7 @@ from rummi.agents.learned.two_phase_net import (
     two_phase_from_checkpoint,
 )
 from rummi.agents.macro import MacroAgent, by_value
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 
 
@@ -473,6 +480,11 @@ def main() -> None:
     best_probe, best_epoch = -1.0, 0
     best_state: dict[str, torch.Tensor] | None = None
     n_relabel = len(data.template_to)
+    # One slice, drawn once: every probe then measures the same states, so the
+    # trajectory is a paired comparison rather than `--probe` fresh states of noise
+    # per reading -- and the epoch kept is chosen on a difference that is real.
+    # `tools/finetune_two_phase.py` draws its own the same way and for this reason.
+    probe_rows = rng.permutation(held_states)[: args.probe]
     for epoch in range(1, args.epochs + 1):
         began = time.perf_counter()
         losses = {"a": 0.0, "b": 0.0}
@@ -497,9 +509,7 @@ def main() -> None:
                 counts[head] += 1
 
         a_step, a_exact, b_step, b_exact = accuracy(held_states)
-        probe = playable_rate(
-            cfg, data, scorer, rng.permutation(held_states)[: args.probe], args.beam[0], monotone
-        )
+        probe = playable_rate(cfg, data, scorer, probe_rows, args.beam[0], monotone)
         print(
             f"epoch {epoch:>3}  loss {losses['a'] / max(counts['a'], 1):>6.4f}/"
             f"{losses['b'] / max(counts['b'], 1):>6.4f}  "
@@ -564,7 +574,7 @@ def main() -> None:
 
     scores: list[dict] = []
     if args.eval_games:
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+        suite = suite_for(args.config)
         for beam in args.beam:
             label = f"two-phase (beam {beam})"
             agent = TwoPhaseRepartition(cfg, scorer, beam=beam, monotone=monotone)

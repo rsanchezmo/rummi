@@ -30,7 +30,6 @@ import numpy as np
 from rummi.agents.base import Observation, table
 from rummi.agents.macro import Choose, MacroAgent
 from rummi.rules.config import RummiConfig
-from rummi.rules.observation import MICRO_COUNT
 
 if TYPE_CHECKING:
     from rummi.agents.learned.afterstate_net import Value
@@ -74,11 +73,11 @@ class PickerMacroAgent(MacroAgent):
         found = decode_two_phase(cfg, self.scorer, rack, board, self.beam, self.monotone)
         if found is None or found.tiles_played < 1:
             return []
-        actions = plan(cfg, board, list(found.sets), found.played)
-        spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
-        if len(actions) > cfg.max_micro_per_turn - spent:
+        actions = self._repartition_plan(
+            obs, env, plan(cfg, board, list(found.sets), found.played)
+        )
+        if not actions:
             return []
-        actions.pop()  # dropped for the reason `expand` drops it from every macro
         self.answered += 1
         return actions
 
@@ -121,7 +120,7 @@ def load_picker(cfg: RummiConfig, path: pathlib.Path) -> tuple[TwoPhaseScorer, b
 
     from rummi.agents.learned.two_phase_net import TwoPhaseScorer, two_phase_from_checkpoint
 
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     scorer = TwoPhaseScorer(two_phase_from_checkpoint(cfg, checkpoint))
     return scorer, bool(checkpoint["monotone"])
 

@@ -164,8 +164,9 @@ the ranking that separates the rungs lives below the outcome's per-episode noise
 episode), so the regression finds the band in ~80 updates and cannot lock the last
 three points; annealing exploration from 0.10 to 0.02 over 600 updates does not
 close the gap. The oscillation itself is solved for free: averaging each seed's
-sixteen u300-u600 checkpoints (plain weight averaging -- the net has no
-normalisation layers) scores **+28.37 / +27.59 / +25.16 at n=240** against
+sixteen u300-u600 checkpoints (`tools/average_checkpoints.py`, plain float32 weight
+averaging -- the net has no normalisation layers, and the shipped `-swa.pt` files
+reproduce bit for bit) scores **+28.37 / +27.59 / +25.16 at n=240** against
 endpoints of +27.02 / +22.23 / +27.13, seed 1 gaining five points over its own
 endpoint. So the band is noise around a mean the averaging extracts -- and the
 mean is ~+27, not `by_value`'s +29.60. **The residual gap is level, not

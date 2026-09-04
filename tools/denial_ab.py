@@ -111,7 +111,7 @@ from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import summarize
 from rummi.env.numpy.state import counts_of
 from rummi.env.observation import encode
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.solver.to_actions import slot_contents
 
 
@@ -665,7 +665,7 @@ def main() -> None:
                 print(f"  {'':<12} {stats[arm].report()}")
 
     if args.arena in ("suite", "both"):
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+        suite = suite_for(args.config)
         print(f"\n{suite.name}, {args.games} deals x {cfg.n_players} seats")
         for arm in dict.fromkeys(("base", *args.arms)):
             stats[arm] = TieStats()

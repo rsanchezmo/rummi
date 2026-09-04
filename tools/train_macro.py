@@ -104,7 +104,7 @@ from rummi.agents.macro import (
     steal_offset,
 )
 from rummi.env.fixed_opponent import FixedOpponentEnv
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 
 OPPONENTS = ("greedy", "rearrange", "frugal", "optimal", "self")
@@ -1441,9 +1441,7 @@ def main() -> None:
 
     scores: list[dict] = []
     if args.eval_games:
-        suite = SUITE_BY_NAME[
-            "standard-greedy" if args.config == "standard" else "tiny"
-        ]
+        suite = suite_for(args.config)
         learned = argmax_choose(net)
         baselines = (
             (("learned", learned), ("macro_first", macro_first(cfg)))

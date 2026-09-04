@@ -79,9 +79,8 @@ from rummi.agents.learned.repartition_net import (
     stop_action,
 )
 from rummi.agents.macro import MacroAgent, by_value
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
-from rummi.rules.observation import MICRO_COUNT
 
 
 class Steps:
@@ -227,11 +226,11 @@ class NeuralRepartition(MacroAgent):
         )
         if found is None or found.tiles_played < 1:
             return []
-        actions = plan(cfg, board, list(found.sets), found.played)
-        spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
-        if len(actions) > cfg.max_micro_per_turn - spent:
+        actions = self._repartition_plan(
+            obs, env, plan(cfg, board, list(found.sets), found.played)
+        )
+        if not actions:
             return []
-        actions.pop()
         self.answered += 1
         return actions
 
@@ -433,7 +432,7 @@ def main() -> None:
 
     scores: list[dict] = []
     if args.eval_games:
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+        suite = suite_for(args.config)
         for beam in args.beam:
             label = f"neural-repartition (beam {beam})"
             agent = NeuralRepartition(cfg, scorer, beam=beam, monotone=monotone)

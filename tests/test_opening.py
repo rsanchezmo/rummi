@@ -29,6 +29,7 @@ import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import opening_ab
 from denial_ab import play_deals
 
 from rummi.agents.frugal_agent import FrugalAgent
@@ -351,3 +352,39 @@ def test_an_arm_abandons_a_plan_the_mask_refuses():
     legal = _legal(cfg, (_template(cfg, group),))
     assert arm(obs, 0, legal) == _template(cfg, group)
     assert arm.stats.stale == 1
+
+
+def _arena(arms: list[tuple[str, float]]) -> dict:
+    """One paired head-to-head arena in the shape `opening_ab.verdict` reads."""
+    return {
+        "arena": "head2head",
+        "opponent": "frugal",
+        "seats": 2,
+        "paired": True,
+        "label": "vs frugal",
+        "arms": [
+            {"arm": arm, "delta": delta, "delta_ci": 0.01} for arm, delta in arms
+        ],
+    }
+
+
+def test_a_control_that_never_ran_is_not_reported_as_exact() -> None:
+    """`controls_exact` is the verdict's precondition, so it has to be checked.
+
+    `base` and `full` are mirrors of `frugal`: both must read exactly even or the
+    harness itself is moving the score. An arena that never ran them says nothing
+    about that, and reporting it as met is the failure mode `CLAUDE.md` names -- a
+    conformance check that passes with the term doing nothing.
+    """
+    ran = opening_ab.verdict([_arena([("base", 0.0), ("min_sets", 0.03)])], "x")
+    assert ran["controls_exact"]["base"] is True
+    assert ran["controls_exact"]["full"] is None, "`full` was never in the arena"
+
+    moved = opening_ab.verdict([_arena([("base", 0.01), ("min_sets", 0.03)])], "x")
+    assert moved["controls_exact"]["base"] is False
+
+
+def test_a_controls_only_run_says_so_instead_of_naming_a_widest_arm() -> None:
+    """Every row of the primary arena is a control, so there is no arm to rank."""
+    with pytest.raises(SystemExit, match="control"):
+        opening_ab.verdict([_arena([("base", 0.0), ("full", 0.0)])], "x")

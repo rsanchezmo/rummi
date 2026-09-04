@@ -496,9 +496,14 @@ def rollout(
         agent.reset(state.batch_size)
     trace = Trace.blank(state.batch_size, cfg.n_players + 2, cfg.n_players)
     for _ in range(max_steps):
+        # Recorded before the exit, or the boundary the last env finishes on is
+        # never written -- and a turn whose successor is missing has no shed count,
+        # which reads as "the seat never played again" rather than as the end of the
+        # game. A batch hid it: an env that finishes early is re-recorded while a
+        # slower one keeps the loop going.
+        trace.record(state)
         if state.done.all():
             break
-        trace.record(state)
         summary = summarize(cfg, state.table_sets)
         mask = legal_actions(state, summary)
         actions, illegal = act_by_seat(
@@ -776,9 +781,8 @@ class Headline:
     """What the two rates would read if a deviation carried no strategy at all."""
 
 
-def headline(played: list[dict]) -> Headline:
+def headline(played: list[dict], seats: int) -> Headline:
     losses = wins = rescued = thrown = 0
-    seats = 1 + max(d["seat"] for g in played for d in g["decisions"])
     for game in played:
         if game["winner"] < 0:
             continue  # a stalemate has no side to rescue
@@ -1305,14 +1309,14 @@ def reply_check(played: list[dict]) -> list[str]:
     ]
 
 
-def summarise(games: list[dict]) -> list[str]:
+def summarise(games: list[dict], seats: int) -> list[str]:
     played = [g for g in games if "decisions" in g]
     lines: list[str] = []
 
     # If a deviation only reshuffles the shared deck, each one is an independent
     # coin flip and the headline is just a maximum over however many were tried,
     # which is what `coin_flip` predicts from the pooled per-alternative rate.
-    head = headline(played)
+    head = headline(played, seats)
 
     n_dec = sum(len(g["decisions"]) for g in played)
     n_alt = sum(len(d["alts"]) for g in played for d in g["decisions"])
@@ -1509,7 +1513,7 @@ def summary_payload(
     docs and a re-print of the same run cannot disagree.
     """
     played = [g for g in games if "decisions" in g]
-    head = headline(played)
+    head = headline(played, CONFIG_BY_NAME[config].n_players)
     totals = {o.kind: o for o in type_outcomes(played)}
     by_phase = {name: {o.kind: o for o in type_outcomes(played, only=name)} for name in PHASES}
     pairs, dropped = denial_pairs(played)
@@ -1640,15 +1644,19 @@ def main() -> None:
             offset = 1 + max((g["game"] for g in pooled), default=-1)
             pooled += [{**g, "game": g["game"] + offset} for g in run["per_game"]]
             runs.append((path, run))
-        print("\n".join(summarise(pooled)))
-        if args.export_summary is None:
-            return
+        # Checked before the tables print, not only before they export: the seat
+        # count they are read against comes from the config, so pooling two of
+        # them would print one config's rates over the other's seats.
         configs = {run["config"] for _, run in runs}
         if len(configs) != 1:
             raise SystemExit(f"pooled runs disagree on the config: {sorted(configs)}")
+        config = configs.pop()
+        print("\n".join(summarise(pooled, CONFIG_BY_NAME[config].n_players)))
+        if args.export_summary is None:
+            return
         payload = summary_payload(
             pooled,
-            config=configs.pop(),
+            config=config,
             wall_seconds=sum(run.get("wall_seconds", 0.0) for _, run in runs),
             sources=[str(path) for path, _ in runs],
             kbest=runs[0][1]["kbest"],
@@ -1695,7 +1703,7 @@ def main() -> None:
     wall = time.perf_counter() - started
     games.sort(key=lambda g: g["game"])
 
-    lines = summarise(games)
+    lines = summarise(games, cfg.n_players)
     print()
     print("\n".join(lines))
     print(f"\nwall clock {wall:.1f}s over {args.workers} workers")

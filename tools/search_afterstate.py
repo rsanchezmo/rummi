@@ -1,6 +1,13 @@
 """One-turn lookahead over the afterstate value net: score finished turns, not moves.
 
+    python tools/average_checkpoints.py --series checkpoints/afterstate-sweep-s0 \
+        --updates 300 600 20 --out checkpoints/afterstate-sweep-s0-swa.pt
     python tools/search_afterstate.py checkpoints/afterstate-sweep-s0-swa.pt --games 120
+
+The `-swa` checkpoint is not something `tools/train_afterstate.py` writes -- it is
+the mean of that run's u300-u600 checkpoints, which is what
+`tools/average_checkpoints.py` above is for, and reproducing it is the first line
+of that command.
 
 `tools/train_afterstate.py` learns V over afterstates and plays the argmax over
 single macros. That policy is myopic in one exact way, and it is the way this file
@@ -160,8 +167,11 @@ class TurnSearch:
             finished = {macro: c for (_, macro), c in zip(plays, completions, strict=True)}
 
         # Ascending macro id and a strict improvement, so ties break exactly as the
-        # myopic `argmax` over the same options would.
-        best, best_value, chosen = -1, -np.inf, None
+        # myopic `argmax` over the same options would. Seeded with a real option
+        # rather than a sentinel: a value that comes back NaN satisfies no `>`, and
+        # `-1` would leave the loop as an action -- DRAW's mask column is always
+        # true and `expand` reads it as the last template, so nothing catches it.
+        best, best_value, chosen = options[0], -np.inf, None
         for i, macro in enumerate(options):
             completion = finished.get(macro)
             value = completion.value if completion is not None else float(values[i])

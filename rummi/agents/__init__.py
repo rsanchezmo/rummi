@@ -5,13 +5,13 @@ subclass :class:`~rummi.agents.base.PlanningAgent` if you decide a whole turn at
 once. Agents see an observation and a legal-action mask and nothing else -- see
 ``base.py`` for why that restriction is load-bearing.
 
-The bundled agents run from weakest to strongest: ``random`` (which on the
-standard config plays no differently from passing), ``greedy``, ``rearrange``,
-``learned``, ``frugal``, and ``optimal`` -- the last three statistically even in
-strength and separated by what they spend to get there. ``frugal`` asks the
-solver to repartition only where nothing else plays; ``learned`` carries the
-solver as one macro among many and lets a cloned network decide when to reach
-for it; ``optimal`` repartitions every turn.
+The bundled agents run from weakest to strongest: ``random`` and
+``weighted-random`` (which on the standard config play no differently from
+passing), ``greedy``, ``rearrange``, ``learned``, ``frugal``, and ``optimal`` --
+the last three statistically even in strength and separated by what they spend to
+get there. ``frugal`` asks the solver to repartition only where nothing else
+plays; ``learned`` carries the solver as one macro among many and lets a cloned
+network decide when to reach for it; ``optimal`` repartitions every turn.
 
 ``learned`` is the one rung that ships weights, so it exists only for the presets
 they were trained on -- see :mod:`rummi.agents.learned.clone`.

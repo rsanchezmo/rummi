@@ -154,6 +154,9 @@ def test_a_flat_value_still_plays_legally_and_terminates() -> None:
     def choose(obs, e: int, legal: np.ndarray) -> int:
         nonlocal decisions, longest
         macro, completion = search.choose(obs, e, legal)
+        # In range as well as legal: `legal[-1]` is DRAW's column and always true,
+        # so a sentinel escaping the ranking would pass a mask check on its own.
+        assert 0 <= macro < agent.n_macros, "the search returned no macro at all"
         assert legal[macro], "the search offered a macro the mask does not"
         decisions += 1
         if completion is not None:
@@ -172,3 +175,36 @@ def test_a_flat_value_still_plays_legally_and_terminates() -> None:
 
     assert decisions >= 200, f"only {decisions} decisions; the game barely moved"
     assert longest <= cfg.max_micro_per_turn, "a completion outran the budget that bounds it"
+
+
+def test_a_value_that_ranks_nothing_still_returns_a_legal_macro() -> None:
+    """A diverged net scores every row NaN, and NaN satisfies no comparison.
+
+    The ranking is a strict-improvement loop, so nothing is ever chosen and whatever
+    it was seeded with is what comes back. That has to be one of the options: `-1`
+    reads as DRAW to a mask check and as the last template to `expand`, so a search
+    that returned it would play a real set nobody chose.
+    """
+    cfg = STANDARD
+    agent = MacroAgent(cfg)
+    search = tool.TurnSearch(cfg, agent, lambda rows: np.full(len(rows), np.nan, np.float32))
+    env = FixedOpponentEnv(num_envs=4, cfg=cfg, seed=7, opponent="greedy")
+    decided = 0
+
+    def choose(obs, e: int, legal: np.ndarray) -> int:
+        nonlocal decided
+        macro, _ = search.choose(obs, e, legal)
+        assert 0 <= macro < agent.n_macros, f"the ranking came back with {macro}"
+        assert legal[macro], "the search offered a macro the mask does not"
+        decided += 1
+        return macro
+
+    agent.choose = choose
+    obs, info = env.reset()
+    agent.reset(4)
+    try:
+        for _ in range(60):
+            obs, _, _, _, info = env.step(agent.act(obs, np.asarray(info["action_mask"])))
+    finally:
+        env.close()
+    assert decided > 20, "no decision was reached, so nothing was tested"

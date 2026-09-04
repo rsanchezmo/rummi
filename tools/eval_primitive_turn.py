@@ -43,7 +43,7 @@ from rummi.agents.learned.repartition_net import Scorer as TemplateScorer
 from rummi.agents.learned.torch_net import TorchPolicy
 from rummi.agents.learned.two_phase_net import TwoPhaseScorer, two_phase_from_checkpoint
 from rummi.agents.macro import MacroAgent, by_value
-from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
+from rummi.evaluate.protocol import evaluate, suite_for
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -108,6 +108,17 @@ def main() -> None:
     cfg = CONFIG_BY_NAME[args.config]
     rng = np.random.default_rng(args.seed)
 
+    # Resolved before anything is loaded, so an unscorable config costs nothing.
+    # Every arm is built on `--config` and `evaluate` hands `build_agent` the
+    # *suite's* config, which a pre-built arm ignores -- so a mismatch is caught
+    # nowhere downstream and has to be caught here.
+    suite = None
+    if args.games:
+        try:
+            suite = suite_for(cfg)
+        except ValueError as unscorable:
+            p.error(str(unscorable))
+
     checkpoint = torch.load(args.init, weights_only=True)
     arch = Architecture(hidden=tuple(checkpoint["hidden"]))
     net = TorchPolicy(cfg, arch, seed=args.seed)
@@ -139,13 +150,13 @@ def main() -> None:
         shim = Shim(cfg, gates, rows)
         every = np.arange(len(rows))
         for beam in args.beam:
-            report = decode_report(cfg, scorer, gates, rows, beam, args.batch).summary()
+            decoded = decode_report(cfg, scorer, gates, rows, beam, args.batch).summary()
             stuck.append(
                 {
                     "arm": f"primitive (beam {beam})",
-                    "playable": report["committed"],
-                    "tiles": report["tiles"],
-                    "decodes_per_second": 1000 / max(report["ms_per_turn"], 1e-9),
+                    "playable": decoded["committed"],
+                    "tiles": decoded["tiles"],
+                    "decodes_per_second": 1000 / max(decoded["ms_per_turn"], 1e-9),
                 }
             )
         for beam in args.template_beam:
@@ -194,8 +205,7 @@ def main() -> None:
         print_length_table(lengths, args.beam)
 
     scores: list[dict] = []
-    if args.games:
-        suite = SUITE_BY_NAME["standard-greedy" if args.config == "standard" else "tiny"]
+    if suite is not None:
         wanted = None if args.arms == "all" else set(args.arms.split(","))
 
         def build(label: str, make) -> None:
