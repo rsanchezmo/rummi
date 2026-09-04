@@ -72,35 +72,28 @@ import argparse
 import dataclasses
 import json
 import pathlib
-import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 
 import numpy as np
-import torch
 
 from rummi.agents.base import Observation
 from rummi.agents.learned.afterstate import (
-    afterstate_batch,
     afterstate_dim,
     afterstate_obs,
     afterstate_rows,
     afterstate_view,
 )
+from rummi.agents.learned.afterstate_net import (
+    Value,
+    argmax_chooser,
+    load_value_net,
+    value_fn,
+)
 from rummi.agents.macro import Choose, MacroAgent, by_value, first_legal
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import RummiConfig
 from rummi.rules.observation import MICRO_COUNT
-
-# The net is the one the trainer saved, so it is read from where it is defined
-# rather than restated here: a second definition that drifted would load the same
-# weights into a different architecture and score them as if nothing had changed.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from train_afterstate import ValueNet
-
-Value = Callable[[np.ndarray], np.ndarray]
-"""``(n, afterstate_dim) -> (n,)``. Batched, because a whole search depth is scored
-in one forward pass and a per-row call would be most of the cost."""
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -264,19 +257,6 @@ class TurnSearch:
         return out
 
 
-def myopic(cfg: RummiConfig, agent: MacroAgent, value_of: Value) -> Choose:
-    """`train_afterstate.py`'s `scoring_choose`: argmax V over single afterstates."""
-
-    def choose(obs: Observation, env: int, legal: np.ndarray) -> int:
-        options = np.flatnonzero(legal)
-        if agent.repartition_macro is not None and legal[agent.repartition_macro]:
-            return int(agent.repartition_macro)
-        rows = afterstate_batch(cfg, obs, env, options.tolist(), agent)
-        return int(options[int(np.argmax(value_of(rows)))])
-
-    return choose
-
-
 class Timed:
     """A `Choose` that reports what it cost, so the two arms are comparable."""
 
@@ -296,21 +276,6 @@ class Timed:
     @property
     def rate(self) -> float:
         return self.decisions / self.seconds if self.seconds else float("nan")
-
-
-def load_net(path: pathlib.Path, cfg: RummiConfig) -> tuple[ValueNet, bool]:
-    """The checkpoint's net, refused rather than reshaped where it does not fit."""
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    dim = afterstate_dim(cfg)
-    if int(checkpoint["dim"]) != dim:
-        raise SystemExit(
-            f"{path}: afterstate dim {checkpoint['dim']} != this suite's {dim} "
-            f"(trained on config {checkpoint['cfg']})"
-        )
-    net = ValueNet(dim, tuple(checkpoint["hidden"]))
-    net.load_state_dict(checkpoint["state"])
-    net.eval()
-    return net, bool(checkpoint["repartition"])
 
 
 def main() -> None:
@@ -341,16 +306,13 @@ def main() -> None:
 
     suite = SUITE_BY_NAME[args.suite]
     cfg = suite.cfg
-    net, repartition = load_net(args.checkpoint, cfg)
-
-    def value_of(rows: np.ndarray) -> np.ndarray:
-        with torch.no_grad():
-            return net(torch.as_tensor(rows)).numpy()
+    net, repartition = load_value_net(args.checkpoint, cfg)
+    value_of = value_fn(net)
 
     label = "myopic" if args.myopic else f"search-b{args.beam}"
     played = MacroAgent(cfg, repartition=repartition)
     if args.myopic:
-        chooser = Timed(myopic(cfg, played, value_of))
+        chooser = Timed(argmax_chooser(cfg, played, value_of))
         search: TurnSearch | None = None
     else:
         search = TurnSearch(cfg, played, value_of, beam=args.beam)

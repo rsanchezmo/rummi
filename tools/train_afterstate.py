@@ -86,8 +86,8 @@ import torch
 from torch import nn
 
 from rummi.agents.learned.afterstate import afterstate_batch, afterstate_dim
+from rummi.agents.learned.afterstate_net import ValueNet, argmax_chooser
 from rummi.agents.macro import (
-    Choose,
     MacroAgent,
     by_value,
     extend_offset,
@@ -99,28 +99,6 @@ from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RewardMode, RummiConfig
 
 BLOCKS = ("new_set", "extend", "steal", "repart", "end", "draw")
-
-
-class ValueNet(nn.Module):
-    """One scalar over an afterstate. Deterministic from `--seed` alone.
-
-    Plain MLP on purpose: the question this run asks is whether outcome regression
-    over afterstates ranks macros at all, and any architecture that answered it
-    would leave the same question about the plain one.
-    """
-
-    def __init__(self, dim: int, hidden: tuple[int, ...] = (256, 256)) -> None:
-        super().__init__()
-        layers: list[nn.Module] = []
-        width = dim
-        for size in hidden:
-            layers += [nn.Linear(width, size), nn.ReLU()]
-            width = size
-        layers.append(nn.Linear(width, 1))
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x).squeeze(-1)
 
 
 class Replay:
@@ -341,18 +319,6 @@ def main() -> None:
     def learner_choose(obs, env: int, legal: np.ndarray) -> int:
         return pick(obs, env, legal, epsilon)
 
-    def scoring_choose(_agent: MacroAgent) -> Choose:
-        """Deterministic and stateless: a published score has to be reproducible."""
-
-        def choose(obs, env: int, legal: np.ndarray) -> int:
-            options = np.flatnonzero(legal)
-            if _agent.repartition_macro is not None and legal[_agent.repartition_macro]:
-                return int(_agent.repartition_macro)
-            rows = afterstate_batch(cfg, obs, env, options.tolist(), _agent)
-            return int(options[int(np.argmax(value_of(rows)))])
-
-        return choose
-
     env = FixedOpponentEnv(
         num_envs=args.envs, cfg=cfg, seed=args.seed, opponent=args.opponent
     )
@@ -506,7 +472,7 @@ def main() -> None:
             "standard-greedy" if args.config == "standard" else "tiny"
         ]
         scored = MacroAgent(cfg, repartition=args.repartition)
-        scored.choose = scoring_choose(scored)
+        scored.choose = argmax_chooser(cfg, scored, value_of)
         # `by_value` reproducing its published score inside this run is the check
         # that the harness did not move under the learned row.
         arms = (

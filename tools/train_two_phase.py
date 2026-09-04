@@ -59,7 +59,6 @@ import numpy as np
 import torch
 from torch import nn
 
-from rummi.agents.base import Observation, table
 from rummi.agents.learned.repartition_net import (
     apply_template,
     candidate_features,
@@ -72,6 +71,7 @@ from rummi.agents.learned.repartition_net import (
     stop_action,
 )
 from rummi.agents.learned.set_encoder import EncoderSpec
+from rummi.agents.learned.solver_free import PickerMacroAgent
 from rummi.agents.learned.two_phase_net import (
     TwoPhaseNet,
     TwoPhaseScorer,
@@ -89,7 +89,6 @@ from rummi.agents.learned.two_phase_net import (
 from rummi.agents.macro import MacroAgent, by_value
 from rummi.evaluate.protocol import SUITE_BY_NAME, evaluate
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
-from rummi.rules.observation import MICRO_COUNT
 
 
 class TwoPhase:
@@ -283,40 +282,14 @@ class TwoPhase:
         )
 
 
-class TwoPhaseRepartition(MacroAgent):
-    """`by_value`, with the stuck-state solve answered by the two-phase decode.
-
-    The same arm as `train_repartition.NeuralRepartition` with the decoder swapped,
-    so the ruler compares action spaces and nothing else.
-    """
+class TwoPhaseRepartition(PickerMacroAgent):
+    """`by_value` over the decode. The same arm as `train_repartition`'s with the
+    decoder swapped, so the ruler compares action spaces and nothing else."""
 
     def __init__(
         self, cfg: RummiConfig, scorer: TwoPhaseScorer, beam: int = 1, monotone: bool = True
     ) -> None:
-        super().__init__(cfg, choose=by_value(cfg), repartition=True)
-        self.scorer = scorer
-        self.beam = beam
-        self.monotone = monotone
-        self.asked = 0
-        self.answered = 0
-
-    def _repartition(self, obs: Observation, env: int) -> list[int]:
-        from rummi.solver.to_actions import plan
-
-        cfg = self.cfg
-        board = np.asarray(table(obs)[env])
-        rack = np.asarray(obs["rack"][env]).astype(np.int64)
-        self.asked += 1
-        found = decode_two_phase(cfg, self.scorer, rack, board, self.beam, self.monotone)
-        if found is None or found.tiles_played < 1:
-            return []
-        actions = plan(cfg, board, list(found.sets), found.played)
-        spent = int(np.asarray(obs["scalars"])[env, MICRO_COUNT])
-        if len(actions) > cfg.max_micro_per_turn - spent:
-            return []
-        actions.pop()
-        self.answered += 1
-        return actions
+        super().__init__(cfg, scorer, choose=by_value(cfg), beam=beam, monotone=monotone)
 
 
 def playable_rate(
