@@ -10,12 +10,12 @@ legal macros lead to, which is TD-Gammon's shape rather than an action head's.
 Nothing about the rules is restated. The slot verdicts come from the env's own
 :func:`~rummi.env.numpy.sets.summarize`, the columns are indexed by the ``F_*``
 names in :mod:`rummi.rules.observation`, and the scaling is
-:func:`~rummi.agents.learned.features.feature_scale`. What *is* mirrored is where
-the tiles go: which ones a macro plays (:meth:`MacroAgent.expand`) and which slot
-each new set lands in (:func:`rummi.solver.to_actions.plan` keeps a set already on
-the table, dissolves the rest and fills the lowest free slot). Being a mirror it
-can drift, so `tests/test_afterstate.py` plays real games and holds each
-prediction against the observation the env actually reports at the next decision.
+:func:`~rummi.agents.learned.features.feature_scale`. What *is* mirrored is which
+tiles a macro plays (:meth:`MacroAgent.expand`); where they land is not mirrored at
+all but taken from :func:`rummi.solver.to_actions.allocate_slots`, the one place
+that decides it. Being a mirror it can still drift, so `tests/test_afterstate.py`
+plays real games and holds each prediction against the observation the env actually
+reports at the next decision.
 
 Two macros are deliberately not reconstructed.
 
@@ -35,7 +35,6 @@ has to rank.
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Sequence
 
 import numpy as np
@@ -65,7 +64,7 @@ from rummi.rules.observation import (
     POOL_SIZE,
     SLOT_FEATURES,
 )
-from rummi.solver.to_actions import Content, slot_contents
+from rummi.solver.to_actions import Content, allocate_slots, slot_contents
 
 ACTION_KINDS = 3
 """Width of the action-kind one-hot appended to every afterstate row."""
@@ -165,39 +164,35 @@ def _lay_out(
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """The table the expansion reaches, the slots it creates, and what it spends.
 
-    Where a set lands follows from :func:`~rummi.solver.to_actions.plan`'s
-    allocation and not from the target's own order, and the observation reports
-    slots by position -- so getting this wrong is a silent, shape-clean mismatch
+    The allocation is read from :func:`~rummi.solver.to_actions.allocate_slots`
+    rather than restated, because the observation reports slots by position and a
+    disagreement about which slot a set lands in is a silent, shape-clean mismatch
     in every ``slot_features`` column.
     """
-    wanted: Counter[Content] = Counter(tuple(sorted(s)) for s in target)
-    keep: set[int] = set()
-    for slot, content in enumerate(current):
-        if content and wanted[content] > 0:
-            wanted[content] -= 1
-            keep.add(slot)
-
-    dissolved = [
-        slot for slot, content in enumerate(current) if content and slot not in keep
-    ]
-    fresh = list(wanted.elements())
-    free = sorted([slot for slot, content in enumerate(current) if not content] + dissolved)
+    alloc = allocate_slots(list(current), target)
 
     out = np.array(board, dtype=np.int16, copy=True)
-    out[dissolved] = EMPTY
+    out[list(alloc.dissolve)] = EMPTY
     created = np.zeros(cfg.max_sets, dtype=bool)
-    for content, slot in zip(fresh, free, strict=False):
-        row = np.full(cfg.max_set_len, EMPTY, dtype=np.int16)
-        # Kinds ascending, EMPTY last: what the engine sorts a slot into after
-        # every ASSIGN.
-        row[: len(content)] = content
-        out[slot] = row
+    for slot, content in alloc.keep.items():
+        out[slot] = _row(cfg, content)
+    for content, slot in zip(alloc.fresh, alloc.free, strict=False):
+        out[slot] = _row(cfg, content)
+        # Only a slot that was empty counts as new, exactly as the engine's own
+        # ASSIGN records it -- a set morphed in place keeps whatever it was.
         created[slot] = True
 
-    # Only PLACE, DISSOLVE and ASSIGN are charged against the micro budget; the
-    # trailing END_TURN is what `expand` drops from every macro.
-    spent = len(dissolved) + n_place + sum(len(content) for content in fresh)
-    return out, created, spent
+    # `micro_cost` excludes the trailing END_TURN, which is what `expand` drops
+    # from every macro.
+    return out, created, alloc.micro_cost(n_place)
+
+
+def _row(cfg: RummiConfig, content: Content) -> np.ndarray:
+    """One slot row: kinds ascending, ``EMPTY`` last, which is what the engine
+    sorts a slot into after every ``ASSIGN``."""
+    row = np.full(cfg.max_set_len, EMPTY, dtype=np.int16)
+    row[: len(content)] = content
+    return row
 
 
 def afterstate_obs(

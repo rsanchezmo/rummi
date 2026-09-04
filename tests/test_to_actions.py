@@ -1,8 +1,13 @@
 """The plan translator, and through it the completeness of the action space.
 
-If every table CP-SAT proposes can be reached by PLACE/DISSOLVE/ASSIGN within the
-per-turn budget, then the micro-action decomposition loses nothing: no turn the
+If every table CP-SAT proposes can be reached by PLACE/PICK/DISSOLVE/ASSIGN within
+the per-turn budget, then the micro-action decomposition loses nothing: no turn the
 rules permit is inexpressible in the MDP.
+
+The other half is length, which is why the three renderings below are pinned to an
+exact action count: a standing set the target only lengthens or only shortens is
+morphed in place, and a plan that dissolved it would be legal and several times
+longer -- the difference a student imitating these sequences is taught.
 """
 
 from collections import Counter
@@ -60,6 +65,91 @@ def test_untouched_sets_are_left_alone():
         "nothing needed dissolving"
     )
     assert sum(1 for a in actions if a < C.n_kinds) == 3
+
+
+def _play(cfg, table_rows, rack_kinds, target, played):
+    """Replay a plan on a real state and hand back the table it reached."""
+    from tests.conftest import rebalance_pool
+
+    s = reset(cfg, 1, seed=0)
+    s.racks[:, 0] = 0
+    s.racks[0, 0] = _rack(cfg, rack_kinds)
+    s.table_sets[0] = _table(cfg, table_rows)
+    s.table_snapshot[:] = s.table_sets
+    s.melded[:] = True
+    rebalance_pool(s)
+
+    actions = plan(cfg, s.table_sets[0], target, played)
+    for action in actions:
+        mask = legal_actions(s)
+        assert mask[0, action], f"planned action {action} was illegal"
+        step(s, np.array([action]), mask)
+    s.check_invariants()
+    return actions, s
+
+
+def test_a_lay_off_extends_the_standing_set_rather_than_rebuilding_it():
+    """The commonest move in the game: PLACE, ASSIGN onto the slot, END_TURN.
+
+    Dissolving the receiving set and laying it out again reaches the same table in
+    seven actions where the mask allows three.
+    """
+    run = [kind_of(C, 0, n) for n in (1, 2, 3)]
+    played = np.zeros(C.n_kinds, dtype=np.int16)
+    played[kind_of(C, 0, 4)] = 1
+
+    actions, s = _play(
+        C, [run], [kind_of(C, 0, 4)],
+        [tuple(kind_of(C, 0, n) for n in (1, 2, 3, 4))], played,
+    )
+    assert len(actions) == 3
+    assert not [a for a in actions if C.dissolve_offset <= a < C.assign_offset]
+    assert not [a for a in actions if C.pick_offset <= a < C.dissolve_offset]
+    assert _contents(s.table_sets[0]) == Counter(
+        {tuple(sorted(kind_of(C, 0, n) for n in (1, 2, 3, 4))): 1}
+    )
+
+
+def test_a_shortened_set_is_picked_from_rather_than_dissolved():
+    """A steal leaves the donor shorter, and PICK is the action that says so."""
+    donor = [kind_of(C, 0, n) for n in (5, 6, 7, 8)]
+    rack = [kind_of(C, 1, 8), kind_of(C, 2, 8)]
+    played = np.zeros(C.n_kinds, dtype=np.int16)
+    for kind in rack:
+        played[kind] = 1
+    target = [
+        tuple(kind_of(C, 0, n) for n in (5, 6, 7)),
+        tuple(sorted((kind_of(C, 0, 8), *rack))),
+    ]
+
+    actions, s = _play(C, [donor], rack, target, played)
+    picks = [a for a in actions if C.pick_offset <= a < C.dissolve_offset]
+    assert len(picks) == 1
+    assert not [a for a in actions if C.dissolve_offset <= a < C.assign_offset]
+    assert len(actions) == 7
+    assert _contents(s.table_sets[0]) == Counter(tuple(sorted(x)) for x in target)
+
+
+def test_a_target_that_is_neither_longer_nor_shorter_still_dissolves():
+    """Morphing only reaches one direction at a time, so a different set rebuilds.
+
+    The mask has no action that swaps a tile, and picking one out and assigning
+    another in would cost what the dissolve costs anyway.
+    """
+    run = [kind_of(C, 0, n) for n in (5, 6, 7)]
+    rack = [kind_of(C, 0, 4), kind_of(C, 0, 8), kind_of(C, 0, 9)]
+    played = np.zeros(C.n_kinds, dtype=np.int16)
+    for kind in rack:
+        played[kind] = 1
+    target = [
+        tuple(kind_of(C, 0, n) for n in (4, 5, 6)),
+        tuple(kind_of(C, 0, n) for n in (7, 8, 9)),
+    ]
+
+    actions, s = _play(C, [run], rack, target, played)
+    assert [a for a in actions if C.dissolve_offset <= a < C.assign_offset]
+    assert not [a for a in actions if C.pick_offset <= a < C.dissolve_offset]
+    assert _contents(s.table_sets[0]) == Counter(tuple(sorted(x)) for x in target)
 
 
 def test_an_unbalanced_plan_is_rejected():
