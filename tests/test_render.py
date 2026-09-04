@@ -1,6 +1,7 @@
 """Renderers: correctness of the shared view model, dirty tracking, and degradation."""
 
 import io
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -290,3 +291,43 @@ def test_storage_order_is_left_alone_for_pick():
     slot = view(s, 0).slots[0]
     assert list(slot.tiles) == sorted(kinds)
     assert slot.shown != slot.tiles, "this case should differ, or the test proves nothing"
+
+
+def _render_docs():
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+    import render_docs
+
+    return render_docs
+
+
+def test_a_recording_deals_its_agents_round_the_seats():
+    """One name per seat, cycled: `optimal,frugal` has to mean alternating seats at
+    three and four as well as two, or a recording of a 4p game would be two agents
+    and two empty chairs."""
+    from rummi.rules.config import STANDARD_3P, STANDARD_4P
+
+    seat_agents = _render_docs().seat_agents
+    for cfg, expected in (
+        (STANDARD, ["greedy", "rearrange"]),
+        (STANDARD_3P, ["greedy", "rearrange", "greedy"]),
+        (STANDARD_4P, ["greedy", "rearrange", "greedy", "rearrange"]),
+    ):
+        assert [a.name for a in seat_agents(cfg, ["greedy", "rearrange"])] == expected
+    assert [a.name for a in seat_agents(STANDARD_3P, ["greedy"])] == ["greedy"] * 3
+
+
+def test_a_recording_samples_one_frame_per_committed_turn():
+    """What makes the figures readable: a turn is the unit of play, so a frame is a
+    board that changed rather than a tile that moved."""
+    rd = _render_docs()
+    cap = 8
+    frames = list(rd.game_frames(TINY_GROUPS, 5, rd.seat_agents(TINY_GROUPS, ["greedy"]), cap))
+
+    turns = [f.turn for f in frames]
+    assert turns[0] == 0, "the opening position is the first frame"
+    # A frame per committed turn, and the last turn repeats when the game ends on it.
+    assert {b - a for a, b in pairwise(turns)} <= {0, 1}
+    assert frames[-1].done or turns[-1] == cap

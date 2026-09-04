@@ -12,8 +12,14 @@ The animation samples one frame per *committed turn*, matching the library's own
 ``RenderOn.TURN``: a turn is the meaningful unit of play, so every frame is a
 real board change rather than a single tile moving.
 
-    python tools/render_docs.py --format gif --out docs/render.gif
+    python tools/render_docs.py --format gif --out docs/render
     python tools/render_docs.py --format png --out docs/render.png
+    python tools/render_docs.py --format gif --view window --config standard_3p \
+        --agents optimal,frugal --out docs/game-3p.gif
+
+``--out`` is a *stem* for a gif of both views, which is written as
+``<stem>-terminal.gif`` and ``<stem>-window.gif``; asking for one view makes it
+the path of that one file.
 """
 
 from __future__ import annotations
@@ -34,7 +40,11 @@ from rummi.env.numpy.masks import legal_actions
 from rummi.render.pygame_view import PygameView
 from rummi.render.text import Palette, frame
 from rummi.render.view_model import GameView, view
-from rummi.rules.config import STANDARD
+from rummi.rules.config import CONFIG_BY_NAME
+
+CONFIGS = {name: CONFIG_BY_NAME[name] for name in ("standard", "standard_3p", "standard_4p")}
+"""What a game can be recorded on: the three registered Gymnasium ids, which are
+the three a published score exists for."""
 
 TERM_BG = (18, 20, 24)
 TERM_FG = (208, 212, 220)
@@ -146,18 +156,39 @@ def compose(left, right, gap: int = 26, pad: int = 26, label_size: int = 17):
     return page
 
 
-def game_frames(cfg, seed: int, policy_name: str, max_turns: int):
-    """Yield one ``GameView`` per committed turn, plus the opening position."""
-    from rummi.bench.fuzz import make_policy
+def seat_agents(cfg, names: list[str]) -> list:
+    """One agent per seat, cycling the names given.
 
-    policy = make_policy(cfg, policy_name, 0)
+    A single name plays every seat, and ``optimal,frugal`` alternates them however
+    many seats the config has -- which is what lets one flag cover 2p, 3p and 4p.
+    """
+    from rummi.agents import build
+
+    agents = [build(names[seat % len(names)], cfg) for seat in range(cfg.n_players)]
+    for agent in agents:
+        agent.reset(1)
+    return agents
+
+
+def game_frames(cfg, seed: int, agents: list, max_turns: int):
+    """Yield one ``GameView`` per committed turn, plus the opening position.
+
+    The seats are dispatched through ``act_by_seat``, the one multi-seat bridge:
+    it hands each agent the observation it is entitled to see, so a recording
+    shows a game that could have been scored rather than one played from the
+    state itself.
+    """
+    from rummi.agents.base import act_by_seat
+    from rummi.env.observation import encode
+
     state = reset(cfg, 1, seed=seed)
     yield view(state, 0, legal_actions(state))
 
     last_turn = 0
     for _ in range(60_000):
         mask = legal_actions(state)
-        step(state, policy(state, mask), mask)
+        actions, _ = act_by_seat(agents, cfg, state.current, state.done, mask, encode(state))
+        step(state, actions, mask)
         turn = int(state.turn_count[0])
         if turn != last_turn:
             last_turn = turn
@@ -267,8 +298,16 @@ def main() -> None:
         "--out", type=Path, default=Path("docs/render"),
         help="gif: stem, written as <stem>-terminal.gif and <stem>-window.gif; png: full path",
     )
+    p.add_argument("--config", choices=sorted(CONFIGS), default="standard")
     p.add_argument("--seed", type=int, default=17)
-    p.add_argument("--policy", default="optimal", help="who plays; optimal ends by winning")
+    p.add_argument(
+        "--agents", default="optimal",
+        help="registry names, comma separated, dealt round the seats; optimal ends by winning",
+    )
+    p.add_argument(
+        "--view", choices=["window", "terminal", "both"], default="both",
+        help="gif: which panel to write; one of them makes --out that file's path",
+    )
     p.add_argument("--turns", type=int, default=150, help="png: which turn to capture")
     p.add_argument("--max-turns", type=int, default=90, help="gif: cap on frames")
     p.add_argument("--tile", type=int, nargs=2, default=(26, 36))
@@ -283,33 +322,38 @@ def main() -> None:
     p.add_argument("--hold", type=int, default=2600, help="gif: hold on first and last")
     args = p.parse_args()
 
+    cfg = CONFIGS[args.config]
     pygame.init()
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    window = PygameView(STANDARD, headless=True, tile_w=args.tile[0], tile_h=args.tile[1])
+    window = PygameView(cfg, headless=True, tile_w=args.tile[0], tile_h=args.tile[1])
 
     if args.format == "png":
-        page = panel(window, interesting_state(STANDARD, args.seed, args.turns), args.font)
+        page = panel(window, interesting_state(cfg, args.seed, args.turns), args.font)
         pygame.image.save(page, str(args.out))
         print(f"wrote {args.out}  {page.get_size()}")
     else:
+        views = ("terminal", "window") if args.view == "both" else (args.view,)
         # Both animations are built from one pass over the game, so frame N of
         # each is the same turn. Identical frame counts and durations are what
         # keep two separately-looping GIFs from drifting apart in a browser.
-        terminal_pages, window_pages = [], []
-        for snapshot in game_frames(STANDARD, args.seed, args.policy, args.max_turns):
-            terminal_pages.append(
-                panelize(render_terminal(frame(snapshot, Palette(True)), size=args.font))
-            )
-            window.draw(snapshot)
-            window_pages.append(panelize(window._surface.copy()))
+        pages: dict[str, list] = {name: [] for name in views}
+        agents = seat_agents(cfg, args.agents.split(","))
+        for snapshot in game_frames(cfg, args.seed, agents, args.max_turns):
+            if "terminal" in pages:
+                pages["terminal"].append(
+                    panelize(render_terminal(frame(snapshot, Palette(True)), size=args.font))
+                )
+            if "window" in pages:
+                window.draw(snapshot)
+                pages["window"].append(panelize(window._surface.copy()))
 
-        for pages, suffix, scale in (
-            (terminal_pages, "terminal", args.scale),
-            (window_pages, "window", args.window_scale),
-        ):
-            out = args.out.with_name(f"{args.out.name}-{suffix}.gif")
-            write_gif(pages, out, scale, args.ms, args.hold)
-            print(f"wrote {out}  {len(pages)} frames  {out.stat().st_size / 1e6:.1f} MB")
+        for name, scale in (("terminal", args.scale), ("window", args.window_scale)):
+            if name not in pages:
+                continue
+            # One view goes exactly where it was asked for; two need a name each.
+            out = args.out if len(views) == 1 else args.out.with_name(f"{args.out.name}-{name}.gif")
+            write_gif(pages[name], out, scale, args.ms, args.hold)
+            print(f"wrote {out}  {len(pages[name])} frames  {out.stat().st_size / 1e6:.1f} MB")
     window.close()
 
 

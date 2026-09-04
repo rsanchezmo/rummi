@@ -2,6 +2,11 @@
 
 [![ci](https://github.com/rsanchezmo/rummi/actions/workflows/ci.yml/badge.svg)](https://github.com/rsanchezmo/rummi/actions/workflows/ci.yml)
 
+![A full two-player game, optimal against frugal](docs/game-2p.gif)
+
+The top of the ladder playing a whole game out: `optimal` in seat 0 against
+`frugal` in seat 1, seed 0, one frame per committed turn.
+
 A Rummikub **environment** for reinforcement learning, with opponents to play
 against. Batch-native from the ground up, wrapped as a Gymnasium vector env, and
 implemented three times over — NumPy, torch and JAX — each verified against the
@@ -432,6 +437,14 @@ itself on the rungs below it, and the interesting distance is `greedy` to
 — the observation widens with the table, so a 2p net cannot be pointed at a 3p
 suite and is refused rather than reshaped. That all three land on their teacher
 is the point of the column: the recipe transfers, the weights do not.
+
+| `Rummi-3p-v0` | `Rummi-4p-v0` |
+|:--:|:--:|
+| ![A full three-player game](docs/game-3p.gif) | ![A full four-player game](docs/game-4p.gif) |
+
+The same two agents at the other seat counts, dealt alternately round the table —
+`optimal`, `frugal`, `optimal`, and again — seed 1 in both, one frame per
+committed turn.
 
 ## Scoring yourself
 
