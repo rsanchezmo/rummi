@@ -11,7 +11,7 @@ rediscover or easy to get wrong — everything else is in `README.md` and
 
 ```bash
 source .venv/bin/activate
-pytest -n auto                                           # 493 tests, ~20s (76s serial)
+pytest -n auto                                           # 744 tests, ~80s parallel
 python -m rummi.bench.fuzz --policy greedy --games 500    # invariant fuzzing
 python -m rummi.evaluate.run --agent greedy               # agent strength
 python -m rummi.bench.bench_backends --compile            # throughput
@@ -362,9 +362,13 @@ the rack. Do not "unify" them; the difference is the point.
 Things that look like slack but are not:
 
 - **The table area is sized from the config, not from what games do.** A set with
-  no rectangle cannot be clicked, and that was a real bug. `rows_needed` bounds it
-  by sweeping uniform tables — uniform widths are the worst case for greedy
-  wrapping. Shrinking it to a typical game brings the bug back.
+  no rectangle cannot be clicked, and that was a real bug. `rows_needed` searches
+  every way of spending the config's two budgets -- `max_sets` cards and the deck's
+  tiles -- because *mixed* widths are the worst case for greedy wrapping: a slot
+  under `min_set` is still drawn `min_set` wide, so a one-tile card is cheap and
+  still shoves the widest run the deck allows onto the next row. The window is
+  widened until that worst case fits `TARGET_ROWS`. Shrinking it to a typical game
+  brings the bug back.
 - **Cards are never narrower than `min_set` tiles**, so a two-tile set mid-
   rearrangement still has room for its caption.
 - **The rack has two tiers whether or not the hand needs both**, as a real one
@@ -390,11 +394,18 @@ would put it straight back.
 
 ## Figures
 
-`docs/render.gif` and `docs/render.png` are generated, and regeneration is
-byte-identical so refreshing them does not churn the diff:
+`docs/render-terminal.gif` and `docs/render-window.gif` are generated from one
+seeded greedy game, and `docs/game-{2p,3p,4p}.gif` from `optimal` and `frugal` dealt
+alternately round the seats. Regeneration is byte-identical so refreshing them does
+not churn the diff -- with `optimal` in the frame that rests on the solver's
+deterministic time limit. For the pair `--out` is a stem; for a single `--view` it is
+the file:
 
 ```bash
-python tools/render_docs.py --format gif --out docs/render.gif
+python tools/render_docs.py --format gif --out docs/render
+python tools/render_docs.py --format gif --view window --config standard    --agents optimal,frugal --seed 0 --out docs/game-2p.gif
+python tools/render_docs.py --format gif --view window --config standard_3p --agents optimal,frugal --seed 1 --out docs/game-3p.gif
+python tools/render_docs.py --format gif --view window --config standard_4p --agents optimal,frugal --seed 1 --out docs/game-4p.gif
 ```
 
 `.gitignore` excludes `*.png` except under `docs/`.
