@@ -35,7 +35,7 @@ tells it.
 |---|---|---|
 | [What is a game of standard Rummikub made of?](../README.md#the-game-in-numbers) | Mostly forced draws, decided by two tiles, and the seat matters more than the agent. | the seat decides **68%** of deals |
 | [Is playing the best available turn the ceiling?](#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | Yes, three ways: CP-SAT, its macro-space rendering, and a 233k clone of that rendering are tied -- the ceiling paragraph inside that section. | **48.7%** head to head, n=600 |
-| [How much is left above it for any strategy to find?](#oracle-one-step-regret-the-bound-the-nulls-were-missing) | Nothing. 39,903 alternative whole turns rolled out to the end against the real deck; every deviation type is at or below zero. | same tiles, other table: **-0.2% +-0.5%** |
+| [How much is left above it for any strategy to find?](#oracle-one-step-regret-the-bound-the-nulls-were-missing) | Nothing. 39,960 alternative whole turns rolled out to the end against the real deck; every deviation type is at or below zero. | same tiles, other table: **-0.2% +-0.5%** |
 | [Can you shut an opponent out of going out?](#endgame-denial-the-cell-that-survived-the-oracle-and-the-reason-it-is-empty) | The sign is there and the cell is empty: a solved reply reads the table's tile multiset, not its arrangement, so 91.5% of equal-tile alternatives provably cannot move the door. | +11 / +20 / +18pp, fired 0.03-0.11 times per seat-game -- worth **0.2-0.5pp** |
 | [Does the table you leave behind pay?](#board-shaping-the-axis-the-oracle-never-bounded-and-why-it-has-no-sign) | Null by mechanism: the table is common property, so `left - met` is 0.00 +-0.00 and any restriction pays its own cost. | **+1.06pp +-1.57** against a coin flip over the same ties |
 | [Is a rack worth more than its size?](#rack-potential-the-asymmetric-half-and-why-a-recurring-decision-closes-it) | Null by mechanism: a decision recurs after every set, so what a turn "keeps" it plays before ending. | the axis bounded at **~1.8pp** |
@@ -1034,7 +1034,7 @@ tile, the best turn that takes no existing set apart, and `DRAW`.
 
 300 deals, `frugal` vs `frugal` on `STANDARD` at seed base 91,000: 65.0 turns per
 deal, 42% of turn boundaries a real decision and the rest a forced `DRAW`, 8,185
-decisions, 2.32 tiles shed per playing turn, **39,903 alternatives each rolled out
+decisions, 2.32 tiles shed per playing turn, **39,960 alternatives each rolled out
 to the end** in 35 minutes on ten cores. No stalemate, no truncation and no
 harness failure in any of them.
 
@@ -1059,9 +1059,9 @@ interval clustered by deal because alternatives inside one share its deck:
 | `cpsat_max` (a different optimum) | 1,248 | 11.4% | +0.0% +-2.3% |
 | **`same_tiles_other_table`** | **15,801** | **3.6%** | **-0.2% +-0.5%** |
 | `fewer_tiles` (max-1, max-2, one) | 5,886 | 27.5% | -3.1% +-1.5% |
-| `frozen_table` (no rearrangement) | 768 | 27.3% | -5.9% +-3.9% |
+| `frozen_table` (no rearrangement) | 818 | 26.9% | -6.1% +-3.8% |
 | `draw` (hold everything) | 8,185 | 26.3% | -0.4% +-1.1% |
-| `__base_replay__` (the played turn, re-derived) | 8,015 | **0.0%** | +0.0% +-0.0% |
+| `__base_replay__` (the played turn, re-derived) | 8,022 | **0.0%** | +0.0% +-0.0% |
 
 **The free parameter every board-shaping arm aimed at is worth nothing, and this
 is the tightest interval in this document.** Shedding the same number of tiles
@@ -1071,9 +1071,9 @@ denial section bounded that axis at ~1.6pp by exhausting a tie-break; the oracle
 closes it at half a point by exhausting the *choice*.
 
 Two rows are the positive control that makes that null readable. `fewer_tiles` and
-`frozen_table` change the winner eight times as often and lose, -3.1% and -5.9%,
+`frozen_table` change the winner eight times as often and lose, -3.1% and -6.1%,
 so the harness does detect a worse turn when handed one. And `__base_replay__` is
-the exactness check: 8,015 alternatives that CP-SAT re-derived to the same table
+the exactness check: 8,022 alternatives that CP-SAT re-derived to the same table
 and the same played tiles, every one of them reproducing the baseline outcome
 exactly.
 
@@ -1153,7 +1153,7 @@ Two checks make those numbers usable, and both print with the tables.
   turn-count checks that were already there.
 
 The 300 deals are the *same* 300 (seed base 91,000, k-best 4), and the whole of the
-previous section's output is reproduced line for line: 8,185 decisions, 39,903
+previous section's output is reproduced line for line: 8,185 decisions, 39,960
 alternatives, 91.3% / 93.0% headline, every type and phase cell. The two summaries
 differ only by the sections added below. 3,457 s on six workers.
 
@@ -1253,8 +1253,14 @@ whole reply in 96.0% of the turns it is offered one.
 | `cpsat_max` | +0.0% +-2.3% (1,248) | -1.3% +-3.0% (769) |
 | `same_tiles_other_table` | -0.2% +-0.5% (15,801) | **-1.2% +-1.1% (7,280)** |
 | `fewer_tiles` | -3.1% +-1.5% (5,886) | -1.0% +-1.6% (3,820) |
-| `frozen_table` | -5.9% +-3.9% (768) | -5.8% +-4.2% (701) |
+| `frozen_table` | -6.1% +-3.8% (818) | -5.8% +-4.2% (701) |
 | `draw` | -0.4% +-1.1% (8,185) | -1.2% +-1.7% (3,822) |
+
+The two-seat column is the re-measure under the solver's freeze fix -- `freeze_table`
+used to let a joker take a real tile out of a frozen set in about one solve in eight,
+so the arm was not quite frozen -- and it moved the row from 768 / -5.9% +-3.9% to
+818 / -6.1% +-3.8%, inside its own interval. The three- and four-seat `frozen_table`
+cells predate that fix and stand as measured; every other type is untouched by it.
 
 **Every type is at or below zero at three seats as well, and the free parameter is
 further below it than at two.** By phase, `same_tiles_other_table` reads -7.3%

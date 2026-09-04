@@ -211,7 +211,7 @@ that baseline on that deck, with no variance to average away. Every alternative
 is a turn CP-SAT built under an added restriction and then run one primitive
 action at a time against the env's own mask, so the engine accepts it as a turn.
 
-300 deals, 8,185 playing decisions, **39,903 alternative turns each rolled out to
+300 deals, 8,185 playing decisions, **39,960 alternative turns each rolled out to
 the end**:
 
 ![Win-rate change of one-turn deviations, by deviation type and seat count](docs/charts/regret.svg)
@@ -221,9 +221,9 @@ the end**:
 | a different CP-SAT optimum | 1,248 | 11.4% | +0.0 ±2.3 |
 | **the same tiles onto a different table** | **15,801** | **3.6%** | **−0.2 ±0.5** |
 | fewer tiles shed | 5,886 | 27.5% | −3.1 ±1.5 |
-| no rearrangement at all | 768 | 27.3% | −5.9 ±3.9 |
+| no rearrangement at all | 818 | 26.9% | −6.1 ±3.8 |
 | `DRAW` instead of playing | 8,185 | 26.3% | −0.4 ±1.1 |
-| the played turn, re-derived | 8,015 | 0.0% | +0.0 ±0.0 |
+| the played turn, re-derived | 8,022 | 0.0% | +0.0 ±0.0 |
 
 - **The free parameter every table-shaping idea aimed at is worth nothing.**
   Shedding the same tiles onto a different table is **−0.2 ±0.5pp** over 15,801
@@ -232,7 +232,7 @@ the end**:
   at only 24.3% of decisions.
 - **The instrument detects a worse turn when handed one.** Shedding fewer tiles
   loses 3.1pp (−8.3 in the endgame) and freezing the table 5.9 (−12.4), at eight
-  times the winner-change rate. The last row is the exactness check: 8,015 turns
+  times the winner-change rate. The last row is the exactness check: 8,022 turns
   re-derived to the same table and tiles, every one reproducing its baseline.
 - **`frugal` and `optimal` are not close, they are the same.** CP-SAT's optimum
   differs from the turn `frugal` played at 15.2% of decisions and is worth **+0.0
@@ -270,7 +270,11 @@ weaker still for per-turn play, a turn of yours being three turns from mattering
 **Every deviation type is at or below zero at three seats** (same tiles, other
 table: −1.2 ±1.1 over 7,280), and at four the only positive point estimate in the
 three runs is +0.4 ±1.3, covering zero, while `fewer_tiles` loses 8.3pp there and a
-frozen table 12.1 — more heavily than anywhere else.
+frozen table 12.1 — more heavily than anywhere else. The three- and four-seat
+frozen-table cells were measured before the solver's freeze fix, under which a joker
+could take a real tile out of a frozen set in about one solve in eight; re-measured
+at two seats with the fix, that row moved from 768 / −5.9 ±3.9 to 818 / −6.1 ±3.8,
+inside its own interval, so they stand as measured.
 
 ### The one lead, and how it died
 

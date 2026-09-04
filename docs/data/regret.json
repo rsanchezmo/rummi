@@ -6,12 +6,12 @@
    "agent": "frugal",
    "kbest": 4,
    "sources": [
-    "runs/oracle-regret/regret-standard-300g-seed91000-k4.json"
+    "/private/tmp/claude-502/-Users-rodrigo-molina-Documents-Personal-rummi/36ed3de4-2f7a-4fa4-b88c-f91fa64545dc/scratchpad/oracle-regret-2p/regret-standard-300g-seed91000-k4.json"
    ],
    "games": 300,
    "decisions": 8185,
-   "alternatives": 39903,
-   "wall_seconds": 3456.594380167,
+   "alternatives": 39960,
+   "wall_seconds": 2606.6387764169995,
    "headline": {
     "losses": 300,
     "rescued": 274,
@@ -19,8 +19,8 @@
     "wins": 300,
     "thrown": 279,
     "thrown_rate": 0.93,
-    "coin_flip_rescued": 0.9948283813066116,
-    "coin_flip_thrown": 0.9978333189288823
+    "coin_flip_rescued": 0.9948583433812624,
+    "coin_flip_thrown": 0.9978209588374648
    },
    "types": [
     {
@@ -154,14 +154,14 @@
     },
     {
      "kind": "frozen_table",
-     "n": 768,
-     "decided": 768,
-     "base_win": 0.5364583333333334,
-     "alt_win": 0.4791666666666667,
-     "delta": -0.05942320590207914,
-     "ci": 0.039308501460220635,
-     "pooled_delta": -0.057291666666666664,
-     "changed": 0.2734375,
+     "n": 818,
+     "decided": 818,
+     "base_win": 0.5378973105134475,
+     "alt_win": 0.48655256723716384,
+     "delta": -0.06116420746702437,
+     "ci": 0.03764541361341272,
+     "pooled_delta": -0.05134474327628362,
+     "changed": 0.26894865525672373,
      "phases": {
       "pre-meld": {
        "n": 0,
@@ -174,24 +174,24 @@
        "changed": 0.0
       },
       "midgame": {
-       "n": 420,
-       "decided": 420,
-       "base_win": 0.5095238095238095,
-       "alt_win": 0.5071428571428571,
-       "delta": -0.0007122507122507097,
-       "ci": 0.05486514055428227,
-       "pooled_delta": -0.002380952380952381,
-       "changed": 0.2833333333333333
+       "n": 429,
+       "decided": 429,
+       "base_win": 0.5034965034965035,
+       "alt_win": 0.5104895104895105,
+       "delta": 0.005649717514124293,
+       "ci": 0.05261436811807764,
+       "pooled_delta": 0.006993006993006993,
+       "changed": 0.2773892773892774
       },
       "endgame": {
-       "n": 348,
-       "decided": 348,
-       "base_win": 0.5689655172413793,
-       "alt_win": 0.4454022988505747,
-       "delta": -0.11289308176100628,
-       "ci": 0.05376933527736286,
-       "pooled_delta": -0.1235632183908046,
-       "changed": 0.2614942528735632
+       "n": 389,
+       "decided": 389,
+       "base_win": 0.5758354755784062,
+       "alt_win": 0.4601542416452442,
+       "delta": -0.12202111613876321,
+       "ci": 0.05155615426711001,
+       "pooled_delta": -0.11568123393316196,
+       "changed": 0.2596401028277635
       }
      }
     },
@@ -240,10 +240,10 @@
     }
    ],
    "base_replay": {
-    "n": 8015,
-    "decided": 8015,
-    "base_win": 0.5151590767311292,
-    "alt_win": 0.5151590767311292,
+    "n": 8022,
+    "decided": 8022,
+    "base_win": 0.5153328347045625,
+    "alt_win": 0.5153328347045625,
     "delta": 0.0,
     "ci": 0.0,
     "pooled_delta": 0.0,
