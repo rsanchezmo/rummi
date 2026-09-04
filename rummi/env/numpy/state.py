@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass, fields
 
 import numpy as np
+import numpy.typing as npt
 
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import EMPTY, tables
@@ -104,7 +105,7 @@ class BatchState:
             h.update(arr.astype(np.int64).tobytes())
         return h.hexdigest()
 
-    def select(self, indices) -> BatchState:
+    def select(self, indices: npt.ArrayLike) -> BatchState:
         """A new state holding just the given envs, in the given order.
 
         Used to check that a batched rollout equals the same envs run

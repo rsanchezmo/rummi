@@ -21,7 +21,6 @@ from rummi.rules.encoding import EMPTY, kind_of
 
 @dataclass(frozen=True, slots=True)
 class Candidates:
-    cfg: RummiConfig
     kinds: np.ndarray
     """``(n, max_set_len)`` the tiles of each candidate, ``EMPTY`` padded."""
     counts: np.ndarray
@@ -68,7 +67,6 @@ def candidates(cfg: RummiConfig) -> Candidates:
         lengths[i] = len(row)
 
     return Candidates(
-        cfg=cfg,
         kinds=kinds,
         counts=counts,
         length=lengths,

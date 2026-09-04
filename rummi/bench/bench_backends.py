@@ -144,7 +144,12 @@ def bench_jax(
             state = once(cfg, state)
         return state
 
-    jax.block_until_ready(advance(sim.reset(cfg, batch_size, seed=0), warmup))
+    warm = jax.block_until_ready(advance(sim.reset(cfg, batch_size, seed=0), warmup))
+    # `rollout` is jitted on the scan length, so the timed advance is a *different*
+    # graph from the warm-up's. Tracing it here is what keeps a compile out of the
+    # clock: `_best` hides one only while there is a later repeat to beat it, so
+    # without this `--repeats 1` publishes a compile-polluted figure.
+    jax.block_until_ready(advance(warm, iters))
 
     samples = []
     for _ in range(repeats):

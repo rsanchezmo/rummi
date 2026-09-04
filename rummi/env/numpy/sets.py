@@ -16,6 +16,7 @@ with no data-dependent control flow, so a torch/JAX port is mechanical.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
@@ -282,7 +283,7 @@ def assign_open(cfg: RummiConfig, s: SlotStats) -> np.ndarray:
 def assign_open_at(
     cfg: RummiConfig, s: SlotStats, envs: np.ndarray, kinds: np.ndarray
 ) -> np.ndarray:
-    """``(P, S)`` :func:`assign_open` for each ``(env, kind)`` pair, over every slot.
+    """``(pairs, S)`` :func:`assign_open` for each ``(env, kind)`` pair, over every slot.
 
     The same predicate, evaluated only where the answer can be anything but false.
     A tile has to be in hand to be assigned and a workbench holds a handful of kinds
@@ -318,7 +319,7 @@ def assign_open_at(
     return (run_slot & run_ok) | (group_slot & group_ok)
 
 
-def pad_slot(cfg: RummiConfig, kinds) -> np.ndarray:
+def pad_slot(cfg: RummiConfig, kinds: Iterable[int]) -> np.ndarray:
     """Build one ``(L,)`` slot row from a list of kind ids, padded with ``EMPTY``."""
     kinds = list(kinds)
     if len(kinds) > cfg.max_set_len:

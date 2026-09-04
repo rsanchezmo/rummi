@@ -18,6 +18,7 @@ Three things follow from that and are worth knowing before use.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Iterable
 from functools import partial
 from typing import NamedTuple
 
@@ -117,7 +118,7 @@ def check_invariants(cfg: RummiConfig, state: JaxState) -> None:
 
 
 # --- dealing ------------------------------------------------------------------
-def _decks(cfg: RummiConfig, seeds) -> np.ndarray:
+def _decks(cfg: RummiConfig, seeds: Iterable[np.random.SeedSequence]) -> np.ndarray:
     base = np.repeat(np.arange(cfg.n_kinds), tables(cfg).copies)
     return np.stack([np.random.default_rng(s).permutation(base) for s in seeds])
 
@@ -126,7 +127,9 @@ def deck_orders(cfg: RummiConfig, seed: int, count: int) -> jax.Array:
     return jnp.asarray(_decks(cfg, np.random.SeedSequence(seed).spawn(count)), jnp.int32)
 
 
-def derived_deck_orders(cfg: RummiConfig, base: int, step_index: int, envs) -> jax.Array:
+def derived_deck_orders(
+    cfg: RummiConfig, base: int, step_index: int, envs: Iterable[int]
+) -> jax.Array:
     seeds = [np.random.SeedSequence([base, step_index, int(e)]) for e in envs]
     return jnp.asarray(_decks(cfg, seeds), jnp.int32)
 

@@ -1,5 +1,9 @@
 """The CP-SAT solver, checked against brute force and against greedy."""
 
+from dataclasses import replace
+
+from collections import Counter
+
 import numpy as np
 import pytest
 
@@ -12,9 +16,13 @@ from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import evaluate_slots
 from rummi.env.numpy.state import counts_of
+from rummi.agents import build
+from rummi.agents.base import act_on_state
 from rummi.agents.greedy_agent import plan_turn as greedy_plan
 from rummi.solver import brute_force
 from rummi.solver.ilp import Objective, solve_turn
+from rummi.solver.to_actions import allocate_slots, slot_contents
+from tests.conftest import state_with
 
 C = STANDARD
 
@@ -175,6 +183,80 @@ def test_the_no_good_cut_walks_the_tables_that_shed_the_same_count():
     ]
 
 
+def test_an_unknown_objective_is_refused_rather_than_silently_maximising_tiles():
+    """`Objective` was a bare string namespace compared with `==`, so any typo --
+    `max_tilez` -- fell through to the tile-maximising branch and returned a
+    plausible answer to a question nobody asked."""
+    with pytest.raises(ValueError, match="max_tilez"):
+        solve_turn(C, rack_of(C, [kind_of(C, 0, 1)]), table_of(C, []), True, objective="max_tilez")
+    # The accepted spellings still work, by value and by member.
+    rack = rack_of(C, [kind_of(C, 0, n) for n in (11, 12, 13)])
+    assert solve_turn(C, rack, table_of(C, []), True, objective="max_value").feasible
+    assert solve_turn(C, rack, table_of(C, []), True, objective=Objective.MAX_TILES).feasible
+
+
+def test_a_relaxed_opening_is_credited_the_way_the_engine_credits_it():
+    """`strict_initial_meld=False` changes two rules at once and `solve_turn` read
+    neither: the table becomes touchable before melding, and the opening is
+    credited as the face value of what left the rack -- with the joker at **zero**,
+    because its worth is positional and no set has claimed it yet.
+
+    The solver instead priced the joker into the set it built, so it believed 36
+    where the engine credits 23, and the plan it produced hit a masked `END_TURN`
+    after six micro-actions, reverting the whole turn.
+    """
+    cfg = replace(C, strict_initial_meld=False)
+    rack = rack_of(cfg, [kind_of(cfg, 0, 11), kind_of(cfg, 0, 12), cfg.joker_kind])
+    sol = solve_turn(cfg, rack, table_of(cfg, []), has_melded=False)
+    # 11 + 12 + 0 = 23 < 30, so there is no opening here at all.
+    assert not sol.feasible, f"solved a meld the engine will not credit: {sol.sets}"
+
+    # One that clears the bar on face value alone must still be found.
+    good = rack_of(cfg, [kind_of(cfg, 0, n) for n in (11, 12, 13)])
+    assert solve_turn(cfg, good, table_of(cfg, []), has_melded=False).feasible
+
+
+def test_a_relaxed_opening_plays_through_the_engine_to_a_legal_end_turn():
+    """The other half of the same flag: `may_touch_table` is unconditional when the
+    meld is not strict, so a pre-meld turn may lay off onto standing sets.
+
+    This rack forms no set on its own, so laying off is the *only* way to reach 30
+    -- which is what makes the strict arm infeasible rather than merely worse. Run
+    through the real mask, because the solver and the agent had to agree about
+    whose sets the target already contains: the agent appended the standing sets on
+    the assumption the solver never saw them.
+    """
+    cfg = replace(C, strict_initial_meld=False)
+    rows = [
+        [kind_of(cfg, 0, n) for n in (5, 6, 7)],
+        [kind_of(cfg, 1, n) for n in (10, 11, 12)],
+    ]
+    held = [kind_of(cfg, 0, 4), kind_of(cfg, 0, 8), kind_of(cfg, 1, 9), kind_of(cfg, 1, 13)]
+
+    assert not solve_turn(C, rack_of(C, held), table_of(C, rows), has_melded=False).feasible
+
+    state = state_with(cfg, rack=held, table=rows)
+    agent = build("optimal", cfg)
+    agent.reset(1)
+    actions = act_on_state(agent, state, legal_actions(state))
+    assert actions[0] != cfg.draw_action, "the agent drew instead of opening"
+
+    # Play the whole turn out; every action must be legal and the turn must commit.
+    committed = False
+    for _ in range(cfg.max_micro_per_turn + 2):
+        mask = legal_actions(state)
+        action = int(act_on_state(agent, state, mask)[0])
+        assert mask[0, action], f"the agent proposed an illegal action {action}"
+        assert action != cfg.draw_action, "the turn was abandoned, not committed"
+        step(state, np.full(1, action), mask)
+        state.check_invariants()
+        if action == cfg.end_turn_action:
+            committed = True
+            break
+    assert committed, "the plan never reached END_TURN"
+    assert bool(state.melded[0, 0]), "the opening was not credited"
+
+
 def test_freezing_the_table_forbids_the_steal_but_still_allows_a_lay_off():
     """Red 3-4-5-6 gives up its 3 to a group of 3s, unless the table is frozen."""
     table = table_of(C, [[kind_of(C, 0, n) for n in (3, 4, 5, 6)]])
@@ -188,6 +270,52 @@ def test_freezing_the_table_forbids_the_steal_but_still_allows_a_lay_off():
     assert frozen.feasible and frozen.sets == (
         tuple(kind_of(C, 0, n) for n in (3, 4, 5, 6, 7)),
     )
+
+
+def test_freezing_the_table_pins_a_real_tile_as_well_as_a_joker():
+    """The steal `freeze_table` missed: a joker takes a real tile's *position* in a
+    frozen set and frees the tile for another one, leaving the multiset of sets
+    intact while both sets are physically taken apart.
+
+    Two runs sharing colour 1: (9, 10, J, 12) and (11, 12, 13). Swapping the joker
+    for the real 11 gives (9, 10, 11, 12) and (12, 13, J) -- both still legal, both
+    still "the same sets", and `allocate_slots` has to dissolve both to build them.
+    """
+    c1 = lambda n: kind_of(C, 1, n)  # noqa: E731
+    rows = [[c1(9), c1(10), c1(12), C.joker_kind], [c1(11), c1(12), c1(13)]]
+    rack = rack_of(C, [kind_of(C, 3, n) for n in (5, 6, 7)])
+
+    frozen = solve_turn(C, rack, table_of(C, rows), True, freeze_table=True)
+    assert frozen.feasible
+
+    standing = [tuple(sorted(r)) for r in rows]
+    target = [tuple(sorted(s)) for s in frozen.sets]
+    for content in standing:
+        assert any(Counter(content) <= Counter(s) for s in target), (
+            f"the frozen set {content} is not inside any target set: {target}"
+        )
+    # And the plan must not have to take one apart to get there.
+    alloc = allocate_slots(slot_contents(table_of(C, rows)), list(frozen.sets))
+    assert not alloc.dissolve, f"a frozen slot is dissolved: {alloc.dissolve}"
+
+
+def test_freezing_the_table_refuses_to_buy_a_joker_back():
+    """Buying a joker back -- swapping it for the real tile it stands in for -- is a
+    legal Rummikub move, and it is rearrangement, so a frozen table refuses it.
+
+    Without the pinning it was the same hole as the tile steal: the joker leaves,
+    the set still reads as the same set, and the plan has to take it apart to get
+    there. The group here can only be completed by displacing the joker, so a
+    frozen solve has nothing to do at all.
+    """
+    fours = [kind_of(C, c, 4) for c in range(4)]
+    table = table_of(C, [[fours[0], fours[2], fours[3], C.joker_kind]])
+    rack = rack_of(C, [fours[1], kind_of(C, 0, 9), kind_of(C, 0, 10)])
+
+    assert not solve_turn(C, rack, table, True, freeze_table=True).feasible
+    # Unfrozen, the same rack does displace it -- which is what makes this a
+    # restriction rather than an impossibility.
+    assert solve_turn(C, rack, table, True).feasible
 
 
 def test_freezing_the_table_pins_a_joker_that_is_already_on_it():

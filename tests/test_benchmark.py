@@ -11,14 +11,23 @@ import pytest
 from rummi.agents.base import Agent, has_melded, table, turn_starting
 from rummi.agents import REGISTRY, GreedyAgent, build
 from rummi.evaluate import protocol
+from dataclasses import replace
+
 from rummi.evaluate.protocol import (
     PROTOCOL_VERSION,
     SUITES,
     SUITE_BY_NAME,
     Suite,
     evaluate,
+    suite_for,
 )
-from rummi.rules.config import STANDARD, STANDARD_3P, STANDARD_4P, TINY_GROUPS
+from rummi.rules.config import (
+    CONFIG_BY_NAME,
+    STANDARD,
+    STANDARD_3P,
+    STANDARD_4P,
+    TINY_GROUPS,
+)
 from rummi.env.numpy.deal import reset
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.engine import step
@@ -679,6 +688,28 @@ def test_a_self_match_is_exactly_one_over_the_seat_count(cfg, seats: int):
     assert result.games == suite.total_games
 
 
+def test_a_truncated_game_is_no_result_rather_than_a_loss():
+    """SPEC.md section 7: truncation pays nothing, because `max_turns` is an
+    artificial cutoff and not an outcome.
+
+    Scoring it as a loss also breaks the fairness guarantee two tests up -- the
+    rotation cancels only if every deal contributes symmetrically, and a cutoff
+    hits whichever seat happens to be behind. No frozen suite can reach
+    `max_turns`, so nothing else here would notice.
+    """
+    cfg = replace(TINY_GROUPS, max_turns=6)
+    suite = Suite("cutoff", cfg, opponent="greedy", games=8, seed_base=7, batch_size=8)
+    result = evaluate("greedy", suite)
+
+    assert result.truncations, "no game hit the cutoff, so this proved nothing"
+    assert result.wins + result.losses == result.games
+    assert len(result.scores) == result.games
+    assert result.win_rate == pytest.approx(0.5)
+    assert result.mean_score == pytest.approx(0.0)
+    # A cutoff is not an exhausted pool, which is what `stalemates` counts.
+    assert result.stalemates <= result.games
+
+
 def test_baselines_rank_in_the_expected_order():
     """The ladder is the benchmark's whole value proposition: a submission needs
     rungs to place itself between."""
@@ -795,6 +826,35 @@ def test_the_protocol_is_frozen():
         ("standard-3p", 3, "greedy", 70, 4_000),
         ("standard-4p", 4, "greedy", 55, 5_000),
     ]
+
+
+def test_a_suite_is_resolved_from_its_config_and_never_substituted():
+    """Ten tools resolved a suite with `"standard-greedy" if config == "standard"
+    else "tiny"`, and the fallback is wrong three ways: the suite named `tiny`
+    deals `tiny_groups`, so `--config tiny` scored an 11-kind agent on a 13-kind
+    board, and both seat-count configs landed on the two-seat reduced suite.
+
+    Resolution therefore goes through the suite table, and a config with no suite
+    is refused by name rather than reshaped.
+    """
+    for suite in SUITES:
+        assert suite_for(suite.cfg, suite.opponent) is suite
+
+    for name in ("tiny_groups", "standard", "standard_3p", "standard_4p"):
+        assert suite_for(name).cfg is CONFIG_BY_NAME[name]
+
+    # The opponent is part of the identity: one config, two suites.
+    assert suite_for("standard").name == "standard-greedy"
+    assert suite_for("standard", "optimal").name == "standard-optimal"
+
+    # TINY is dealt by nothing, and the suite whose *name* looks like it is not it.
+    assert SUITE_BY_NAME["tiny"].cfg is CONFIG_BY_NAME["tiny_groups"]
+    with pytest.raises(ValueError, match="no evaluation suite"):
+        suite_for("tiny")
+    with pytest.raises(ValueError, match="no evaluation suite"):
+        suite_for("standard_3p", "optimal")
+    with pytest.raises(ValueError, match="unknown config"):
+        suite_for("standard-greedy")
 
 
 def test_every_registered_env_has_a_suite():

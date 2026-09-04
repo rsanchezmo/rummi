@@ -19,6 +19,7 @@ Two consequences worth knowing:
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, fields
 
 import numpy as np
@@ -160,7 +161,7 @@ def reset(
     return state
 
 
-def _deck_orders(cfg: RummiConfig, seed: int, count: int, device) -> torch.Tensor:
+def _deck_orders(cfg: RummiConfig, seed: int, count: int, device: torch.device) -> torch.Tensor:
     """``(count, n_tiles)`` shuffled decks.
 
     Deliberately built with NumPy's ``SeedSequence``/``Generator``: the shuffle is
@@ -174,11 +175,17 @@ def _deck_orders(cfg: RummiConfig, seed: int, count: int, device) -> torch.Tenso
     return torch.as_tensor(orders, dtype=torch.int64, device=device)
 
 
-def derived_deck_orders(cfg: RummiConfig, base: int, step: int, envs, device) -> torch.Tensor:
+def derived_deck_orders(
+    cfg: RummiConfig,
+    base: int,
+    step_index: int,
+    envs: Iterable[int],
+    device: torch.device,
+) -> torch.Tensor:
     base_deck = np.repeat(np.arange(cfg.n_kinds), tables(cfg).copies)
     orders = np.stack(
         [
-            np.random.default_rng(np.random.SeedSequence([base, step, int(e)])).permutation(base_deck)
+            np.random.default_rng(np.random.SeedSequence([base, step_index, int(e)])).permutation(base_deck)
             for e in envs
         ]
     )

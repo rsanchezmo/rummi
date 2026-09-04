@@ -12,6 +12,7 @@ kind ids within one colour::
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 
@@ -175,7 +176,7 @@ def counts_to_kinds(counts: np.ndarray) -> np.ndarray:
     return np.repeat(np.arange(counts.shape[-1], dtype=np.int16), counts)
 
 
-def kinds_to_counts(cfg: RummiConfig, kinds) -> np.ndarray:
+def kinds_to_counts(cfg: RummiConfig, kinds: Iterable[int]) -> np.ndarray:
     """Collapse an iterable of kind ids into a ``(K,)`` count vector."""
     counts = np.zeros(cfg.n_kinds, dtype=np.int16)
     for kind in kinds:

@@ -124,6 +124,83 @@ def test_illegal_actions_are_rejected(backend_name: str):
         backend.step(cfg, state, np.full(2, cfg.end_turn_action), mask)
 
 
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_a_finished_env_is_never_validated_even_when_active_says_it_acts(backend_name: str):
+    """`active` opts an env out of a step; being `done` already does too, and the
+    two are independent flags a caller can set in either combination.
+
+    Every backend must skip validation wherever the engine skips the effect, or a
+    caller passing `active` gets a different answer per backend on an action all
+    three then ignore. JAX read `active` *instead of* `~done` here and raised on a
+    step the other two accepted.
+    """
+    backend = get_backend(backend_name)
+    cfg = TINY_GROUPS
+    state = backend.reset(cfg, 2, seed=0)
+    draw = np.full(2, cfg.draw_action)
+    for _ in range(cfg.max_turns * 4):
+        state, _ = backend.step(cfg, state, draw)
+        if backend.to_numpy(state.done).all():
+            break
+    assert backend.to_numpy(state.done).all(), "the batch never finished, so this proved nothing"
+
+    mask = backend.legal_actions(cfg, state)
+    assert not backend.to_numpy(mask)[:, cfg.place_offset].any(), "PLACE should be masked out"
+    backend.step(cfg, state, np.zeros(2, dtype=np.int64), mask, np.ones(2, dtype=bool))
+
+
+@pytest.mark.parametrize("seats", [3, 4])
+@pytest.mark.parametrize("backend_name", BACKENDS)
+def test_the_backends_agree_at_more_than_two_seats(backend_name: str, seats: int):
+    """Every golden fixture is a two-seat game, yet `n_players` is read by the
+    zero-sum divisor, the stall condition, the seat rotation and both directions of
+    the turn hand-off -- and 3p and 4p are registered ids with published scores.
+
+    Played to the end on a reduced deck, so the terminal payout is actually
+    credited: `-1/(P-1)` is `-1` at two seats whatever the divisor says, which is
+    why the fixtures cannot see a mistake in it. Greedy, because random play never
+    melds and none of the seat arithmetic bites until turns commit.
+    """
+    backend = get_backend(backend_name)
+    cfg = replace(
+        TINY_GROUPS, n_players=seats, n_numbers=6, n_copies=2, max_sets=6, max_turns=120
+    )
+    batch_size, seed = 4, 19
+
+    ref = np_reset(cfg, batch_size, seed=seed)
+    state = backend.reset(cfg, batch_size, seed=seed)
+    agent = _greedy(cfg)
+    agent.reset(batch_size)
+    payouts = 0
+
+    for i in range(400):
+        done_before = ref.done.copy()
+        want_mask = np_masks.legal_actions(ref)
+        np.testing.assert_array_equal(
+            backend.to_numpy(backend.legal_actions(cfg, state)), want_mask,
+            err_msg=f"{backend.name}/{seats}p: mask differs at step {i}",
+        )
+        actions = np.asarray(_act_on_state(agent, ref, want_mask))
+        state, out = backend.step(cfg, state, actions, backend.legal_actions(cfg, state))
+        want = np_step(ref, actions, want_mask)
+        np.testing.assert_allclose(
+            backend.to_numpy(out.rewards), want.rewards, atol=1e-6,
+            err_msg=f"{backend.name}/{seats}p: reward differs at step {i}",
+        )
+        # The zero-sum split is the seat-count-dependent number, so pin it here
+        # rather than only against a reference that could share the mistake.
+        for env in np.flatnonzero(ref.done & ~done_before & ~ref.truncated):
+            row = want.rewards[env]
+            losers = [p for p in range(seats) if p != ref.winner[env]]
+            np.testing.assert_allclose(row[losers], -1.0 / (seats - 1), atol=1e-6)
+            payouts += 1
+        if ref.done.all():
+            break
+
+    assert backend.digest(state) == ref.digest(), f"{backend.name}/{seats}p: state diverged"
+    assert payouts, "no game was ever won, so the seat-count reward went untested"
+
+
 def test_unknown_backend_is_rejected():
     with pytest.raises(ValueError, match="unknown backend"):
         get_backend("tensorflow")
@@ -143,6 +220,18 @@ SHAPING_TERMS = {
     "rack_value_delta": 0.25,
     "micro_step_cost": 0.01,
 }
+
+
+def _greedy(cfg):
+    from rummi.agents import build
+
+    return build("greedy", cfg)
+
+
+def _act_on_state(agent, state, mask):
+    from rummi.agents.base import act_on_state
+
+    return act_on_state(agent, state, mask)
 
 
 def _greedy_actions(cfg, batch_size: int, steps: int, seed: int) -> list[np.ndarray]:

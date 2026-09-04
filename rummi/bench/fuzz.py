@@ -1,4 +1,9 @@
-"""Random-rollout fuzzing with invariants checked on every step."""
+"""Rollout fuzzing with the invariants checked on every step.
+
+``--policy`` takes any bundled agent, and it has to: uniform-random play never
+assembles a legal opening meld, so it never reaches END_TURN, melding, winning or
+scoring. Use ``greedy`` or better for anything past the mid-turn machinery.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from rummi.agents.base import Agent
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import env_seeds, reset, reset_envs
 from rummi.env.numpy.engine import step
@@ -63,19 +69,33 @@ def check_step_invariants(state: BatchState, mask: np.ndarray) -> None:
         raise AssertionError("micro-action budget exceeded")
 
 
-def make_policy(cfg: RummiConfig, name: str, seed: int):
-    """Return ``act(state, mask) -> actions`` for a named agent.
+def build_policy(cfg: RummiConfig, name: str, seed: int, n_envs: int) -> Agent:
+    """The named agent, sized for ``n_envs``.
 
-    Random play exercises the mask and the mid-turn machinery but essentially
-    never assembles a 30-point opening meld by chance, so it leaves END_TURN,
-    melding and win detection untouched. Greedy or better reaches those paths.
+    ``reset(n_envs)`` is where an agent allocates per-env memory -- see
+    :meth:`rummi.agents.base.Agent.reset` -- so a driver that knows its batch size
+    has to pass it. ``0`` left anything sizing state from it holding zero-length
+    arrays, which is an IndexError on the first observation.
     """
     from rummi.agents import build
-    from rummi.agents.base import act_on_state
 
     kwargs = {"seed": seed} if name.endswith("random") else {}
     agent = build(name, cfg, **kwargs)
-    agent.reset(0)
+    agent.reset(n_envs)
+    return agent
+
+
+def make_policy(cfg: RummiConfig, name: str, seed: int, n_envs: int = 1):
+    """``act(state, mask, envs) -> actions`` over :func:`build_policy`'s agent.
+
+    The single-seat form, for a driver that plays every seat with one agent. A
+    batch driver must pass its own ``n_envs``; the default suits the single-env
+    callers, and is ``1`` rather than ``0`` because that is a size an agent can
+    actually allocate from.
+    """
+    from rummi.agents.base import act_on_state
+
+    agent = build_policy(cfg, name, seed, n_envs)
     return lambda state, mask, envs=None: act_on_state(agent, state, mask, envs)
 
 
@@ -87,12 +107,12 @@ def fuzz(
     check_every: int = 1,
     policy_name: str = "random",
 ) -> Stats:
-    policy = make_policy(cfg, policy_name, seed)
+    policy = make_policy(cfg, policy_name, seed, batch_size)
     state = reset(cfg, batch_size, seed=seed)
     stats = Stats()
     next_seed = batch_size
     turn_start = state.turn_count.copy()
-    micro_at_turn_start = np.zeros(batch_size, dtype=np.int64)
+    step_at_turn_start = np.zeros(batch_size, dtype=np.int64)
     step_index = 0
 
     while stats.games < games:
@@ -100,7 +120,7 @@ def fuzz(
         if step_index % check_every == 0:
             check_step_invariants(state, mask)
 
-        actions = policy(state, mask)
+        actions = policy(state, mask, ~state.done)
         stats.end_turns += int((actions == cfg.end_turn_action).sum())
         melded_before = state.melded.sum()
         step(state, actions, mask)
@@ -110,9 +130,9 @@ def fuzz(
 
         committed = state.turn_count > turn_start
         if committed.any():
-            lengths = step_index - micro_at_turn_start[committed]
+            lengths = step_index - step_at_turn_start[committed]
             stats.turn_lengths.extend(int(x) for x in lengths)
-            micro_at_turn_start[committed] = step_index
+            step_at_turn_start[committed] = step_index
             turn_start = state.turn_count.copy()
 
         finished = np.flatnonzero(state.done)
@@ -130,7 +150,7 @@ def fuzz(
             next_seed += finished.size
             reset_envs(state, finished, seeds)
             turn_start[finished] = 0
-            micro_at_turn_start[finished] = step_index
+            step_at_turn_start[finished] = step_index
 
     return stats
 

@@ -26,6 +26,10 @@ class Lookup:
     """Per-config constant tables, resident on the target device."""
 
     cfg: RummiConfig
+    """Unread, and load-bearing anyway: ``_CACHE`` keys on ``id(cfg)``, and holding
+    the config here is what stops that entry being collected and its address reused
+    by a different config. Drop the field and the cache can return another config's
+    tables."""
     color: torch.Tensor
     number: torch.Tensor
     value: torch.Tensor
@@ -40,11 +44,14 @@ class Lookup:
     ``slot_code`` is ``lru_cache``-wrapped and Dynamo refuses to trace through one."""
 
 
-_CACHE: dict[tuple[int, str, str], Lookup] = {}
+_CACHE: dict[tuple[int, str], Lookup] = {}
+"""Keyed on ``id(cfg)`` rather than on ``cfg`` itself because Dynamo has to trace
+through this: a ``functools.cache`` it refuses outright, and hashing a dataclass
+inside the graph is work per step for a table that never changes."""
 
 
 def lookup(cfg: RummiConfig, device: torch.device) -> Lookup:
-    key = (id(cfg), str(device), "v1")
+    key = (id(cfg), str(device))
     hit = _CACHE.get(key)
     if hit is not None:
         return hit

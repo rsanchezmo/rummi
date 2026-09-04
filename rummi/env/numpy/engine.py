@@ -12,9 +12,9 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from rummi.rules.actions import decode_batch
+from rummi.rules.actions import DecodedActions, decode_batch
 from rummi.rules.config import RewardMode, RummiConfig
-from rummi.rules.encoding import EMPTY
+from rummi.rules.encoding import EMPTY, tables
 from rummi.env.numpy.state import BatchState, counts_of
 
 
@@ -102,7 +102,7 @@ def step(
                       truncated=state.truncated.copy())
 
 
-def _apply_place(state: BatchState, d, live: np.ndarray) -> None:
+def _apply_place(state: BatchState, d: DecodedActions, live: np.ndarray) -> None:
     sel = np.flatnonzero(d.is_place & live)
     if not sel.size:
         return
@@ -113,7 +113,7 @@ def _apply_place(state: BatchState, d, live: np.ndarray) -> None:
     state.placed_rack[sel, kind] += 1
 
 
-def _apply_pick(state: BatchState, d, live: np.ndarray) -> None:
+def _apply_pick(state: BatchState, d: DecodedActions, live: np.ndarray) -> None:
     cfg = state.cfg
     sel = np.flatnonzero(d.is_pick & live)
     if not sel.size:
@@ -125,7 +125,7 @@ def _apply_pick(state: BatchState, d, live: np.ndarray) -> None:
     state.table_sets[sel, slot] = _sort_slot_rows(cfg, state.table_sets[sel, slot])
 
 
-def _apply_dissolve(state: BatchState, d, live: np.ndarray) -> None:
+def _apply_dissolve(state: BatchState, d: DecodedActions, live: np.ndarray) -> None:
     cfg = state.cfg
     sel = np.flatnonzero(d.is_dissolve & live)
     if not sel.size:
@@ -136,7 +136,7 @@ def _apply_dissolve(state: BatchState, d, live: np.ndarray) -> None:
     state.table_sets[sel, slot] = EMPTY
 
 
-def _apply_assign(state: BatchState, d, live: np.ndarray) -> None:
+def _apply_assign(state: BatchState, d: DecodedActions, live: np.ndarray) -> None:
     cfg = state.cfg
     sel = np.flatnonzero(d.is_assign & live)
     if not sel.size:
@@ -152,7 +152,9 @@ def _apply_assign(state: BatchState, d, live: np.ndarray) -> None:
     state.slot_new[sel[was_empty], slot[was_empty]] = True
 
 
-def _apply_end_turn(state: BatchState, d, live: np.ndarray, rewards: np.ndarray) -> None:
+def _apply_end_turn(
+    state: BatchState, d: DecodedActions, live: np.ndarray, rewards: np.ndarray
+) -> None:
     cfg = state.cfg
     sel = np.flatnonzero(d.is_end_turn & live)
     if not sel.size:
@@ -162,9 +164,11 @@ def _apply_end_turn(state: BatchState, d, live: np.ndarray, rewards: np.ndarray)
     if cfg.tiles_placed_bonus:
         rewards[sel, player] += cfg.tiles_placed_bonus * state.placed_rack[sel].sum(-1)
     if cfg.rack_value_delta:
-        rewards[sel, player] += cfg.rack_value_delta * state.placed_rack[sel].astype(
-            np.int32
-        ) @ _face_values(cfg)
+        # The joker's value is positional, so it cannot be credited from the rack.
+        face_value = tables(cfg).value.astype(np.int32)
+        rewards[sel, player] += (
+            cfg.rack_value_delta * state.placed_rack[sel].astype(np.int32) @ face_value
+        )
 
     state.melded[sel, player] = True
     state.table_sets[sel] = _sort_slot_order(cfg, state.table_sets[sel])
@@ -172,7 +176,7 @@ def _apply_end_turn(state: BatchState, d, live: np.ndarray, rewards: np.ndarray)
     _begin_turn(state, sel)
 
 
-def _apply_draw(state: BatchState, d, live: np.ndarray) -> None:
+def _apply_draw(state: BatchState, d: DecodedActions, live: np.ndarray) -> None:
     cfg = state.cfg
     sel = np.flatnonzero(d.is_draw & live)
     if not sel.size:
@@ -208,13 +212,9 @@ def _begin_turn(state: BatchState, sel: np.ndarray) -> None:
     state.current[sel] = (state.current[sel] + 1) % cfg.n_players
 
 
-def _face_values(cfg: RummiConfig) -> np.ndarray:
-    from rummi.rules.encoding import tables
-
-    return tables(cfg).value.astype(np.int32)
-
-
-def _resolve_terminal(state: BatchState, d, live: np.ndarray, rewards: np.ndarray) -> None:
+def _resolve_terminal(
+    state: BatchState, d: DecodedActions, live: np.ndarray, rewards: np.ndarray
+) -> None:
     """Detect end of game and credit terminal reward."""
     cfg = state.cfg
     committed = (d.is_end_turn | d.is_draw) & live

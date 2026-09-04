@@ -14,6 +14,14 @@ cancels both the turn-order advantage and the luck of the deal: an agent mirrore
 against itself scores exactly ``1 / n_players`` and exactly ``+0.0``, not
 something that needs error bars. At two seats this is the swap it generalises.
 
+**The solver's budget is deterministic.** ``standard-optimal`` is scored against a
+CP-SAT agent, and a solve that runs out of *wall clock* returns a different table
+-- so on a slower or loaded machine the published scores would drift under an
+unchanged :data:`PROTOCOL_VERSION`. The budget is counted in deterministic work
+instead (:data:`rummi.solver.ilp.DETERMINISTIC_LIMIT`); wall clock is only a
+backstop. The version is unchanged because the scores are: all three committed
+captures reproduce byte for byte across the switch.
+
 **Illegal actions disqualify rather than penalise.** The mask is never all-zero
 and always exactly describes what the rules permit, so proposing a masked-out
 action is a bug in the agent, not a bad strategy. Scoring it would invite tuning
@@ -27,12 +35,20 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from rummi.agents.base import Agent, act_by_seat
-from rummi.rules.config import STANDARD, STANDARD_3P, STANDARD_4P, TINY_GROUPS, RummiConfig
+from rummi.rules.config import (
+    CONFIG_BY_NAME,
+    STANDARD,
+    STANDARD_3P,
+    STANDARD_4P,
+    TINY_GROUPS,
+    RummiConfig,
+)
 from rummi.env.numpy.deal import reset as deal_reset
 from rummi.env.numpy.deal import reset_envs
 from rummi.env.numpy.engine import step as engine_step
 from rummi.env.numpy.masks import legal_actions
 from rummi.env.numpy.sets import summarize
+from rummi.env.numpy.state import BatchState
 from rummi.env.observation import encode
 
 PROTOCOL_VERSION = "2.0"
@@ -70,6 +86,35 @@ SUITES: tuple[Suite, ...] = (
 SUITE_BY_NAME = {s.name: s for s in SUITES}
 
 
+def suite_for(cfg_or_name: RummiConfig | str, opponent: str = "greedy") -> Suite:
+    """The suite dealt from a config, against ``opponent``.
+
+    Asked of the suite table rather than mapped from a config's *name*, because
+    the two do not line up: the suite called ``tiny`` deals :data:`TINY_GROUPS`,
+    and ``TINY`` has no suite at all. Every caller that resolved this by name
+    scored an 11-kind agent on a 13-kind board, and sent ``standard_3p`` and
+    ``standard_4p`` to the two-seat reduced suite.
+
+    A config with no suite is refused by name rather than substituted, the rule
+    :func:`rummi.agents.learned.clone.weights_for` already follows: silently
+    scoring against a board an agent was not built for is worse than not scoring.
+    """
+    cfg = CONFIG_BY_NAME.get(cfg_or_name) if isinstance(cfg_or_name, str) else cfg_or_name
+    if cfg is None:
+        raise ValueError(
+            f"unknown config {cfg_or_name!r}; known presets are "
+            f"{', '.join(sorted(CONFIG_BY_NAME))}"
+        )
+    for suite in SUITES:
+        if suite.cfg == cfg and suite.opponent == opponent:
+            return suite
+    shipped = ", ".join(f"{s.name} (vs {s.opponent})" for s in SUITES)
+    raise ValueError(
+        f"no evaluation suite deals this config against {opponent!r}; the shipped "
+        f"suites are {shipped}"
+    )
+
+
 @dataclass
 class Result:
     suite: str
@@ -81,6 +126,8 @@ class Result:
     stalemates: int = 0
     """Games that ended on an exhausted pool rather than an emptied rack."""
     truncations: int = 0
+    """Games that reached no outcome: `max_turns`, or a batch out of `max_steps`.
+    Excluded from `games`, so they cannot be scored as losses."""
     illegal_attempts: int = 0
     turns: list[int] = field(default_factory=list)
     scores: list[int] = field(default_factory=list)
@@ -114,10 +161,12 @@ class Result:
                 f"{self.suite:<18} {self.agent} DISQUALIFIED "
                 f"({self.illegal_attempts} illegal actions)"
             )
+        # A truncation leaves `games`, so saying nothing would hide a dropped game.
+        dropped = f"  dropped {self.truncations}" if self.truncations else ""
         return (
             f"{self.suite:<18} win {self.win_rate:>6.1%}  score {self.mean_score:>+7.1f}  "
             f"turns {self.mean_turns:>6.1f}  left {self.mean_final_rack:>5.1f}  "
-            f"stale {self.stalemates / max(1, self.games):>5.1%}  n={self.games}"
+            f"stale {self.stalemates / max(1, self.games):>5.1%}  n={self.games}{dropped}"
         )
 
 
@@ -161,7 +210,9 @@ def _play_batch(
     _score_batch(suite, state, result, under_test)
 
 
-def _score_batch(suite: Suite, state, result: Result, under_test: int) -> None:
+def _score_batch(
+    suite: Suite, state: BatchState, result: Result, under_test: int
+) -> None:
     """Score from ``under_test``'s side, whichever seat the rotation put it in.
 
     Reading the seat rather than always seat 0 is what generalises the two-seat
@@ -170,15 +221,17 @@ def _score_batch(suite: Suite, state, result: Result, under_test: int) -> None:
     """
     values = state.rack_values()
     for env in range(state.batch_size):
-        if not state.done[env]:
+        # Neither cutoff is an outcome: SPEC.md section 7 pays nothing for reaching
+        # `max_turns`, and a batch that ran out of `max_steps` has no result at all.
+        # Scoring either as a loss would also break the rotation's exactness, since
+        # a cutoff falls on whichever seat happens to be behind when it lands.
+        if not state.done[env] or state.truncated[env]:
             result.truncations += 1
             continue
         result.games += 1
         result.turns.append(int(state.turn_count[env]))
         winner = int(state.winner[env])
         result.final_racks.append(int(values[env, under_test]))
-        if state.truncated[env]:
-            result.truncations += 1
         if state.racks[env].sum(-1).min() != 0:
             result.stalemates += 1
         if winner == under_test:

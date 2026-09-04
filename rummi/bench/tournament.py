@@ -13,44 +13,15 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from rummi.agents.base import act_by_seat
+from rummi.bench.fuzz import build_policy
 from rummi.rules.config import CONFIG_BY_NAME, RummiConfig
 from rummi.env.numpy.deal import env_seeds, reset, reset_envs
 from rummi.env.numpy.engine import step
 from rummi.env.numpy.masks import legal_actions
-from rummi.env.numpy.state import BatchState
+from rummi.env.numpy.sets import summarize
+from rummi.env.observation import encode
 
-
-
-def build(cfg: RummiConfig, name: str, seed: int = 0):
-    """Return ``act(state, mask, envs) -> actions`` for a named agent."""
-    from rummi.agents import build as build_agent
-    from rummi.agents.base import act_on_state
-
-    kwargs = {"seed": seed} if name.endswith("random") else {}
-    agent = build_agent(name, cfg, **kwargs)
-    agent.reset(0)
-    return lambda state, mask, envs=None: act_on_state(agent, state, mask, envs)
-
-
-class SeatPolicies:
-    """Dispatch each env to the policy of whichever seat is acting.
-
-    Each policy is told which envs are its own. That is not an optimisation: the
-    planning policies hold a per-env plan and pop one action per call, so a policy
-    that peeked at an env it does not control would consume that env's plan.
-    """
-
-    def __init__(self, policies: list) -> None:
-        self.policies = policies
-
-    def act(self, state: BatchState, mask: np.ndarray) -> np.ndarray:
-        out = np.full(state.batch_size, state.cfg.draw_action, dtype=np.int64)
-        for seat, policy in enumerate(self.policies):
-            mine = state.current == seat
-            if not mine.any():
-                continue
-            out[mine] = policy(state, mask, mine)[mine]
-        return out
 
 
 @dataclass
@@ -59,6 +30,7 @@ class Match:
     wins: np.ndarray
     stalemates: int = 0
     truncations: int = 0
+    illegal_attempts: int = 0
     games: int = 0
     turns: list[int] = field(default_factory=list)
     seconds: float = 0.0
@@ -69,9 +41,12 @@ class Match:
             for n, w in zip(self.names, self.wins, strict=True)
         )
         mean_turns = sum(self.turns) / len(self.turns) if self.turns else float("nan")
+        # Counted rather than raised, so say so: a substituted DRAW otherwise reads
+        # as a weak baseline instead of a broken one.
+        bad = f" illegal={self.illegal_attempts}" if self.illegal_attempts else ""
         return (
             f"{' vs '.join(self.names)}: {rates}  "
-            f"stalemates={self.stalemates} truncations={self.truncations}  "
+            f"stalemates={self.stalemates} truncations={self.truncations}{bad}  "
             f"mean turns={mean_turns:.1f}  {self.seconds:.1f}s"
         )
 
@@ -82,15 +57,24 @@ def play_match(
     if len(names) != cfg.n_players:
         raise ValueError(f"{cfg.n_players} seats need {cfg.n_players} policies")
 
-    policy = SeatPolicies([build(cfg, n, seed + i) for i, n in enumerate(names)])
+    seats = [build_policy(cfg, n, seed + i, batch_size) for i, n in enumerate(names)]
     state = reset(cfg, batch_size, seed=seed)
     match = Match(names=tuple(names), wins=np.zeros(cfg.n_players, dtype=int))
     next_seed = batch_size
     t0 = time.perf_counter()
 
     while match.games < games:
-        mask = legal_actions(state)
-        step(state, policy.act(state, mask), mask)
+        # `act_by_seat` is the one multi-seat dispatcher: it encodes the
+        # observation once for the whole batch rather than once per seat, holds a
+        # finished env out so nothing plans for it, and counts illegal proposals
+        # instead of silently substituting DRAW.
+        summary = summarize(cfg, state.table_sets)
+        mask = legal_actions(state, summary)
+        actions, illegal = act_by_seat(
+            seats, cfg, state.current, state.done, mask, encode(state, summary)
+        )
+        match.illegal_attempts += illegal
+        step(state, actions, mask)
         finished = np.flatnonzero(state.done)
         if not finished.size:
             continue

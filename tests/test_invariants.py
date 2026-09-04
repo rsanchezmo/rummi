@@ -38,7 +38,7 @@ def test_greedy_reaches_the_paths_random_cannot(policy: str):
 @pytest.mark.parametrize("cfg,name", CONFIGS, ids=[n for _, n in CONFIGS])
 def test_same_seed_gives_an_identical_trajectory(cfg: RummiConfig, name: str):
     def rollout():
-        policy = make_policy(cfg, "greedy", 0)
+        policy = make_policy(cfg, "greedy", 0, 4)
         state = reset(cfg, 4, seed=7)
         for _ in range(60):
             mask = legal_actions(state)
@@ -61,13 +61,13 @@ def test_a_batched_rollout_equals_the_same_envs_run_alone(cfg: RummiConfig, name
     batched = reset(cfg, batch_size, seed=3)
     singles = [batched.select(i) for i in range(batch_size)]
 
-    batch_policy = make_policy(cfg, "greedy", 0)
+    batch_policy = make_policy(cfg, "greedy", 0, batch_size)
     for _ in range(steps):
         mask = legal_actions(batched)
         step(batched, batch_policy(batched, mask), mask)
 
     for i, single in enumerate(singles):
-        solo_policy = make_policy(cfg, "greedy", 0)
+        solo_policy = make_policy(cfg, "greedy", 0, 1)
         for _ in range(steps):
             mask = legal_actions(single)
             step(single, solo_policy(single, mask), mask)
@@ -103,7 +103,7 @@ def test_every_masked_in_action_is_accepted(cfg: RummiConfig, name: str):
 
 @pytest.mark.parametrize("cfg,name", CONFIGS, ids=[n for _, n in CONFIGS])
 def test_the_mask_is_never_all_zero_even_after_termination(cfg: RummiConfig, name: str):
-    policy = make_policy(cfg, "greedy", 0)
+    policy = make_policy(cfg, "greedy", 0, 8)
     state = reset(cfg, 8, seed=2)
     saw_done = False
     for _ in range(400):

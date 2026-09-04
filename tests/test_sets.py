@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from rummi.rules.config import STANDARD, TINY, TINY_GROUPS, RummiConfig
-from rummi.rules.encoding import EMPTY, kind_name, kind_of
+from rummi.rules.encoding import EMPTY, kind_name, kind_of, kinds_to_counts
 from rummi.env.numpy.sets import (
     assign_open,
     assign_open_at,
@@ -139,3 +139,22 @@ def test_batch_shape_is_preserved():
     ev = evaluate_slots(c, slots)
     assert ev.is_valid.shape == (3, 7)
     assert assign_open(c, slot_stats(c, slots)).shape == (3, 7, c.n_kinds)
+
+
+def test_the_oracle_never_invents_a_joker_the_config_does_not_have():
+    """`is_valid`, `value` and `is_extendable` defaulted `max_jokers=2` -- the
+    standard deck's count, hard-coded -- while `partitionable` defaulted to
+    `cfg.n_jokers`. So on TINY, which has no jokers at all, the two halves of the
+    same oracle disagreed about whether a set containing one is legal.
+    """
+    joker = (kind_of(TINY, 0, 1), kind_of(TINY, 0, 2), TINY.joker_kind)
+    assert TINY.n_jokers == 0
+    assert not brute_force.is_valid(TINY, joker)
+    assert brute_force.value(TINY, joker) == 0
+    assert not brute_force.is_extendable(TINY, (TINY.joker_kind,))
+    assert not brute_force.partitionable(TINY, kinds_to_counts(TINY, joker))
+
+    # Where the config does have one, it is still honoured.
+    with_joker = (kind_of(TINY_GROUPS, 0, 1), kind_of(TINY_GROUPS, 0, 2), TINY_GROUPS.joker_kind)
+    assert TINY_GROUPS.n_jokers == 1
+    assert brute_force.is_valid(TINY_GROUPS, with_joker)

@@ -126,12 +126,15 @@ class RummiVectorEnv(VectorEnv):
     def step(self, actions):
         actions = self._check_actions(actions)
         just_reset = self._autoreset()
+        # The seat about to act, read before the step: only a committing action
+        # advances `current`, so deriving the actor from the state afterwards names
+        # the previous seat on every mid-turn step -- and a turn is mostly those.
+        # NumPy, because it indexes the NumPy reward matrix: a device tensor here
+        # would drag `rewards_all` back through `__array__` and fail on MPS.
+        acting = self.backend.to_numpy(self.state.current).astype(np.int64)
         result = self._advance(actions, active=~just_reset)
 
         rewards_all = result.rewards
-        # NumPy, because it indexes the NumPy reward matrix: a device tensor here
-        # would drag `rewards_all` back through `__array__` and fail on MPS.
-        acting = (self.backend.to_numpy(self.state.current) - 1) % self.cfg.n_players
         rewards = rewards_all[np.arange(self.num_envs), acting]
 
         terminated = result.terminated.copy()

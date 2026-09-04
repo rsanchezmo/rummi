@@ -15,8 +15,10 @@ variables into one integer per kind.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import cache
 
 import numpy as np
@@ -27,6 +29,22 @@ from rummi.env.numpy.sets import evaluate_slots
 from rummi.solver.candidates import candidates
 
 DEFAULT_TIME_LIMIT = 2.0
+"""Wall-clock backstop, so a pathological model cannot hang a run."""
+
+DETERMINISTIC_LIMIT = 1.0
+"""The budget that actually makes a score reproducible.
+
+Wall clock is not a contract: a solve that runs out of it returns ``FEASIBLE`` and
+a different table, so on a slower or loaded machine the published
+``standard-optimal`` numbers would drift under an unchanged ``PROTOCOL_VERSION``.
+Deterministic time counts work rather than seconds, so it is the same bound on
+every machine.
+
+Calibrated over 2,409 solves across the three standard seat counts and all four
+shapes a caller asks for -- openings, mid-game, frozen and k-best: the worst
+consumed 0.0888 units (mid-game p95 0.035, k-best worst 0.0888), so 1.0 leaves
+11x headroom on the worst case seen.
+"""
 
 
 class SolverUnavailable(RuntimeError):
@@ -43,7 +61,10 @@ def _cp_model():
     return cp_model
 
 
-class Objective:
+class Objective(str, Enum):
+    """What a solve maximises. An enum rather than a string namespace so a typo is
+    refused instead of falling through to the tile-maximising branch."""
+
     MAX_TILES = "max_tiles"
     """Shed as many tiles as possible -- what actually wins games."""
     MAX_VALUE = "max_value"
@@ -61,7 +82,6 @@ class Solution:
     value_played: int = 0
     meld_value: int = 0
     """Total value of newly created sets, for the opening-meld check."""
-    kept_sets: int = 0
     set_counts: np.ndarray | None = None
     """``(n_candidates,)`` how many instances of each candidate the target holds.
     The identity of a solved *table*, which is what a no-good cut excludes."""
@@ -90,23 +110,55 @@ def _current_instances(cfg: RummiConfig, table: np.ndarray) -> dict[tuple[int, .
 
 
 def _materialise(
-    cfg: RummiConfig, counts: np.ndarray, x: np.ndarray, subs: np.ndarray
+    cfg: RummiConfig,
+    counts: np.ndarray,
+    x: np.ndarray,
+    subs: np.ndarray,
+    frozen: Sequence[tuple[int, ...]] = (),
 ) -> list[tuple[int, ...]]:
-    """Turn set counts plus per-kind joker substitutions into concrete tile lists."""
+    """Turn set counts plus per-kind joker substitutions into concrete tile lists.
+
+    ``frozen`` is the standing sets that must survive intact. Their real tiles are
+    pinned into whichever instance each one claims, so a substitution may not land
+    on one: a joker standing in for a tile that is *present* frees that tile for
+    another set, which leaves the multiset of sets untouched and takes both sets
+    apart. The model bounds how many substitutions each claimed instance can
+    absorb; this is where that bound is honoured tile by tile.
+    """
     cand = candidates(cfg)
     instances: list[list[int]] = []
     for c in np.flatnonzero(x):
         tiles = [int(k) for k in cand.kinds[c] if k >= 0]
         instances.extend([list(tiles) for _ in range(int(x[c]))])
 
+    # Claim an instance per standing set, exact matches first so a set already
+    # standing where the target wants it is never spent on a longer one.
+    pinned: list[Counter[int]] = [Counter() for _ in instances]
+    unclaimed = set(range(len(instances)))
+    order = sorted(range(len(frozen)), key=lambda i: -len(frozen[i]))
+    for i in order:
+        real = Counter(k for k in frozen[i] if k != cfg.joker_kind)
+        exact = [j for j in unclaimed if Counter(instances[j]) == Counter(frozen[i])]
+        fits = exact or [j for j in unclaimed if real <= Counter(instances[j])]
+        if not fits:
+            continue
+        claimed = fits[0]
+        unclaimed.discard(claimed)
+        pinned[claimed] = real
+
     remaining = subs.copy()
     for kind in np.flatnonzero(remaining):
-        for inst in instances:
+        # Least pinned first: an instance with room to spare cannot be the one the
+        # placement gets stuck on, and the model guarantees room exists somewhere.
+        for j in sorted(range(len(instances)), key=lambda j: pinned[j][int(kind)]):
+            inst = instances[j]
             if remaining[kind] == 0:
                 break
-            if kind in inst:
+            free = inst.count(int(kind)) - pinned[j][int(kind)]
+            while remaining[kind] and free > 0:
                 inst[inst.index(int(kind))] = cfg.joker_kind
                 remaining[kind] -= 1
+                free -= 1
     if remaining.any():  # pragma: no cover - guarded by the model's constraints
         raise AssertionError("could not place every joker substitution")
     return [tuple(sorted(inst)) for inst in instances]
@@ -153,7 +205,7 @@ def solve_turn(
     rack: np.ndarray,
     table: np.ndarray,
     has_melded: bool,
-    objective: str = Objective.MAX_TILES,
+    objective: Objective | str = Objective.MAX_TILES,
     time_limit: float = DEFAULT_TIME_LIMIT,
     keep_weight: int = 1,
     tiles_min: int = 1,
@@ -177,12 +229,23 @@ def solve_turn(
     a no-good cut per :attr:`Solution.set_counts`, which is what makes that
     enumeration k-best rather than the same answer repeated. ``freeze_table``
     forbids rearrangement: every set now on the table must survive into the
-    target, extended but never taken apart. Because joker substitutions are
-    counted per kind rather than per set, a frozen slot's own jokers are pinned by
-    demanding room for them and a substitution of some kind its target adds --
-    which fixes the multiset of sets, not which instance the materialiser hands
-    the joker to, so a caller that cares should check the plan it builds.
+    target, extended but never taken apart. Both halves of a slot are pinned. Its
+    own jokers keep their positions, so the target must have room for them on top
+    of its real tiles; and a joker may stand in only for a kind the slot does
+    *not* already supply, which is what stops a substitution taking a real tile's
+    place and freeing it for another set -- a steal that leaves the multiset of
+    sets intact while physically taking two sets apart. Buying a joker back falls
+    to the same rule: it is rearrangement, and reaching it means dissolving the
+    set.
     """
+    try:
+        objective = Objective(objective)
+    except ValueError:
+        raise ValueError(
+            f"unknown objective {objective!r}; expected one of "
+            f"{', '.join(o.value for o in Objective)}"
+        ) from None
+
     cp_model = _cp_model()
     cand = candidates(cfg)
     t = tables(cfg)
@@ -196,11 +259,16 @@ def solve_turn(
     occupied_slots = len(_slot_contents(table))
 
     opening = not has_melded
-    # Pre-meld the table is off limits, so the model only sees the rack and the
-    # solved sets are additions rather than a repartition.
-    visible_table = np.zeros_like(table_counts) if opening else table_counts
+    # Two different things, and only `strict_initial_meld` makes them coincide:
+    # whether the meld is still owed, and whether the table may be touched. The
+    # engine gates the table on `may_touch_table`, which is unconditional when the
+    # rule is relaxed -- see SPEC.md section 5.
+    locked = opening and cfg.strict_initial_meld
+    # While it is locked the model only sees the rack, so the solved sets are
+    # additions rather than a repartition.
+    visible_table = np.zeros_like(table_counts) if locked else table_counts
     available = visible_table + rack
-    slot_budget = cfg.max_sets - (occupied_slots if opening else 0)
+    slot_budget = cfg.max_sets - (occupied_slots if locked else 0)
     if slot_budget <= 0:
         return Solution(feasible=False, status="no_free_slots")
 
@@ -216,12 +284,13 @@ def solve_turn(
     const = _constants(cfg)
     numbered = np.arange(cfg.n_numbered_kinds)
     demand = {
-        k: (sum(x[c] for c in const.involved[k]) if const.involved[k] else 0) for k in numbered
+        int(k): (sum(x[c] for c in const.involved[k]) if const.involved[k] else 0)
+        for k in numbered
     }
 
     use = {}
     subs = {}
-    for k in numbered:
+    for k in (int(k) for k in numbered):
         kind_upper = int(available[k])
         use[k] = model.NewIntVar(int(visible_table[k]), kind_upper, f"use{k}")
         subs[k] = model.NewIntVar(0, cfg.n_jokers, f"sub{k}")
@@ -229,7 +298,7 @@ def solve_turn(
         model.Add(demand[k] == use[k] + subs[k])
 
     jokers_used = model.NewIntVar(int(visible_table[cfg.joker_kind]), joker_available, "jokers")
-    model.Add(jokers_used == sum(subs[k] for k in numbered))
+    model.Add(jokers_used == sum(subs.values()))
 
     model.Add(sum(x) <= slot_budget)
     # Redundant but decisive: total tiles consumed cannot exceed what exists. It
@@ -239,28 +308,45 @@ def solve_turn(
         sum(const.length[c] * x[c] for c in range(n_cand)) <= int(available.sum())
     )
 
-    played = {k: use[k] - int(visible_table[k]) for k in numbered}
+    played = {k: v - int(visible_table[k]) for k, v in use.items()}
     played_jokers = jokers_used - int(visible_table[cfg.joker_kind])
     tiles_played = sum(played.values()) + played_jokers
     value_played = (
-        sum(int(t.value[k]) * played[k] for k in numbered) + cfg.joker_penalty * played_jokers
+        sum(int(t.value[k]) * v for k, v in played.items()) + cfg.joker_penalty * played_jokers
     )
     meld_value = sum(const.value[c] * x[c] for c in range(n_cand))
 
+    model.Add(tiles_played >= tiles_min)
     if opening:
-        model.Add(meld_value >= cfg.initial_meld)
-        model.Add(tiles_played >= tiles_min)
-    else:
-        model.Add(tiles_played >= tiles_min)
+        # SPEC.md section 7 credits the opening two ways. Strict, the table is
+        # untouchable so every target set is new and the joker is worth the
+        # position it fills. Relaxed, only the face value of what left the rack
+        # counts, and an unclaimed joker is worth nothing.
+        credited = (
+            meld_value
+            if cfg.strict_initial_meld
+            else sum(int(t.value[k]) * v for k, v in played.items())
+        )
+        model.Add(credited >= cfg.initial_meld)
     if tiles_cap is not None:
         model.Add(tiles_played <= tiles_cap)
 
-    if freeze_table and not opening:
+    if freeze_table and not locked:
         # Each existing set claims one instance of a target set containing it, and
         # two sets cannot claim the same instance -- so a set may grow by a lay-off
         # and can never be split, which is exactly "no rearrangement".
         claims: dict[int, list] = {}
-        joker_claims: dict[int, list] = {}
+        # Per kind, the joker substitutions that land inside a claimed instance and
+        # the demand those instances account for. Both are needed because a
+        # substitution is only forbidden *where a frozen slot already supplies a
+        # real tile*: bounding it per kind over the whole table cannot say that, and
+        # that is how the steal got through.
+        landed: dict[int, list] = {}
+        accounted: dict[int, list] = {}
+        # A standing joker is itself a substitution of whatever kind it stands for,
+        # so it has to draw on that kind's budget. Without this the model can leave
+        # the budget at zero and move the joker to another set entirely.
+        own_claims: dict[int, list] = {}
         for slot, content in enumerate(_slot_contents(table)):
             need = np.zeros(cfg.n_kinds, dtype=np.int64)
             for kind in content:
@@ -278,34 +364,62 @@ def solve_turn(
             model.Add(sum(picks) == 1)
             for sup, pick in zip(supersets, picks, strict=True):
                 claims.setdefault(int(sup), []).append(pick)
+
+            # The positions of the claimed instance the slot does not already fill
+            # with a real tile. Everything else in it is pinned: a joker there would
+            # be standing in for a tile that is present, which frees that tile for
+            # another set -- the multiset of sets intact and both sets taken apart.
+            slack = np.maximum(cand.counts[supersets].astype(np.int64) - need[None, :], 0)
+            counts = cand.counts[supersets].astype(np.int64)
+            room: dict[int, object] = {}
+            for gap in (int(g) for g in np.flatnonzero(slack.any(0))):
+                room[gap] = sum(
+                    int(slack[row, gap]) * pick
+                    for row, pick in enumerate(picks)
+                    if slack[row, gap]
+                )
+            for kind in (int(k) for k in np.flatnonzero(counts.any(0))):
+                accounted.setdefault(kind, []).append(
+                    sum(
+                        int(counts[row, kind]) * pick
+                        for row, pick in enumerate(picks)
+                        if counts[row, kind]
+                    )
+                )
+                # No slack for this kind means no joker may stand for it here.
+                cap = int(slack[:, kind].max()) if kind in room else 0
+                here = model.NewIntVar(0, cap, f"frzs{slot}_{kind}")
+                if cap:
+                    model.Add(here <= room[kind])
+                landed.setdefault(kind, []).append(here)
+
             if not held_jokers:
                 continue
             # Which kinds those jokers stand for is not determined by the slot --
             # a joker beside two 7s could be either missing colour -- so the model
-            # chooses, and the choice draws on the same per-kind substitution
-            # budget every other joker does.
-            slack = np.maximum(cand.counts[supersets].astype(np.int64) - need[None, :], 0)
-            stands_for = []
-            for gap in np.flatnonzero(slack.any(0)):  # candidates never demand a joker
-                filled = model.NewIntVar(0, held_jokers, f"frzj{slot}_{gap}")
-                model.Add(
-                    filled
-                    <= sum(
-                        int(slack[row, gap]) * pick
-                        for row, pick in enumerate(picks)
-                        if slack[row, gap]
-                    )
-                )
-                stands_for.append(filled)
-                joker_claims.setdefault(int(gap), []).append(filled)
-            model.Add(sum(stands_for) == held_jokers)
+            # chooses, from the same room a laid-off joker would use.
+            own = []
+            for gap in room:
+                mine = model.NewIntVar(0, held_jokers, f"frzj{slot}_{gap}")
+                # Its own jokers are part of what landed here, not extra to it.
+                model.Add(mine <= landed[gap][-1])
+                own.append(mine)
+                own_claims.setdefault(gap, []).append(mine)
+            model.Add(sum(own) == held_jokers)
+
         for kept_index, group in claims.items():
             model.Add(sum(group) <= x[kept_index])
         # `subs` is keyed by the numbered-kind array, so it is already in kind
         # order; a list of it indexes by the plain ints collected above.
-        per_kind = list(subs.values())
-        for gap_kind, group in joker_claims.items():
-            model.Add(sum(group) <= per_kind[gap_kind])
+        per_kind: list = list(subs.values())
+        for kind, group in landed.items():
+            # Every substitution of this kind is either inside a claimed instance,
+            # where the room above bounds it, or in one of the fresh sets, which
+            # accounts for the rest of the demand.
+            outside = demand[kind] - sum(accounted.get(kind, []))
+            model.Add(per_kind[kind] <= sum(group) + outside)
+        for kind, group in own_claims.items():
+            model.Add(sum(group) <= per_kind[kind])
 
     total_sets = sum(x) if exclude else 0
     for cut, previous in enumerate(exclude):
@@ -329,7 +443,7 @@ def solve_turn(
     # Leaving existing sets alone is worth a tie-break: it shortens the resulting
     # micro-action sequence, which is the only cost the score does not capture.
     kept_terms = []
-    if keep_weight and not opening:
+    if keep_weight and not locked:
         current = _current_instances(cfg, table)
         for content, count in current.items():
             c = const.by_content.get(content)
@@ -342,7 +456,7 @@ def solve_turn(
     # Weights make this a strict lexicographic order: tiles, then value, then stillness.
     span_value = max(1, cfg.n_tiles * max(cfg.n_numbers, cfg.joker_penalty))
     span_keep = max(1, cfg.max_sets + 1)
-    if objective == Objective.MAX_VALUE:
+    if Objective(objective) is Objective.MAX_VALUE:
         primary, secondary = value_played, tiles_played
         primary_scale = span_keep * (cfg.n_tiles + 1)
     else:
@@ -355,6 +469,9 @@ def solve_turn(
     )
 
     solver = cp_model.CpSolver()
+    # Deterministic time is the reproducible bound; the wall clock is only a
+    # backstop, and with the headroom above it should never be what stops a solve.
+    solver.parameters.max_deterministic_time = DETERMINISTIC_LIMIT
     solver.parameters.max_time_in_seconds = time_limit
     # Single worker keeps the result reproducible, which matters for a baseline.
     solver.parameters.num_workers = 1
@@ -372,13 +489,16 @@ def solve_turn(
 
     x_val = np.array([solver.Value(v) for v in x], dtype=np.int64)
     sub_val = np.zeros(cfg.n_kinds, dtype=np.int64)
-    for k in numbered:
-        sub_val[k] = solver.Value(subs[k])
+    for k, v in subs.items():
+        sub_val[k] = solver.Value(v)
 
-    sets = _materialise(cfg, cand.counts, x_val, sub_val)
+    sets = _materialise(
+        cfg, cand.counts, x_val, sub_val,
+        _slot_contents(table) if freeze_table and not locked else (),
+    )
     played_counts = np.zeros(cfg.n_kinds, dtype=np.int16)
-    for k in numbered:
-        played_counts[k] = solver.Value(use[k]) - int(visible_table[k])
+    for k, v in use.items():
+        played_counts[k] = solver.Value(v) - int(visible_table[k])
     played_counts[cfg.joker_kind] = solver.Value(jokers_used) - int(visible_table[cfg.joker_kind])
 
     if sets:
@@ -398,7 +518,6 @@ def solve_turn(
             + played_counts[cfg.joker_kind] * cfg.joker_penalty
         ),
         meld_value=int(sum(int(cand.value[c]) * int(x_val[c]) for c in range(n_cand))),
-        kept_sets=int(sum(solver.Value(k) for k in kept_terms)) if kept_terms else 0,
         set_counts=x_val,
         status=status_name,
     )

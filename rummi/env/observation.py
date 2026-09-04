@@ -14,6 +14,8 @@ opponent racks are never revealed, only their sizes.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from rummi.rules.config import RummiConfig
@@ -22,9 +24,11 @@ from rummi.env.numpy.masks import current_rack, meld_value
 from rummi.env.numpy.sets import SlotSummary, summarize
 from rummi.env.numpy.state import BatchState
 
+if TYPE_CHECKING:
+    from gymnasium import spaces
 
 
-def observation_space(cfg: RummiConfig):
+def observation_space(cfg: RummiConfig) -> spaces.Dict:
     from gymnasium import spaces
 
     k, s, ell, p = cfg.n_kinds, cfg.max_sets, cfg.max_set_len, cfg.n_players
@@ -53,9 +57,6 @@ def observation_space(cfg: RummiConfig):
             ),
         }
     )
-    # scalars = [pool_size, meld_progress, initial_meld_remaining, micro_count]
-
-
 
 
 def _seat_rotation(state: BatchState) -> np.ndarray:

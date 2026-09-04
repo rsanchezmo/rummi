@@ -8,7 +8,10 @@ batched rollout is bit-identical to the same envs run one at a time.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import numpy as np
+import numpy.typing as npt
 
 from rummi.rules.config import RummiConfig
 from rummi.rules.encoding import EMPTY, tables
@@ -25,7 +28,7 @@ def env_seeds(seed: int, batch_size: int) -> list[np.random.SeedSequence]:
     return np.random.SeedSequence(seed).spawn(batch_size)
 
 
-def derived_seeds(base: int, step: int, envs) -> list[np.random.SeedSequence]:
+def derived_seeds(base: int, step: int, envs: Iterable[int]) -> list[np.random.SeedSequence]:
     """Seeds for re-dealing ``envs`` at ``step``, derived from position alone.
 
     Because each seed depends only on ``(base, step, env)`` and not on how many
@@ -43,16 +46,17 @@ def reset(cfg: RummiConfig, batch_size: int, seed: int = 0) -> BatchState:
 
 def reset_envs(
     state: BatchState,
-    which: np.ndarray,
+    which: npt.ArrayLike,
     seeds: list[np.random.SeedSequence],
 ) -> None:
     """Re-deal the given envs in place. ``seeds`` is parallel to ``which``."""
     cfg = state.cfg
     base = deck(cfg)
+    which = np.atleast_1d(np.asarray(which))
     if len(seeds) != len(which):
         raise ValueError("one seed per env being reset")
 
-    for env, seed in zip(np.atleast_1d(which), seeds, strict=True):
+    for env, seed in zip(which, seeds, strict=True):
         order = np.random.default_rng(seed).permutation(base)
         state.deck_order[env] = order
 

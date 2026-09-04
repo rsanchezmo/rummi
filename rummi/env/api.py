@@ -267,12 +267,18 @@ class JaxBackend:
 
         from rummi.env.jax import sim
 
+        actions = jnp.asarray(np.asarray(actions))
         if mask is not None:
-            live = ~np.asarray(state.done) if active is None else np.asarray(active)
-            sim.check_actions(mask, jnp.asarray(np.asarray(actions)), live)
+            # The same predicate the other two backends validate under: `done` and
+            # `active` are independent, and an env the step will ignore for either
+            # reason must not be judged on the action passed alongside it.
+            live = ~np.asarray(state.done)
+            if active is not None:
+                live = live & np.asarray(active, dtype=bool)
+            sim.check_actions(mask, actions, live)
         if active is not None:
             active = jnp.asarray(np.asarray(active, dtype=bool))
-        state, out = sim.step(cfg, state, jnp.asarray(np.asarray(actions)), active)
+        state, out = sim.step(cfg, state, actions, active)
         return state, StepOut(
             self.to_numpy(out.rewards), self.to_numpy(out.terminated), self.to_numpy(out.truncated)
         )

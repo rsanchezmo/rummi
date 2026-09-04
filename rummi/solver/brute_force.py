@@ -62,20 +62,30 @@ def valid_sets(cfg: RummiConfig, max_jokers: int) -> dict[Content, int]:
     return out
 
 
-def is_valid(cfg: RummiConfig, content, max_jokers: int = 2) -> bool:
-    return tuple(sorted(content)) in valid_sets(cfg, max_jokers)
+def _jokers(cfg: RummiConfig, max_jokers: int | None) -> int:
+    """The config's own joker count unless the caller overrides it.
+
+    One convention for the whole module: a default of 2 is the standard deck's
+    count hard-coded, and it made this half of the oracle call a set legal on a
+    config with no jokers while ``partitionable`` called it illegal.
+    """
+    return cfg.n_jokers if max_jokers is None else max_jokers
 
 
-def value(cfg: RummiConfig, content, max_jokers: int = 2) -> int:
-    return valid_sets(cfg, max_jokers).get(tuple(sorted(content)), 0)
+def is_valid(cfg: RummiConfig, content, max_jokers: int | None = None) -> bool:
+    return tuple(sorted(content)) in valid_sets(cfg, _jokers(cfg, max_jokers))
 
 
-def is_extendable(cfg: RummiConfig, content, max_jokers: int = 2) -> bool:
+def value(cfg: RummiConfig, content, max_jokers: int | None = None) -> int:
+    return valid_sets(cfg, _jokers(cfg, max_jokers)).get(tuple(sorted(content)), 0)
+
+
+def is_extendable(cfg: RummiConfig, content, max_jokers: int | None = None) -> bool:
     """Is ``content`` a sub-multiset of some legal set?"""
     have = Counter(content)
     if not have:
         return True
-    for candidate in valid_sets(cfg, max_jokers):
+    for candidate in valid_sets(cfg, _jokers(cfg, max_jokers)):
         want = Counter(candidate)
         if all(want[k] >= v for k, v in have.items()):
             return True
@@ -101,9 +111,7 @@ def partitionable(cfg: RummiConfig, counts, max_jokers: int | None = None) -> bo
     table is legal exactly when its tiles admit such a partition. Solved here by
     naive recursion so it can check the fast solvers.
     """
-    if max_jokers is None:
-        max_jokers = cfg.n_jokers
-    by_lowest = _sets_by_lowest(cfg, max_jokers)
+    by_lowest = _sets_by_lowest(cfg, _jokers(cfg, max_jokers))
     return _partition(tuple(int(c) for c in counts), by_lowest)
 
 

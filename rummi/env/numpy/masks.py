@@ -122,6 +122,9 @@ def _fill_assign(
     the held ones are computed: see
     :func:`~rummi.env.numpy.sets.assign_open_at`. ASSIGN ids are kind-major, so
     each pair lands in one contiguous row.
+
+    Splitting the block's last axis leaves ``block`` a *view* of ``mask``, which is
+    what makes writing a handful of rows enough -- there is nothing to copy back.
     """
     env, kind = np.nonzero(state.workbench > 0)
     if env.size == 0:

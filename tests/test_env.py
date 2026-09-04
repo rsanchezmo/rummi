@@ -1,5 +1,7 @@
 """Gymnasium contract compliance and the self-play conventions layered on it."""
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -69,6 +71,32 @@ def test_reward_is_the_acting_seats_row_of_the_full_matrix(env):
             )
             return
     pytest.fail("no turn was committed in 60 steps")
+
+
+def test_the_credited_reward_is_the_actors_row_mid_turn_too(env):
+    """A turn is many steps and only the last one advances the seat, so
+    ``current - 1`` names the actor on a committing step and the *previous* seat on
+    every other one.
+
+    Invisible with the shaping terms off, which is every bundled preset -- so it is
+    `micro_step_cost` that makes the scalar reward disagree with `rewards_all`, on
+    the great majority of steps.
+    """
+    shaped = RummiVectorEnv(num_envs=4, cfg=replace(C, micro_step_cost=0.25), seed=1)
+    try:
+        _, info = shaped.reset()
+        rng = np.random.default_rng(3)
+        checked = 0
+        for _ in range(40):
+            before = info["current_player"].copy()
+            _, rewards, _, _, info = shaped.step(sample_legal(info["action_mask"], rng))
+            np.testing.assert_allclose(
+                rewards, info["rewards_all"][np.arange(shaped.num_envs), before]
+            )
+            checked += int((info["current_player"] == before).any())
+        assert checked, "every step committed a turn, so the mid-turn case went untested"
+    finally:
+        shaped.close()
 
 
 def test_observation_shows_the_acting_seats_rack(env):

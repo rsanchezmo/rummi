@@ -56,8 +56,11 @@ class OptimalAgent(PlanningAgent):
             return []
 
         target = list(solution.sets)
-        if not melded:
-            # Pre-meld the table is untouchable, so the solved sets are additions.
+        if not melded and cfg.strict_initial_meld:
+            # Only the strict rule locks the table, and only then does the solver
+            # hide it -- so only then are the solved sets additions to it. With the
+            # rule relaxed the solver saw the table and `sets` is the whole target
+            # already; appending the standing sets would double them.
             target += [c for c in slot_contents(board) if c]
         return plan(cfg, board, target, solution.played)
 
@@ -69,6 +72,13 @@ class OptimalAgent(PlanningAgent):
         changes the wall clock and nothing else, because OR-Tools drops the GIL
         inside `Solve`, where the time goes. Measured 2.9x, and it plateaus there --
         building the model is Python, and that part does not parallelise.
+
+        With one caveat, and it is the wall clock: `solve_turn`'s limit is
+        `max_time_in_seconds`, so a solve that *reaches* it returns whichever
+        incumbent it had, which depends on the CPU it got. Solves run in tens of
+        milliseconds against a two-second limit, so this does not bite -- but it is
+        why the parity claim above is about finished solves and not about all of
+        them.
         """
         if self.workers <= 1 or envs.size < 2:
             return super().plan_batch(obs, envs)
